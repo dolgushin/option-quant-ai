@@ -11,7 +11,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.0
@@ -22,5 +22,7 @@ jobs:
           port: ${{ secrets.VPS_PORT }}
           script: |
             cd /opt/option-quant-ai
-            git pull origin main
+            git config --global --add safe.directory /opt/option-quant-ai
+            git fetch --all
+            git reset --hard origin/main
             docker compose up -d --build
