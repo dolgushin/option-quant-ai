@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "9000:9000"
+    restart: always
+    environment:
+      - PORT=9000
