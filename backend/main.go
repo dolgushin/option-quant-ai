@@ -25,7 +25,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "9000"
+		port = "8000"
 	}
 
 	http.HandleFunc("/health", healthHandler)

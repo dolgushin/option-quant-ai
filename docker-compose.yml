@@ -1,8 +1,6 @@
-version: '3.8'
-
 services:
   backend:
-    build: ./backend
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/option-quant-ai-backend:latest
     ports:
       - "9000:9000"
     restart: always

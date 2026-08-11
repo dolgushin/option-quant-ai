@@ -1,30 +1,49 @@
-name: Deploy to VPS
+name: Build and Deploy to VPS
 
 on:
   push:
     branches:
       - main
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          submodules: false
 
-      - name: Deploy via SSH
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/option-quant-ai-backend:latest
+
+      - name: Deploy to VPS via SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
+          command_timeout: 10m
           script: |
             cd /opt/option-quant-ai
             git config --global --add safe.directory /opt/option-quant-ai
             git fetch --all
             git reset --hard origin/main
-            docker compose up -d --build
+            export GITHUB_REPOSITORY_OWNER="${{ github.repository_owner }}"
+            docker compose pull
+            docker compose up -d
