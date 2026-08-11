@@ -29,6 +29,7 @@ jobs:
         with:
           context: ./backend
           push: true
+          provenance: false
           tags: ghcr.io/${{ github.repository_owner }}/option-quant-ai-backend:latest
 
       - name: Deploy to VPS via SSH
