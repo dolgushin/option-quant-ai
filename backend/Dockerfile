@@ -1,17 +1,22 @@
-FROM python:3.11-slim
+# Этап 1: Сборка бинарника
+FROM golang:1.22-alpine AS builder
 
 WORKDIR /app
 
-COPY requirements.txt .
-
-# Используем стандартный pypi с fallback на aliyun и увеличиваем retries/timeouts
-RUN pip install --no-cache-dir \
-    --timeout=120 \
-    --retries=10 \
-    --prefer-binary \
-    --extra-index-url https://mirrors.aliyun.com/pypi/simple/ \
-    -r requirements.txt
+COPY go.mod ./
+RUN go mod download
 
 COPY . .
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9000"]
+RUN CGO_ENABLED=0 GOOS=linux go build -o main .
+
+# Этап 2: Минимальный образ для запуска
+FROM alpine:latest
+
+WORKDIR /app
+
+COPY --from=builder /app/main .
+
+EXPOSE 9000
+
+CMD ["./main"]
