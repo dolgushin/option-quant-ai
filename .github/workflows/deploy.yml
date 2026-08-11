@@ -22,7 +22,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ./backend
-          outputs: type=docker,dest=/tmp/option-quant-ai-backend.tar
+          outputs: type=docker,dest=option-quant-ai-backend.tar
           tags: option-quant-ai-backend:latest
 
       - name: Copy image artifact to VPS via SCP
@@ -32,7 +32,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
-          source: "/tmp/option-quant-ai-backend.tar"
+          source: "option-quant-ai-backend.tar"
           target: "/tmp/"
           rm: true
 
