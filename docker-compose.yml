@@ -1,6 +1,8 @@
 services:
   backend:
-    image: option-quant-ai-backend:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     ports:
       - "9000:9000"
     restart: always

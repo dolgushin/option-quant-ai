@@ -15,28 +15,29 @@ jobs:
         with:
           submodules: false
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and export Docker image
-        uses: docker/build-push-action@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          context: ./backend
-          outputs: type=docker,dest=option-quant-ai-backend.tar
-          tags: option-quant-ai-backend:latest
+          go-version: '1.22'
 
-      - name: Copy image artifact to VPS via SCP
+      - name: Build Go binary for Linux
+        run: |
+          cd backend
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o main .
+
+      - name: Copy binary and configs to VPS via SCP
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
-          source: "option-quant-ai-backend.tar"
-          target: "/tmp/"
-          rm: true
+          source: "backend/main,backend/Dockerfile,docker-compose.yml"
+          target: "/opt/option-quant-ai/"
+          strip_components: 1
+          rm: false
 
-      - name: Load image and restart service via SSH
+      - name: Restart application on VPS via SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -46,9 +47,5 @@ jobs:
           command_timeout: 5m
           script: |
             cd /opt/option-quant-ai
-            git config --global --add safe.directory /opt/option-quant-ai
-            git fetch --all
-            git reset --hard origin/main
-            docker load -i /tmp/option-quant-ai-backend.tar
-            rm -f /tmp/option-quant-ai-backend.tar
-            docker compose up -d
+            docker compose down --remove-orphans || true
+            docker compose up --build -d
