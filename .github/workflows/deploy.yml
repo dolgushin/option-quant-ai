@@ -25,27 +25,25 @@ jobs:
           cd backend
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o main .
 
-      - name: Copy binary and configs to VPS via SCP
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
-          source: "backend/main,backend/Dockerfile,docker-compose.yml"
-          target: "/opt/option-quant-ai/"
-          strip_components: 1
-          rm: false
+      - name: Deploy binary and config via Native SSH/SCP
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          HOST: ${{ secrets.VPS_HOST }}
+          USER: ${{ secrets.VPS_USER }}
+          PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p $PORT -H $HOST >> ~/.ssh/known_hosts
 
-      - name: Restart application on VPS via SSH
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
-          command_timeout: 5m
-          script: |
-            cd /opt/option-quant-ai
-            docker compose down --remove-orphans || true
-            docker compose up --build -d
+          # Создаем директорию на VPS если не существует
+          ssh -p $PORT $USER@$HOST "mkdir -p /opt/option-quant-ai/backend"
+
+          # Скопируем бинарник, Dockerfile и docker-compose напрямую
+          scp -P $PORT backend/main $USER@$HOST:/opt/option-quant-ai/backend/main
+          scp -P $PORT backend/Dockerfile $USER@$HOST:/opt/option-quant-ai/backend/Dockerfile
+          scp -P $PORT docker-compose.yml $USER@$HOST:/opt/option-quant-ai/docker-compose.yml
+
+          # Перезапустим Docker Compose
+          ssh -p $PORT $USER@$HOST "cd /opt/option-quant-ai && docker compose down --remove-orphans || true && docker compose up --build -d"
