@@ -46,6 +46,7 @@ func ProcessCopilotQuery(req CopilotRequest) CopilotResponse {
 		}
 
 		toolData["recommended_action"] = action
+		toolData["hedge_contracts"] = hedgeContracts
 		return CopilotResponse{
 			Reply:    advice,
 			Action:   action,
