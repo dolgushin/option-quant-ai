@@ -55,7 +55,6 @@ func quoteHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(quote)
 }
 
-// liveGreeksHandler получает спот из Deribit и сразу считает Греки
 func liveGreeksHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -77,17 +76,17 @@ func liveGreeksHandler(w http.ResponseWriter, r *http.Request) {
 
 	strike, _ := strconv.ParseFloat(strikeStr, 64)
 	if strike == 0 {
-		strike = quote.Price // По умолчанию ATM (At-The-Money)
+		strike = quote.Price
 	}
 
 	days, _ := strconv.ParseFloat(daysStr, 64)
 	if days == 0 {
-		days = 30 // 30 дней по умолчанию
+		days = 30
 	}
 
 	vol, _ := strconv.ParseFloat(volStr, 64)
 	if vol == 0 {
-		vol = 0.50 // 50% IV по умолчанию для крипты
+		vol = 0.50
 	}
 
 	isCall := isCallStr != "false"
@@ -110,6 +109,51 @@ func liveGreeksHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+func arbitrageHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "BTC"
+	}
+
+	callPriceStr := r.URL.Query().Get("call_price")
+	putPriceStr := r.URL.Query().Get("put_price")
+	strikeStr := r.URL.Query().Get("strike")
+	daysStr := r.URL.Query().Get("days")
+
+	quote, err := quant.FetchCryptoSpot(symbol)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "Failed to fetch spot: %s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	strike, _ := strconv.ParseFloat(strikeStr, 64)
+	if strike == 0 {
+		strike = quote.Price
+	}
+
+	days, _ := strconv.ParseFloat(daysStr, 64)
+	if days == 0 {
+		days = 30
+	}
+
+	callPrice, _ := strconv.ParseFloat(callPriceStr, 64)
+	putPrice, _ := strconv.ParseFloat(putPriceStr, 64)
+
+	// Если цены стаканов не переданы, для теста сгенерируем с искусственным сдвигом +$25
+	if callPrice == 0 && putPrice == 0 {
+		callGreeks := quant.CalculateBlackScholes(true, quote.Price, strike, days/365.0, 0.05, 0.50)
+		putGreeks := quant.CalculateBlackScholes(false, quote.Price, strike, days/365.0, 0.05, 0.50)
+
+		callPrice = callGreeks.Price + 25.0 // Имитация переоцененного Call
+		putPrice = putGreeks.Price
+	}
+
+	arb := quant.CheckPutCallParity(symbol, quote.Price, strike, days, callPrice, putPrice, 0.05)
+	json.NewEncoder(w).Encode(arb)
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -119,6 +163,8 @@ func main() {
 	http.HandleFunc("/api/v1/greeks", greeksHandler)
 	http.HandleFunc("/api/v1/market/quote", quoteHandler)
 	http.HandleFunc("/api/v1/greeks/live", liveGreeksHandler)
+	http.HandleFunc("/api/v1/arbitrage/check", arbitrageHandler)
+
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "engine": "Go Quant Core"})
