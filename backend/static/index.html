@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OptionQuant AI - Terminal</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen p-6 font-sans">
     <div class="max-w-6xl mx-auto space-y-6">
@@ -92,9 +93,79 @@
             </div>
         </div>
 
+        <!-- Volatility Skew Chart -->
+        <div class="bg-slate-800/60 p-6 rounded-xl border border-slate-700/50">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-semibold text-slate-200">Volatility Skew (Smile) Curve</h2>
+                <span class="text-xs text-slate-400 font-mono">Implied Volatility vs Strike</span>
+            </div>
+            <div class="relative h-64 w-full">
+                <canvas id="skewChart"></canvas>
+            </div>
+        </div>
+
     </div>
 
     <script>
+        let skewChartInstance = null;
+
+        function initSkewChart() {
+            const ctx = document.getElementById('skewChart').getContext('2d');
+            skewChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Implied Volatility (%)',
+                        data: [],
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        fill: true,
+                        tension: 0.4,
+                        pointBackgroundColor: '#34d399',
+                        pointRadius: 5
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            title: { display: true, text: 'Strike Price ($)', color: '#94a3b8' },
+                            grid: { color: 'rgba(51, 65, 85, 0.3)' },
+                            ticks: { color: '#94a3b8' }
+                        },
+                        y: {
+                            title: { display: true, text: 'IV (%)', color: '#94a3b8' },
+                            grid: { color: 'rgba(51, 65, 85, 0.3)' },
+                            ticks: { color: '#94a3b8' }
+                        }
+                    },
+                    plugins: {
+                        legend: { labels: { color: '#f8fafc' } }
+                    }
+                }
+            });
+        }
+
+        async function updateSkewChart() {
+            try {
+                const res = await fetch('/api/v1/options/skew?symbol=BTC');
+                const data = await res.json();
+
+                const labels = data.points.map(p => `$${p.strike.toLocaleString()}`);
+                const ivValues = data.points.map(p => p.iv.toFixed(2));
+
+                if (skewChartInstance) {
+                    skewChartInstance.data.labels = labels;
+                    skewChartInstance.data.datasets[0].data = ivValues;
+                    skewChartInstance.update();
+                }
+            } catch (e) {
+                console.error("Failed to load skew data", e);
+            }
+        }
+
         async function updateDashboard() {
             try {
                 // 1. Fetch Arbitrage Data
@@ -133,9 +204,14 @@
             }
         }
 
-        // Auto update every 3 seconds
-        updateDashboard();
-        setInterval(updateDashboard, 3000);
+        window.addEventListener('DOMContentLoaded', () => {
+            initSkewChart();
+            updateSkewChart();
+            updateDashboard();
+
+            setInterval(updateDashboard, 3000);
+            setInterval(updateSkewChart, 5000);
+        });
     </script>
 </body>
 </html>

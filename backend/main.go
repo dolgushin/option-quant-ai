@@ -25,6 +25,11 @@ type GreeksRequest struct {
 	Sigma  float64 `json:"volatility"`
 }
 
+type SkewPoint struct {
+	Strike float64 `json:"strike"`
+	IV     float64 `json:"iv"`
+}
+
 func greeksHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -158,13 +163,48 @@ func arbitrageHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(arb)
 }
 
+func skewHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "BTC"
+	}
+
+	quote, err := quant.FetchCryptoSpot(symbol)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	spot := quote.Price
+	step := 1000.0
+	var points []SkewPoint
+
+	for i := -5; i <= 5; i++ {
+		strike := spot + float64(i)*step
+		distFromSpot := (strike - spot) / spot
+		iv := 0.50 + (distFromSpot * distFromSpot * 1.8) - (distFromSpot * 0.15)
+
+		points = append(points, SkewPoint{
+			Strike: strike,
+			IV:     iv * 100,
+		})
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"symbol": symbol,
+		"spot":   spot,
+		"points": points,
+	})
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8000"
 	}
 
-	// Sub-tree для статики
 	subFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
 		log.Fatalf("Failed to create sub filesystem: %v", err)
@@ -178,6 +218,7 @@ func main() {
 	http.HandleFunc("/api/v1/market/quote", quoteHandler)
 	http.HandleFunc("/api/v1/greeks/live", liveGreeksHandler)
 	http.HandleFunc("/api/v1/arbitrage/check", arbitrageHandler)
+	http.HandleFunc("/api/v1/options/skew", skewHandler)
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
