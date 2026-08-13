@@ -17,7 +17,7 @@ type CopilotRequest struct {
 type CopilotResponse struct {
 	Reply        string                 `json:"reply"`
 	Action       string                 `json:"action"`
-	ToolData     map[string]interface{5} `json:"tool_data"`
+	ToolData     map[string]interface{} `json:"tool_data"`
 }
 
 func ProcessCopilotQuery(req CopilotRequest) CopilotResponse {
