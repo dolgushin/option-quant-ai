@@ -1,8 +1,10 @@
 package main
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -10,6 +12,9 @@ import (
 
 	"option-quant-ai/quant"
 )
+
+//go:embed static/*
+var staticFiles embed.FS
 
 type GreeksRequest struct {
 	IsCall bool    `json:"is_call"`
@@ -141,12 +146,11 @@ func arbitrageHandler(w http.ResponseWriter, r *http.Request) {
 	callPrice, _ := strconv.ParseFloat(callPriceStr, 64)
 	putPrice, _ := strconv.ParseFloat(putPriceStr, 64)
 
-	// Если цены стаканов не переданы, для теста сгенерируем с искусственным сдвигом +$25
 	if callPrice == 0 && putPrice == 0 {
 		callGreeks := quant.CalculateBlackScholes(true, quote.Price, strike, days/365.0, 0.05, 0.50)
 		putGreeks := quant.CalculateBlackScholes(false, quote.Price, strike, days/365.0, 0.05, 0.50)
 
-		callPrice = callGreeks.Price + 25.0 // Имитация переоцененного Call
+		callPrice = callGreeks.Price + 25.0
 		putPrice = putGreeks.Price
 	}
 
@@ -160,6 +164,16 @@ func main() {
 		port = "8000"
 	}
 
+	// Sub-tree для статики
+	subFS, err := fs.Sub(staticFiles, "static")
+	if err != nil {
+		log.Fatalf("Failed to create sub filesystem: %v", err)
+	}
+
+	// Static UI Handler
+	http.Handle("/", http.FileServer(http.FS(subFS)))
+
+	// API Handlers
 	http.HandleFunc("/api/v1/greeks", greeksHandler)
 	http.HandleFunc("/api/v1/market/quote", quoteHandler)
 	http.HandleFunc("/api/v1/greeks/live", liveGreeksHandler)
@@ -170,7 +184,7 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "engine": "Go Quant Core"})
 	})
 
-	fmt.Printf("Quant Engine starting on port %s...\n", port)
+	fmt.Printf("Quant Engine & Dashboard running on port %s...\n", port)
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
