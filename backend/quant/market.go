@@ -15,9 +15,9 @@ type MarketQuote struct {
 
 type DeribitTickerResponse struct {
 	Result struct {
-		IndexName    string  `json:"index_name"`
-		LastPrice    float64 `json:"last_price"`
-		MarkPrice    float64 `json:"mark_price"`
+		IndexName      string  `json:"index_name"`
+		LastPrice      float64 `json:"last_price"`
+		MarkPrice      float64 `json:"mark_price"`
 		EstimatedPrice float64 `json:"estimated_delivery_price"`
 	} `json:"result"`
 }
@@ -44,7 +44,7 @@ func FetchCryptoSpot(symbol string) (*MarketQuote, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.fmt.Errorf("Deribit API returned status code: %d", resp.StatusCode)
+		return nil, fmt.Errorf("Deribit API returned status code: %d", resp.StatusCode)
 	}
 
 	var result DeribitTickerResponse
@@ -52,16 +52,14 @@ func FetchCryptoSpot(symbol string) (*MarketQuote, error) {
 		return nil, fmt.Errorf("failed to decode Deribit response: %w", err)
 	}
 
+	price := result.Result.EstimatedPrice
+	if price == 0 {
+		price = result.Result.MarkPrice
+	}
+
 	return &MarketQuote{
 		Symbol:    symbol,
-		Price:     result.Result.IndexNamePrice(),
+		Price:     price,
 		Timestamp: time.Now(),
 	}, nil
-}
-
-func (r *DeribitTickerResponse) IndexNamePrice() float64 {
-	if r.Result.EstimatedPrice > 0 {
-		return r.Result.EstimatedPrice
-	}
-	return r.Result.MarkPrice
 }
