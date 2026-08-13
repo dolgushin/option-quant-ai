@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 
+	"option-quant-ai/alor"
 	"option-quant-ai/quant"
 )
 
@@ -199,6 +200,112 @@ func skewHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+var (
+	alorAuth   = alor.NewAuthClient(os.Getenv("ALOR_REFRESH_TOKEN"))
+	alorMarket = alor.NewMarketClient(alorAuth)
+	alorExec   = alor.NewExecutionClient(alorAuth, os.Getenv("ALOR_PORTFOLIO"))
+)
+
+func moexQuoteHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "Si-3.25"
+	}
+
+	quote, err := alorMarket.FetchSecurityQuote(symbol)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"symbol":   symbol,
+			"exchange": "MOEX",
+			"price":    92500.0,
+			"bid":      92490.0,
+			"ask":      92510.0,
+			"note":     "Mock fallback (ALOR_REFRESH_TOKEN not configured): " + err.Error(),
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(quote)
+}
+
+func moexArbitrageHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "Si"
+	}
+
+	strikeStr := r.URL.Query().Get("strike")
+	daysStr := r.URL.Query().Get("days")
+	callStr := r.URL.Query().Get("call")
+	putStr := r.URL.Query().Get("put")
+
+	spot := 92500.0
+	strike := 93000.0
+	if strikeStr != "" {
+		strike, _ = strconv.ParseFloat(strikeStr, 64)
+	}
+	days := 30.0
+	if daysStr != "" {
+		days, _ = strconv.ParseFloat(daysStr, 64)
+	}
+	callPrice := 1500.0
+	if callStr != "" {
+		callPrice, _ = strconv.ParseFloat(callStr, 64)
+	}
+	putPrice := 1800.0
+	if putStr != "" {
+		putPrice, _ = strconv.ParseFloat(putStr, 64)
+	}
+
+	theor, actual, strategy := quant.CalculateMOEXParitySpread(spot, strike, days, callPrice, putPrice, 0.16)
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"symbol":           symbol,
+		"spot_price":       spot,
+		"strike":           strike,
+		"days_to_exp":      days,
+		"theoretical_diff": theor,
+		"actual_diff":      actual,
+		"strategy":         strategy,
+		"exchange":         "MOEX FORTS",
+	})
+}
+
+func moexOrderHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Symbol   string  `json:"symbol"`
+		Side     string  `json:"side"`
+		Type     string  `json:"type"`
+		Price    float64 `json:"price"`
+		Quantity int     `json:"quantity"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	res, err := alorExec.PlaceOrder(req.Symbol, req.Side, req.Type, req.Price, req.Quantity)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+			"note":    "Failed to execute order on Alor (check ALOR_REFRESH_TOKEN and ALOR_PORTFOLIO)",
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(res)
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -220,9 +327,14 @@ func main() {
 	http.HandleFunc("/api/v1/arbitrage/check", arbitrageHandler)
 	http.HandleFunc("/api/v1/options/skew", skewHandler)
 
+	// MOEX / Alor Handlers
+	http.HandleFunc("/api/v1/moex/quote", moexQuoteHandler)
+	http.HandleFunc("/api/v1/moex/arbitrage", moexArbitrageHandler)
+	http.HandleFunc("/api/v1/moex/order", moexOrderHandler)
+
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "engine": "Go Quant Core"})
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "engine": "Go Quant Core + MOEX Alor"})
 	})
 
 	fmt.Printf("Quant Engine & Dashboard running on port %s...\n", port)

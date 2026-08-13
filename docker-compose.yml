@@ -8,3 +8,4 @@ services:
     restart: always
     environment:
       - PORT=9000
+      - ALOR_REFRESH_TOKEN=your_alor_refresh_token_here
