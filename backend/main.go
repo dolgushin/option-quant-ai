@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -330,6 +331,43 @@ func copilotHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+func moexPerpQuarterlyHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "Si"
+	}
+
+	perpPrice := 92500.0
+	quarterlyPrice := 93200.0
+	if symbol == "RI" {
+		perpPrice = 112000.0
+		quarterlyPrice = 113500.0
+	} else if symbol == "CR" {
+		perpPrice = 12.50
+		quarterlyPrice = 12.85
+	}
+
+	spread := quarterlyPrice - perpPrice
+	annualizedReturn := (spread / perpPrice) * (365.0 / 90.0) * 100.0
+
+	strategy := "No Arbitrage"
+	if spread > 300.0 {
+		strategy = fmt.Sprintf("Sell Quarterly %sU6, Buy Perpetual %s (Contango Arbitrage / Carry)", symbol, symbol)
+	} else if spread < -100.0 {
+		strategy = fmt.Sprintf("Buy Quarterly %sU6, Sell Perpetual %s (Backwardation)", symbol, symbol)
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"symbol":            symbol,
+		"perpetual_price":   perpPrice,
+		"quarterly_price":   quarterlyPrice,
+		"spread":            math.Round(spread*100) / 100,
+		"annualized_return": math.Round(annualizedReturn*100) / 100,
+		"strategy":          strategy,
+	})
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -355,6 +393,7 @@ func main() {
 	http.HandleFunc("/api/v1/moex/quote", moexQuoteHandler)
 	http.HandleFunc("/api/v1/moex/arbitrage", moexArbitrageHandler)
 	http.HandleFunc("/api/v1/moex/order", moexOrderHandler)
+	http.HandleFunc("/api/v1/moex/perp-quarterly", moexPerpQuarterlyHandler)
 
 	// AI Quant Copilot Agent Handler
 	http.HandleFunc("/api/v1/copilot/ask", copilotHandler)

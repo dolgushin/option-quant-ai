@@ -3,62 +3,105 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OptionQuant AI - Terminal</title>
+    <title>OptionQuant AI — MOEX FORTS & Alor Terminal</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen p-6 font-sans">
-    <div class="max-w-6xl mx-auto space-y-6">
+    <div class="max-w-7xl mx-auto space-y-6">
         
-        <!-- Header -->
-        <header class="flex justify-between items-center border-b border-slate-800 pb-4">
+        <!-- Header & Asset Selector -->
+        <header class="flex flex-col md:flex-row justify-between items-center border-b border-slate-800 pb-4 gap-4">
             <div>
-                <h1 class="text-2xl font-bold text-emerald-400">OptionQuant AI Terminal</h1>
-                <p class="text-xs text-slate-400">Real-time Options Analytics & Arbitrage Engine</p>
+                <h1 class="text-2xl font-bold text-emerald-400 flex items-center gap-2">
+                    <span>⚡️ OptionQuant AI</span> 
+                    <span class="text-xs px-2 py-1 bg-emerald-500/20 text-emerald-300 rounded border border-emerald-500/30 font-mono">MOEX FORTS / Alor v2</span>
+                </h1>
+                <p class="text-xs text-slate-400">Delta-Neutral Arbitrage, Volatility Skew, Perpetual vs Quarterly Spread & AI Copilot</p>
             </div>
-            <div id="connection-status" class="px-3 py-1 bg-emerald-500/10 text-emerald-400 text-xs rounded-full border border-emerald-500/20">
-                ● Live API Connected
+            
+            <div class="flex items-center gap-3">
+                <!-- Asset Selector -->
+                <div class="flex bg-slate-800 p-1 rounded-lg border border-slate-700">
+                    <button onclick="switchAsset('Si')" id="btn-Si" class="px-3 py-1.5 text-xs font-bold rounded-md bg-emerald-600 text-white transition">Si (USD/RUB)</button>
+                    <button onclick="switchAsset('RI')" id="btn-RI" class="px-3 py-1.5 text-xs font-bold rounded-md text-slate-400 hover:text-white transition">RI (RTS)</button>
+                    <button onclick="switchAsset('CR')" id="btn-CR" class="px-3 py-1.5 text-xs font-bold rounded-md text-slate-400 hover:text-white transition">CR (Yuan)</button>
+                    <button onclick="switchAsset('BTC')" id="btn-BTC" class="px-3 py-1.5 text-xs font-bold rounded-md text-slate-400 hover:text-white transition">BTC (Crypto)</button>
+                </div>
+
+                <div id="connection-status" class="px-3 py-2 bg-emerald-500/10 text-emerald-400 text-xs rounded-lg border border-emerald-500/20 font-mono flex items-center gap-2">
+                    <div class="w-2 h-2 bg-emerald-400 rounded-full animate-ping"></div> Alor API Connected
+                </div>
             </div>
         </header>
 
         <!-- Metrics Row -->
         <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div class="bg-slate-800/60 p-4 rounded-xl border border-slate-700/50">
-                <span class="text-xs text-slate-400 uppercase tracking-wider">Spot Price (BTC)</span>
-                <div id="spot-price" class="text-2xl font-bold text-white mt-1">$0.00</div>
+                <span class="text-xs text-slate-400 uppercase tracking-wider" id="label-spot">Spot / Underlying Price</span>
+                <div id="spot-price" class="text-2xl font-bold text-white mt-1">₽0.00</div>
             </div>
             <div class="bg-slate-800/60 p-4 rounded-xl border border-slate-700/50">
-                <span class="text-xs text-slate-400 uppercase tracking-wider">Implied Volatility</span>
-                <div class="text-2xl font-bold text-amber-400 mt-1">50.0%</div>
+                <span class="text-xs text-slate-400 uppercase tracking-wider">Implied Volatility (ATM IV)</span>
+                <div class="text-2xl font-bold text-amber-400 mt-1">32.4%</div>
             </div>
             <div class="bg-slate-800/60 p-4 rounded-xl border border-slate-700/50">
                 <span class="text-xs text-slate-400 uppercase tracking-wider">Call Option Price</span>
-                <div id="call-price" class="text-2xl font-bold text-emerald-400 mt-1">$0.00</div>
+                <div id="call-price" class="text-2xl font-bold text-emerald-400 mt-1">₽0.00</div>
             </div>
             <div class="bg-slate-800/60 p-4 rounded-xl border border-slate-700/50">
                 <span class="text-xs text-slate-400 uppercase tracking-wider">Put Option Price</span>
-                <div id="put-price" class="text-2xl font-bold text-rose-400 mt-1">$0.00</div>
+                <div id="put-price" class="text-2xl font-bold text-rose-400 mt-1">₽0.00</div>
             </div>
         </div>
 
-        <!-- Arbitrage Signal Banner -->
+        <!-- 1. Perpetual vs Quarterly Spread Monitor -->
+        <div class="bg-slate-800/80 p-6 rounded-xl border border-slate-700 space-y-3">
+            <div class="flex justify-between items-center">
+                <h2 class="text-lg font-semibold text-slate-200">1. Basis Arbitrage Monitor (Perpetual vs Quarterly Futures)</h2>
+                <span id="perp-badge" class="px-3 py-1 text-xs font-bold rounded-md bg-slate-700 text-slate-300 font-mono">Scanning...</span>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 pt-2 font-mono">
+                <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
+                    <span class="text-xs text-slate-500 block">PERPETUAL PRICE</span>
+                    <p id="perp-price" class="text-lg font-bold text-white">₽0.00</p>
+                </div>
+                <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
+                    <span class="text-xs text-slate-500 block">QUARTERLY PRICE</span>
+                    <p id="quarterly-price" class="text-lg font-bold text-white">₽0.00</p>
+                </div>
+                <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
+                    <span class="text-xs text-slate-500 block">SPREAD (Q - Perp)</span>
+                    <p id="perp-spread" class="text-lg font-bold text-emerald-400">₽0.00</p>
+                </div>
+                <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
+                    <span class="text-xs text-slate-500 block">ANNUALIZED YIELD</span>
+                    <p id="perp-yield" class="text-lg font-bold text-amber-400">0.0% годовых</p>
+                </div>
+            </div>
+            <div id="perp-strategy" class="mt-2 p-3 bg-slate-900/60 rounded-lg text-sm text-slate-300 font-mono">
+                Strategy: Analyzing basis spread...
+            </div>
+        </div>
+
+        <!-- 2. Put-Call Parity Arbitrage Detector -->
         <div id="arb-card" class="bg-slate-800/80 p-6 rounded-xl border border-slate-700 space-y-3">
             <div class="flex justify-between items-center">
-                <h2 class="text-lg font-semibold text-slate-200">Arbitrage Detector (Put-Call Parity)</h2>
-                <span id="arb-badge" class="px-3 py-1 text-xs font-bold rounded-md bg-slate-700 text-slate-300">Scanning...</span>
+                <h2 class="text-lg font-semibold text-slate-200">2. Put-Call Parity Arbitrage Detector (Conversion / Reversal)</h2>
+                <span id="arb-badge" class="px-3 py-1 text-xs font-bold rounded-md bg-slate-700 text-slate-300 font-mono">Scanning...</span>
             </div>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 font-mono">
                 <div>
                     <span class="text-xs text-slate-400">Theoretical Diff (S - K*e^-rT)</span>
-                    <p id="theoretical-diff" class="text-lg font-mono font-medium text-slate-200">$0.00</p>
+                    <p id="theoretical-diff" class="text-lg font-medium text-slate-200">₽0.00</p>
                 </div>
                 <div>
                     <span class="text-xs text-slate-400">Actual Market Diff (C - P)</span>
-                    <p id="actual-diff" class="text-lg font-mono font-medium text-slate-200">$0.00</p>
+                    <p id="actual-diff" class="text-lg font-medium text-slate-200">₽0.00</p>
                 </div>
                 <div>
                     <span class="text-xs text-slate-400">Spread / Expected Profit</span>
-                    <p id="arb-spread" class="text-lg font-mono font-bold text-emerald-400">$0.00</p>
+                    <p id="arb-spread" class="text-lg font-bold text-emerald-400">₽0.00</p>
                 </div>
             </div>
             <div id="arb-strategy" class="mt-3 p-3 bg-slate-900/60 rounded-lg text-sm text-slate-300 font-mono">
@@ -66,9 +109,9 @@
             </div>
         </div>
 
-        <!-- Greeks Matrix -->
-        <div class="bg-slate-800/60 p-6 rounded-xl border border-slate-700/50">
-            <h2 class="text-lg font-semibold text-slate-200 mb-4">ATM Option Greeks</h2>
+        <!-- 3. ATM Option Greeks & Ratio Spreads -->
+        <div class="bg-slate-800/60 p-6 rounded-xl border border-slate-700/50 space-y-4">
+            <h2 class="text-lg font-semibold text-slate-200">3. ATM Option Greeks & Delta-Neutral Matrix</h2>
             <div class="grid grid-cols-2 md:grid-cols-5 gap-4 text-center font-mono">
                 <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
                     <span class="text-xs text-slate-500 block">DELTA</span>
@@ -79,8 +122,8 @@
                     <span id="greek-gamma" class="text-lg font-bold text-indigo-400">0.00</span>
                 </div>
                 <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
-                    <span class="text-xs text-slate-500 block">THETA</span>
-                    <span id="greek-theta" class="text-lg font-bold text-rose-400">0.00</span>
+                    <span class="text-xs text-slate-500 block">THETA (Day)</span>
+                    <span id="greek-theta" class="text-lg font-bold text-rose-400">₽0.00</span>
                 </div>
                 <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
                     <span class="text-xs text-slate-500 block">VEGA</span>
@@ -93,10 +136,10 @@
             </div>
         </div>
 
-        <!-- Volatility Skew Chart -->
+        <!-- 4. Volatility Skew Chart -->
         <div class="bg-slate-800/60 p-6 rounded-xl border border-slate-700/50">
             <div class="flex justify-between items-center mb-4">
-                <h2 class="text-lg font-semibold text-slate-200">Volatility Skew (Smile) Curve</h2>
+                <h2 class="text-lg font-semibold text-slate-200">4. Volatility Skew (Smile) Curve</h2>
                 <span class="text-xs text-slate-400 font-mono">Implied Volatility vs Strike</span>
             </div>
             <div class="relative h-64 w-full">
@@ -104,12 +147,12 @@
             </div>
         </div>
 
-        <!-- AI Quant Copilot Panel -->
+        <!-- 5. AI Quant Copilot Panel -->
         <div class="bg-slate-800/60 p-6 rounded-xl border border-slate-700/50 space-y-4">
             <div class="flex justify-between items-center border-b border-slate-700 pb-3">
                 <div class="flex items-center space-x-2">
                     <div class="w-3 h-3 bg-emerald-400 rounded-full animate-pulse"></div>
-                    <h2 class="text-lg font-semibold text-slate-200">AI Quant Copilot (Agentic Skills)</h2>
+                    <h2 class="text-lg font-semibold text-slate-200">5. AI Quant Copilot (Agentic Skills & Recommendations)</h2>
                 </div>
                 <span class="text-xs text-slate-400 font-mono">MOEX FORTS & Options Assistant</span>
             </div>
@@ -138,6 +181,22 @@
 
     <script>
         let skewChartInstance = null;
+        let currentAsset = 'Si';
+
+        function switchAsset(asset) {
+            currentAsset = asset;
+            ['Si', 'RI', 'CR', 'BTC'].forEach(a => {
+                const btn = document.getElementById(`btn-${a}`);
+                if (btn) {
+                    if (a === asset) {
+                        btn.className = 'px-3 py-1.5 text-xs font-bold rounded-md bg-emerald-600 text-white transition';
+                    } else {
+                        btn.className = 'px-3 py-1.5 text-xs font-bold rounded-md text-slate-400 hover:text-white transition';
+                    }
+                }
+            });
+            updateDashboard();
+        }
 
         function initSkewChart() {
             const ctx = document.getElementById('skewChart').getContext('2d');
@@ -161,7 +220,7 @@
                     maintainAspectRatio: false,
                     scales: {
                         x: {
-                            title: { display: true, text: 'Strike Price ($)', color: '#94a3b8' },
+                            title: { display: true, text: 'Strike Price', color: '#94a3b8' },
                             grid: { color: 'rgba(51, 65, 85, 0.3)' },
                             ticks: { color: '#94a3b8' }
                         },
@@ -180,10 +239,10 @@
 
         async function updateSkewChart() {
             try {
-                const res = await fetch('/api/v1/options/skew?symbol=BTC');
+                const res = await fetch(`/api/v1/options/skew?symbol=${currentAsset}`);
                 const data = await res.json();
 
-                const labels = data.points.map(p => `$${p.strike.toLocaleString()}`);
+                const labels = data.points.map(p => p.strike.toLocaleString());
                 const ivValues = data.points.map(p => p.iv.toFixed(2));
 
                 if (skewChartInstance) {
@@ -198,37 +257,57 @@
 
         async function updateDashboard() {
             try {
-                // 1. Fetch Arbitrage Data
-                const arbRes = await fetch('/api/v1/arbitrage/check?symbol=BTC');
+                // 1. Perp vs Quarterly Spread Monitor
+                const perpRes = await fetch(`/api/v1/moex/perp-quarterly?symbol=${currentAsset}`);
+                const perp = await perpRes.json();
+
+                document.getElementById('perp-price').innerText = `₽${perp.perpetual_price.toLocaleString()}`;
+                document.getElementById('quarterly-price').innerText = `₽${perp.quarterly_price.toLocaleString()}`;
+                document.getElementById('perp-spread').innerText = `₽${perp.spread}`;
+                document.getElementById('perp-yield').innerText = `${perp.annualized_return}% годовых`;
+                document.getElementById('perp-strategy').innerText = `Strategy: ${perp.strategy}`;
+
+                const perpBadge = document.getElementById('perp-badge');
+                if (Math.abs(perp.spread) > 100) {
+                    perpBadge.innerText = 'BASIS ARBITRAGE';
+                    perpBadge.className = 'px-3 py-1 text-xs font-bold rounded-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-mono';
+                } else {
+                    perpBadge.innerText = 'BALANCED';
+                    perpBadge.className = 'px-3 py-1 text-xs font-bold rounded-md bg-slate-700 text-slate-300 font-mono';
+                }
+
+                // 2. Put-Call Parity Arbitrage Data
+                const arbRes = await fetch(`/api/v1/arbitrage/check?symbol=${currentAsset}`);
                 const arb = await arbRes.json();
 
-                document.getElementById('spot-price').innerText = `$${arb.spot_price.toLocaleString()}`;
-                document.getElementById('call-price').innerText = `$${arb.actual_call_price.toLocaleString()}`;
-                document.getElementById('put-price').innerText = `$${arb.actual_put_price.toLocaleString()}`;
-                document.getElementById('theoretical-diff').innerText = `$${arb.theoretical_diff}`;
-                document.getElementById('actual-diff').innerText = `$${arb.actual_diff}`;
-                document.getElementById('arb-spread').innerText = `$${arb.spread}`;
+                document.getElementById('spot-price').innerText = `₽${arb.spot_price.toLocaleString()}`;
+                document.getElementById('call-price').innerText = `₽${arb.actual_call_price.toLocaleString()}`;
+                document.getElementById('put-price').innerText = `₽${arb.actual_put_price.toLocaleString()}`;
+                document.getElementById('theoretical-diff').innerText = `₽${arb.theoretical_diff}`;
+                document.getElementById('actual-diff').innerText = `₽${arb.actual_diff}`;
+                document.getElementById('arb-spread').innerText = `₽${arb.spread}`;
                 document.getElementById('arb-strategy').innerText = `Strategy: ${arb.strategy}`;
 
                 const badge = document.getElementById('arb-badge');
                 if (arb.expected_profit > 0) {
-                    badge.innerText = 'ARBITRAGE DETECTED';
-                    badge.className = 'px-3 py-1 text-xs font-bold rounded-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+                    badge.innerText = 'PARITY ARBITRAGE';
+                    badge.className = 'px-3 py-1 text-xs font-bold rounded-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-mono';
                 } else {
                     badge.innerText = 'NO ARBITRAGE';
-                    badge.className = 'px-3 py-1 text-xs font-bold rounded-md bg-slate-700 text-slate-300';
+                    badge.className = 'px-3 py-1 text-xs font-bold rounded-md bg-slate-700 text-slate-300 font-mono';
                 }
 
-                // 2. Fetch Greeks Data
-                const greeksRes = await fetch('/api/v1/greeks/live?symbol=BTC');
+                // 3. Greeks Data
+                const greeksRes = await fetch(`/api/v1/greeks/live?symbol=${currentAsset}`);
                 const greeksData = await greeksRes.json();
                 
                 document.getElementById('greek-delta').innerText = greeksData.greeks.delta;
                 document.getElementById('greek-gamma').innerText = greeksData.greeks.gamma;
-                document.getElementById('greek-theta').innerText = greeksData.greeks.theta;
+                document.getElementById('greek-theta').innerText = `₽${greeksData.greeks.theta}`;
                 document.getElementById('greek-vega').innerText = greeksData.greeks.vega;
                 document.getElementById('greek-rho').innerText = greeksData.greeks.rho;
 
+                updateSkewChart();
             } catch (e) {
                 console.error("Dashboard update failed", e);
             }
@@ -270,11 +349,9 @@
 
         window.addEventListener('DOMContentLoaded', () => {
             initSkewChart();
-            updateSkewChart();
             updateDashboard();
 
             setInterval(updateDashboard, 3000);
-            setInterval(updateSkewChart, 5000);
         });
     </script>
 </body>
