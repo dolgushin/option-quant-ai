@@ -104,6 +104,36 @@
             </div>
         </div>
 
+        <!-- AI Quant Copilot Panel -->
+        <div class="bg-slate-800/60 p-6 rounded-xl border border-slate-700/50 space-y-4">
+            <div class="flex justify-between items-center border-b border-slate-700 pb-3">
+                <div class="flex items-center space-x-2">
+                    <div class="w-3 h-3 bg-emerald-400 rounded-full animate-pulse"></div>
+                    <h2 class="text-lg font-semibold text-slate-200">AI Quant Copilot (Agentic Skills)</h2>
+                </div>
+                <span class="text-xs text-slate-400 font-mono">MOEX FORTS & Options Assistant</span>
+            </div>
+
+            <!-- Chat Messages Box -->
+            <div id="chat-messages" class="h-48 overflow-y-auto space-y-3 p-3 bg-slate-900/60 rounded-lg border border-slate-800 text-sm font-mono">
+                <div class="text-slate-400">🤖 Квант-агент на связи. Задайте вопрос по дельта-нейтральности, тете, арбитражу или хеджированию Si / RI.</div>
+            </div>
+
+            <!-- Quick Action Chips -->
+            <div class="flex flex-wrap gap-2">
+                <button onclick="askCopilot('Проанализируй текущую дельту и риски портфеля')" class="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-xs text-slate-200 rounded-md transition font-mono">📊 Анализ греков</button>
+                <button onclick="askCopilot('Сколько фьючерсов нужно продать для дельта-хеджа?')" class="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-xs text-slate-200 rounded-md transition font-mono">⚖️ Дельта-хедж</button>
+                <button onclick="askCopilot('Проверь арбитражные возможности по паритету')" class="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-xs text-slate-200 rounded-md transition font-mono">⚡️ Проверить арбитраж</button>
+                <button onclick="askCopilot('Какой мой ежедневный доход от тета-распада?')" class="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-xs text-slate-200 rounded-md transition font-mono">⏳ Тета-распад</button>
+            </div>
+
+            <!-- Chat Input -->
+            <div class="flex space-x-2">
+                <input id="chat-input" type="text" placeholder="Спроси агента (например: Как сделать дельта-нейтральный спред?)..." class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 font-mono" onkeypress="if(event.key === 'Enter') sendCopilotQuery()">
+                <button onclick="sendCopilotQuery()" class="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold rounded-lg transition">Спросить</button>
+            </div>
+        </div>
+
     </div>
 
     <script>
@@ -202,6 +232,40 @@
             } catch (e) {
                 console.error("Dashboard update failed", e);
             }
+        }
+
+        async function askCopilot(customPrompt) {
+            const prompt = customPrompt || document.getElementById('chat-input').value;
+            if (!prompt) return;
+
+            const chatBox = document.getElementById('chat-messages');
+            chatBox.innerHTML += `<div class="text-emerald-400 font-bold">> ${prompt}</div>`;
+            if (!customPrompt) document.getElementById('chat-input').value = '';
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            try {
+                const res = await fetch('/api/v1/copilot/ask', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt: prompt,
+                        delta: 0.08,
+                        theta: 950.0,
+                        gamma: 0.0035,
+                        vega: 110.0,
+                        spread: 15.5
+                    })
+                });
+                const data = await res.json();
+                chatBox.innerHTML += `<div class="text-slate-300">🤖 ${data.reply} <span class="text-xs text-indigo-400 font-mono">[Action: ${data.action}]</span></div>`;
+                chatBox.scrollTop = chatBox.scrollHeight;
+            } catch (e) {
+                chatBox.innerHTML += `<div class="text-rose-400">❌ Ошибка связи с AI агентом</div>`;
+            }
+        }
+
+        function sendCopilotQuery() {
+            askCopilot(null);
         }
 
         window.addEventListener('DOMContentLoaded', () => {

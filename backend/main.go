@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 
+	"option-quant-ai/agent"
 	"option-quant-ai/alor"
 	"option-quant-ai/quant"
 )
@@ -306,6 +307,29 @@ func moexOrderHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(res)
 }
 
+func copilotHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req agent.CopilotRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		req = agent.CopilotRequest{
+			Prompt: "Проанализируй портфель",
+			Delta:  0.02,
+			Theta:  850.0,
+			Gamma:  0.003,
+			Vega:   120.0,
+			Spread: 5.0,
+		}
+	}
+
+	resp := agent.ProcessCopilotQuery(req)
+	json.NewEncoder(w).Encode(resp)
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -331,6 +355,9 @@ func main() {
 	http.HandleFunc("/api/v1/moex/quote", moexQuoteHandler)
 	http.HandleFunc("/api/v1/moex/arbitrage", moexArbitrageHandler)
 	http.HandleFunc("/api/v1/moex/order", moexOrderHandler)
+
+	// AI Quant Copilot Agent Handler
+	http.HandleFunc("/api/v1/copilot/ask", copilotHandler)
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
