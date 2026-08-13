@@ -368,6 +368,79 @@ func moexPerpQuarterlyHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func optionsRecommendationsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	ivStr := r.URL.Query().Get("iv")
+	hvStr := r.URL.Query().Get("hv")
+	spotStr := r.URL.Query().Get("spot")
+
+	iv := 35.0
+	if ivStr != "" {
+		iv, _ = strconv.ParseFloat(ivStr, 64)
+	}
+	hv := 28.0
+	if hvStr != "" {
+		hv, _ = strconv.ParseFloat(hvStr, 64)
+	}
+	spot := 92500.0
+	if spotStr != "" {
+		spot, _ = strconv.ParseFloat(spotStr, 64)
+	}
+
+	recs := quant.GenerateStrategyRecommendations(iv, hv, spot)
+	regime := quant.ClassifyMarketRegime(iv, hv, false)
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"market_regime":   string(regime),
+		"recommendations": recs,
+	})
+}
+
+func optionsExitAdviceHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	dteStr := r.URL.Query().Get("dte")
+	deltaStr := r.URL.Query().Get("delta")
+	profitStr := r.URL.Query().Get("profit")
+
+	dte := 30.0
+	if dteStr != "" {
+		dte, _ = strconv.ParseFloat(dteStr, 64)
+	}
+	delta := 0.12
+	if deltaStr != "" {
+		delta, _ = strconv.ParseFloat(deltaStr, 64)
+	}
+	profit := 50.0
+	if profitStr != "" {
+		profit, _ = strconv.ParseFloat(profitStr, 64)
+	}
+
+	advice := quant.AnalyzeExitTriggers(dte, delta, profit)
+	json.NewEncoder(w).Encode(advice)
+}
+
+func gammaScalpingStepHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	thetaStr := r.URL.Query().Get("theta")
+	gammaStr := r.URL.Query().Get("gamma")
+
+	theta := 450.0
+	if thetaStr != "" {
+		theta, _ = strconv.ParseFloat(thetaStr, 64)
+	}
+	gamma := 0.004
+	if gammaStr != "" {
+		gamma, _ = strconv.ParseFloat(gammaStr, 64)
+	}
+
+	step := quant.CalculateGammaScalpingStep(theta, gamma)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"theta":     theta,
+		"gamma":     gamma,
+		"move_step": step,
+	})
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -395,8 +468,10 @@ func main() {
 	http.HandleFunc("/api/v1/moex/order", moexOrderHandler)
 	http.HandleFunc("/api/v1/moex/perp-quarterly", moexPerpQuarterlyHandler)
 
-	// AI Quant Copilot Agent Handler
-	http.HandleFunc("/api/v1/copilot/ask", copilotHandler)
+	// Options Strategy & TDSS Handlers
+	http.HandleFunc("/api/v1/options/recommendations", optionsRecommendationsHandler)
+	http.HandleFunc("/api/v1/options/exit-advice", optionsExitAdviceHandler)
+	http.HandleFunc("/api/v1/options/gamma-step", gammaScalpingStepHandler)
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

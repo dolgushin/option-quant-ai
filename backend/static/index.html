@@ -136,6 +136,32 @@
             </div>
         </div>
 
+        <!-- Strategy & TDSS Decision Support Framework -->
+        <div class="bg-slate-800/80 p-6 rounded-xl border border-slate-700 space-y-4">
+            <div class="flex justify-between items-center border-b border-slate-700 pb-3">
+                <h2 class="text-lg font-semibold text-slate-200">Strategies & TDSS Decision Support Framework</h2>
+                <span id="market-regime-badge" class="px-3 py-1 text-xs font-bold rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-mono">Regime: Analyzing...</span>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- Recommended Strategies -->
+                <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800 space-y-3 font-mono">
+                    <h3 class="text-sm font-bold text-emerald-400">Recommended Option Structures</h3>
+                    <div id="strategy-cards" class="space-y-2 text-xs text-slate-300">
+                        Loading strategy recommendations...
+                    </div>
+                </div>
+
+                <!-- Exit Advice & Risk Guard -->
+                <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800 space-y-3 font-mono">
+                    <h3 class="text-sm font-bold text-amber-400">Risk Guard & Exit Telemetry</h3>
+                    <div id="exit-advice-box" class="space-y-2 text-xs text-slate-300">
+                        Analyzing position risks and triggers...
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- 4. Volatility Skew Chart -->
         <div class="bg-slate-800/60 p-6 rounded-xl border border-slate-700/50">
             <div class="flex justify-between items-center mb-4">
@@ -307,9 +333,50 @@
                 document.getElementById('greek-vega').innerText = greeksData.greeks.vega;
                 document.getElementById('greek-rho').innerText = greeksData.greeks.rho;
 
+                // 4. Update TDSS Strategies & Exit Advice
+                await updateTDSS();
+
                 updateSkewChart();
             } catch (e) {
                 console.error("Dashboard update failed", e);
+            }
+        }
+
+        async function updateTDSS() {
+            try {
+                const recsRes = await fetch('/api/v1/options/recommendations?iv=35&hv=28');
+                const recsData = await recsRes.json();
+
+                document.getElementById('market-regime-badge').innerText = `Regime: ${recsData.market_regime}`;
+
+                let html = '';
+                recsData.recommendations.forEach(rec => {
+                    html += `<div class="p-2 bg-slate-800/80 rounded border border-slate-700">
+                        <div class="font-bold text-white">${rec.strategy_name}</div>
+                        <div>Suitability: <span class="text-emerald-400">${rec.suitability}</span></div>
+                        <div>Theta: <span class="text-rose-400">+${rec.expected_theta} ₽/day</span> | Max Profit: ${rec.max_profit}</div>
+                        <div class="text-slate-400 text-[10px]">Exit: ${rec.exit_rule}</div>
+                    </div>`;
+                });
+                document.getElementById('strategy-cards').innerHTML = html;
+
+                const exitRes = await fetch('/api/v1/options/exit-advice?dte=28&delta=0.08&profit=45');
+                const exitData = await exitRes.json();
+
+                let sevColor = 'text-emerald-400';
+                if (exitData.severity === 'WARNING') sevColor = 'text-amber-400';
+                if (exitData.severity === 'CRITICAL') sevColor = 'text-rose-400';
+
+                document.getElementById('exit-advice-box').innerHTML = `
+                    <div class="p-2 bg-slate-800/80 rounded border border-slate-700 space-y-1">
+                        <div>Trigger: <span class="font-bold text-white">${exitData.trigger_type}</span></div>
+                        <div>Severity: <span class="${sevColor} font-bold">${exitData.severity}</span></div>
+                        <div class="text-slate-300">${exitData.message}</div>
+                        <div class="text-indigo-300 font-bold">Action: ${exitData.action}</div>
+                    </div>
+                `;
+            } catch (e) {
+                console.error("TDSS update failed", e);
             }
         }
 
