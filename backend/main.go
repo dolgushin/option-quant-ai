@@ -12,11 +12,11 @@ import (
 
 type GreeksRequest struct {
 	IsCall bool    `json:"is_call"`
-	S      float64 `json:"spot_price"`  // Текущая цена актива (Spot)
-	K      float64 `json:"strike_price"`// Страйк опциона
-	T      float64 `json:"time_to_exp"` // Время до экспирации в годах (напр. 30/365)
-	R      float64 `json:"risk_free"`   // Безрисковая ставка (напр. 0.05)
-	Sigma  float64 `json:"volatility"`  // Волатильность (напр. 0.20 для 20%)
+	S      float64 `json:"spot_price"`
+	K      float64 `json:"strike_price"`
+	T      float64 `json:"time_to_exp"`
+	R      float64 `json:"risk_free"`
+	Sigma  float64 `json:"volatility"`
 }
 
 func greeksHandler(w http.ResponseWriter, r *http.Request) {
@@ -37,6 +37,23 @@ func greeksHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(greeks)
 }
 
+func quoteHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "BTC"
+	}
+
+	quote, err := quant.FetchCryptoSpot(symbol)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(quote)
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -44,6 +61,7 @@ func main() {
 	}
 
 	http.HandleFunc("/api/v1/greeks", greeksHandler)
+	http.HandleFunc("/api/v1/market/quote", quoteHandler)
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "engine": "Go Quant Core"})
