@@ -892,6 +892,31 @@ func copilotHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// nextQuarterlyContract returns the quarterly futures contract (expiry month is
+// March/June/September/December) that expires after the given reference date.
+func nextQuarterlyContract(symbol string, after time.Time) (futuresContract, bool) {
+	contracts := futuresContractsForSymbol(symbol)
+	var best futuresContract
+	bestDate := time.Time{}
+	for _, c := range contracts {
+		t, err := time.Parse("2006-01-02", c.LastDelDate)
+		if err != nil {
+			continue
+		}
+		if t.Month()%3 != 0 {
+			continue // only quarterly months: Mar, Jun, Sep, Dec
+		}
+		if !t.After(after) {
+			continue
+		}
+		if bestDate.IsZero() || t.Before(bestDate) {
+			best = c
+			bestDate = t
+		}
+	}
+	return best, !bestDate.IsZero()
+}
+
 func moexPerpQuarterlyHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	symbol := r.URL.Query().Get("symbol")
@@ -908,27 +933,57 @@ func moexPerpQuarterlyHandler(w http.ResponseWriter, r *http.Request) {
 	currentSeries := selectedSeries[symbol]
 	seriesMu.Unlock()
 
+	// Real quarterly price: the next quarterly contract after the current series.
+	currentExpiry := time.Now()
+	if sInfo := currentSeriesExpiry(symbol); sInfo != nil {
+		currentExpiry = *sInfo
+	}
+	quarterlySeries := currentSeries
 	quarterlyPrice := math.Round(perpPrice * 1.012)
+
+	if qc, ok := nextQuarterlyContract(symbol, currentExpiry); ok {
+		if real, err := moexISSSpotPrice(qc.Code); err == nil && real > 0 {
+			quarterlySeries = qc.Code
+			quarterlyPrice = real
+		}
+	}
 
 	spread := quarterlyPrice - perpPrice
 	annualizedReturn := (spread / perpPrice) * (365.0 / 90.0) * 100.0
 
 	strategy := "No Arbitrage"
 	if spread > 300.0 {
-		strategy = fmt.Sprintf("Sell Quarterly %s, Buy Perpetual %s (Contango Arbitrage / Carry)", currentSeries, symbol)
+		strategy = fmt.Sprintf("Sell Quarterly %s, Buy Perpetual %s (Contango Arbitrage / Carry)", quarterlySeries, symbol)
 	} else if spread < -100.0 {
-		strategy = fmt.Sprintf("Buy Quarterly %s, Sell Perpetual %s (Backwardation)", currentSeries, symbol)
+		strategy = fmt.Sprintf("Buy Quarterly %s, Sell Perpetual %s (Backwardation)", quarterlySeries, symbol)
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"symbol":            symbol,
 		"series":            currentSeries,
+		"quarterly_series":  quarterlySeries,
 		"perpetual_price":   perpPrice,
 		"quarterly_price":   quarterlyPrice,
 		"spread":            math.Round(spread*100) / 100,
 		"annualized_return": math.Round(annualizedReturn*100) / 100,
 		"strategy":          strategy,
 	})
+}
+
+// currentSeriesExpiry returns the expiry date of the currently selected series,
+// or nil if unknown.
+func currentSeriesExpiry(symbol string) *time.Time {
+	seriesMu.Lock()
+	code := selectedSeries[symbol]
+	seriesMu.Unlock()
+	for _, c := range futuresContractsForSymbol(symbol) {
+		if c.Code == code && c.LastDelDate != "" {
+			if t, err := time.Parse("2006-01-02", c.LastDelDate); err == nil {
+				return &t
+			}
+		}
+	}
+	return nil
 }
 
 func optionsRecommendationsHandler(w http.ResponseWriter, r *http.Request) {

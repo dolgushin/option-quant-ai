@@ -410,6 +410,7 @@
         let currentAsset = 'Si';
         let currentSpotPrice = 83200;
         let currentSeriesInfo = null;
+        let currentPerpQuarterly = null;
         let selectedStrategyData = null;
         let currentLotMultiplier = 1;
 
@@ -639,14 +640,24 @@
         }
 
         function openBasisStrategyModal() {
-            const spot = currentSpotPrice;
-            const quarterly = Math.round(spot * 1.012);
+            const perp = currentPerpQuarterly;
+            let quarterlyPrice, perpPrice, qSeries;
+            if (perp && perp.quarterly_price && perp.perpetual_price) {
+                quarterlyPrice = Math.round(perp.quarterly_price);
+                perpPrice = Math.round(perp.perpetual_price);
+                qSeries = perp.quarterly_series || `${currentAsset}U6`;
+            } else {
+                const spot = currentSpotPrice;
+                quarterlyPrice = Math.round(spot * 1.012);
+                perpPrice = Math.round(spot);
+                qSeries = `${currentAsset}U6`;
+            }
             openStrategyModal(
                 `Basis Arbitrage (${currentAsset} Perpetual vs Quarterly)`,
                 'Basis Arbitrage',
                 [
-                    { action: 'SELL', symbol: `${currentAsset}U6 (Quarterly)`, qty: 10, price: `${quarterly.toLocaleString()} ₽` },
-                    { action: 'BUY', symbol: `${currentAsset} (Perpetual)`, qty: 10, price: `${Math.round(spot).toLocaleString()} ₽` }
+                    { action: 'SELL', symbol: `${qSeries} (Quarterly)`, qty: 10, price: `${quarterlyPrice.toLocaleString()} ₽` },
+                    { action: 'BUY', symbol: `${currentAsset} (Perpetual)`, qty: 10, price: `${perpPrice.toLocaleString()} ₽` }
                 ],
                 2500,
                 7000,
@@ -883,6 +894,7 @@
                 document.getElementById('perp-spread').innerText = `₽${perp.spread}`;
                 document.getElementById('perp-yield').innerText = `${perp.annualized_return}% годовых`;
                 document.getElementById('perp-strategy').innerText = `Strategy: ${perp.strategy}`;
+                currentPerpQuarterly = perp;
 
                 const perpBadge = document.getElementById('perp-badge');
                 if (Math.abs(perp.spread) > 100) {
