@@ -627,6 +627,7 @@ func main() {
 	http.HandleFunc("/api/v1/positions/close", closePositionHandler)
 	http.HandleFunc("/api/v1/portfolio", portfolioHandler)
 	http.HandleFunc("/api/v1/capital", capitalHandler)
+	http.HandleFunc("/api/v1/copilot/ask", copilotHandler)
 	http.HandleFunc("/api/v1/options/exit-advice", optionsExitAdviceHandler)
 	http.HandleFunc("/api/v1/options/gamma-step", gammaScalpingStepHandler)
 	http.HandleFunc("/api/v1/options/vertical-spread", verticalSpreadHandler)
