@@ -37,13 +37,14 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -p $PORT -H $HOST >> ~/.ssh/known_hosts
 
-          # Создаем директорию на VPS если не существует
+          # Создаем директории на VPS если не существуют
           ssh -p $PORT $USER@$HOST "mkdir -p /opt/option-quant-ai/backend"
 
-          # Скопируем бинарник, Dockerfile и docker-compose напрямую
-          scp -P $PORT backend/main $USER@$HOST:/opt/option-quant-ai/backend/main
-          scp -P $PORT backend/Dockerfile $USER@$HOST:/opt/option-quant-ai/backend/Dockerfile
-          scp -P $PORT docker-compose.yml $USER@$HOST:/opt/option-quant-ai/docker-compose.yml
+          # Синхронизируем всю папку backend (включая static, quant, alor, agent, main.go, Dockerfile)
+          rsync -avz -e "ssh -p $PORT -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no" backend/ $USER@$HOST:/opt/option-quant-ai/backend/
+          
+          # Копируем docker-compose.yml
+          scp -P $PORT -i ~/.ssh/id_rsa docker-compose.yml $USER@$HOST:/opt/option-quant-ai/docker-compose.yml
 
-          # Перезапустим Docker Compose
-          ssh -p $PORT $USER@$HOST "cd /opt/option-quant-ai && docker compose down --remove-orphans || true && docker compose up --build -d"
+          # Перезапустим Docker Compose с полным пересбором
+          ssh -p $PORT -i ~/.ssh/id_rsa $USER@$HOST "cd /opt/option-quant-ai && docker compose down --remove-orphans || true && docker compose up --build --force-recreate -d"
