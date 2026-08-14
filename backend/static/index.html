@@ -39,8 +39,11 @@
         <div class="bg-slate-800/90 p-4 rounded-xl border border-emerald-500/30 flex flex-col md:flex-row justify-between items-center gap-4 font-mono">
             <div class="flex flex-wrap items-center gap-4">
                 <div>
-                    <span class="text-xs text-slate-400 block">НАЧАЛЬНЫЙ КАПИТАЛ</span>
-                    <span id="cap-initial" class="text-xl font-bold text-emerald-400">₽1,000,000</span>
+                    <span class="text-xs text-slate-400 block">НАЧАЛЬНЫЙ КАПИТАЛ (₽)</span>
+                    <div class="flex items-center gap-2 mt-1">
+                        <input id="input-initial-capital" type="number" value="1000000" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-36 focus:outline-none focus:border-emerald-500">
+                        <button onclick="saveInitialCapital()" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded transition">Сохранить</button>
+                    </div>
                 </div>
                 <div class="hidden md:block h-8 w-px bg-slate-700"></div>
                 <div>
@@ -57,9 +60,6 @@
                     <span class="text-xs text-slate-400 block">СТОИМОСТЬ ПОРТФЕЛЯ</span>
                     <span id="cap-total" class="text-xl font-bold text-indigo-400">₽1,000,200</span>
                 </div>
-            </div>
-            <div>
-                <button onclick="setInitialCapitalPrompt()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition shadow">⚙️ Указать капитал</button>
             </div>
         </div>
 
@@ -745,7 +745,10 @@
             try {
                 const res = await fetch('/api/v1/portfolio');
                 const p = await res.json();
-                document.getElementById('cap-initial').innerText = `₽${p.initial_capital.toLocaleString()}`;
+                const inputEl = document.getElementById('input-initial-capital');
+                if (inputEl && document.activeElement !== inputEl) {
+                    inputEl.value = p.initial_capital;
+                }
                 document.getElementById('cap-cash').innerText = `₽${p.cash.toLocaleString()}`;
                 document.getElementById('cap-margin').innerText = `₽${p.locked_margin.toLocaleString()}`;
                 document.getElementById('cap-total').innerText = `₽${p.total_value.toLocaleString()}`;
@@ -754,9 +757,8 @@
             }
         }
 
-        async function setInitialCapitalPrompt() {
-            const val = prompt("Введите ваш начальный торговый капитал в рублях (например: 1500000):", "1000000");
-            if (!val) return;
+        async function saveInitialCapital() {
+            const val = document.getElementById('input-initial-capital').value;
             const amount = parseFloat(val);
             if (isNaN(amount) || amount <= 0) {
                 alert("Некорректная сумма капитала");
@@ -772,10 +774,10 @@
                 const data = await res.json();
                 if (data.success) {
                     updatePortfolio();
-                    alert(`✅ Начальный капитал успешно установлен: ₽${amount.toLocaleString()}`);
+                    alert(`✅ Начальный капитал успешно сохранен: ₽${amount.toLocaleString()}`);
                 }
             } catch (e) {
-                alert("Ошибка при установке капитала");
+                alert("Ошибка при сохранении капитала");
             }
         }
 
