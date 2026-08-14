@@ -363,8 +363,39 @@ func moexOrderHandler(w http.ResponseWriter, r *http.Request) {
 func positionsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	positions := quant.GetActivePositions()
+	portfolio := quant.GetPortfolio()
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"positions": positions,
+		"portfolio": portfolio,
+	})
+}
+
+func portfolioHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	portfolio := quant.GetPortfolio()
+	json.NewEncoder(w).Encode(portfolio)
+}
+
+func capitalHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Amount float64 `json:"amount"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Amount <= 0 {
+		http.Error(w, "Invalid capital amount", http.StatusBadRequest)
+		return
+	}
+
+	quant.SetInitialCapital(req.Amount)
+	portfolio := quant.GetPortfolio()
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":   true,
+		"portfolio": portfolio,
 	})
 }
 
@@ -591,6 +622,8 @@ func main() {
 	// Positions & Portfolio Handlers
 	http.HandleFunc("/api/v1/positions", positionsHandler)
 	http.HandleFunc("/api/v1/positions/close", closePositionHandler)
+	http.HandleFunc("/api/v1/portfolio", portfolioHandler)
+	http.HandleFunc("/api/v1/capital", capitalHandler)
 	http.HandleFunc("/api/v1/options/exit-advice", optionsExitAdviceHandler)
 	http.HandleFunc("/api/v1/options/gamma-step", gammaScalpingStepHandler)
 	http.HandleFunc("/api/v1/options/vertical-spread", verticalSpreadHandler)

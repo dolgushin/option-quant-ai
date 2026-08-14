@@ -19,8 +19,17 @@ type Position struct {
 	OpenedAt  time.Time `json:"opened_at"`
 }
 
+type PortfolioState struct {
+	InitialCapital float64 `json:"initial_capital"`
+	Cash           float64 `json:"cash"`
+	LockedMargin   float64 `json:"locked_margin"`
+	TotalValue     float64 `json:"total_value"`
+}
+
 var (
-	positionsMu sync.Mutex
+	positionsMu    sync.Mutex
+	initialCapital = 1000000.0
+	lockedMargin   = 15000.0
 	activePositions = []Position{
 		{
 			ID:           "pos-001",
@@ -37,6 +46,32 @@ var (
 		},
 	}
 )
+
+func GetPortfolio() PortfolioState {
+	positionsMu.Lock()
+	defer positionsMu.Unlock()
+
+	totalPnL := 0.0
+	for _, p := range activePositions {
+		totalPnL += p.PnL
+	}
+
+	cash := initialCapital - lockedMargin + totalPnL
+	totalValue := initialCapital + totalPnL
+
+	return PortfolioState{
+		InitialCapital: initialCapital,
+		Cash:           cash,
+		LockedMargin:   lockedMargin,
+		TotalValue:     totalValue,
+	}
+}
+
+func SetInitialCapital(amount float64) {
+	positionsMu.Lock()
+	defer positionsMu.Unlock()
+	initialCapital = amount
+}
 
 func GetActivePositions() []Position {
 	positionsMu.Lock()

@@ -35,6 +35,34 @@
             </div>
         </header>
 
+        <!-- Capital & Portfolio Bar -->
+        <div class="bg-slate-800/90 p-4 rounded-xl border border-emerald-500/30 flex flex-col md:flex-row justify-between items-center gap-4 font-mono">
+            <div class="flex flex-wrap items-center gap-4">
+                <div>
+                    <span class="text-xs text-slate-400 block">НАЧАЛЬНЫЙ КАПИТАЛ</span>
+                    <span id="cap-initial" class="text-xl font-bold text-emerald-400">₽1,000,000</span>
+                </div>
+                <div class="hidden md:block h-8 w-px bg-slate-700"></div>
+                <div>
+                    <span class="text-xs text-slate-400 block">СВОБОДНЫЕ СРЕДСТВА (CASH)</span>
+                    <span id="cap-cash" class="text-xl font-bold text-white">₽985,000</span>
+                </div>
+                <div class="hidden md:block h-8 w-px bg-slate-700"></div>
+                <div>
+                    <span class="text-xs text-slate-400 block">ГО / ЗАЛОГ (MARGIN)</span>
+                    <span id="cap-margin" class="text-xl font-bold text-amber-400">₽15,000</span>
+                </div>
+                <div class="hidden md:block h-8 w-px bg-slate-700"></div>
+                <div>
+                    <span class="text-xs text-slate-400 block">СТОИМОСТЬ ПОРТФЕЛЯ</span>
+                    <span id="cap-total" class="text-xl font-bold text-indigo-400">₽1,000,200</span>
+                </div>
+            </div>
+            <div>
+                <button onclick="setInitialCapitalPrompt()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition shadow">⚙️ Указать капитал</button>
+            </div>
+        </div>
+
         <!-- Metrics Row -->
         <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div class="bg-slate-800/60 p-4 rounded-xl border border-slate-700/50">
@@ -671,6 +699,7 @@
                 // 4. Update TDSS Strategies & Exit Advice
                 await updateTDSS();
                 await updatePositions();
+                await updatePortfolio();
 
                 updateSkewChart();
             } catch (e) {
@@ -712,10 +741,49 @@
             askCopilot(null);
         }
 
+        async function updatePortfolio() {
+            try {
+                const res = await fetch('/api/v1/portfolio');
+                const p = await res.json();
+                document.getElementById('cap-initial').innerText = `₽${p.initial_capital.toLocaleString()}`;
+                document.getElementById('cap-cash').innerText = `₽${p.cash.toLocaleString()}`;
+                document.getElementById('cap-margin').innerText = `₽${p.locked_margin.toLocaleString()}`;
+                document.getElementById('cap-total').innerText = `₽${p.total_value.toLocaleString()}`;
+            } catch (e) {
+                console.error("Failed to load portfolio", e);
+            }
+        }
+
+        async function setInitialCapitalPrompt() {
+            const val = prompt("Введите ваш начальный торговый капитал в рублях (например: 1500000):", "1000000");
+            if (!val) return;
+            const amount = parseFloat(val);
+            if (isNaN(amount) || amount <= 0) {
+                alert("Некорректная сумма капитала");
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/v1/capital', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ amount: amount })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    updatePortfolio();
+                    alert(`✅ Начальный капитал успешно установлен: ₽${amount.toLocaleString()}`);
+                }
+            } catch (e) {
+                alert("Ошибка при установке капитала");
+            }
+        }
+
         window.addEventListener('DOMContentLoaded', () => {
             initSkewChart();
             updateDashboard();
             updatePositions();
+            updatePortfolio();
 
             setInterval(updateDashboard, 3000);
         });
