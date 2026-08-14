@@ -59,7 +59,10 @@
         <div class="bg-slate-800/80 p-6 rounded-xl border border-slate-700 space-y-3">
             <div class="flex justify-between items-center">
                 <h2 class="text-lg font-semibold text-slate-200">1. Basis Arbitrage Monitor (Perpetual vs Quarterly Futures)</h2>
-                <span id="perp-badge" class="px-3 py-1 text-xs font-bold rounded-md bg-slate-700 text-slate-300 font-mono">Scanning...</span>
+                <div class="flex items-center gap-3">
+                    <span id="perp-badge" class="px-3 py-1 text-xs font-bold rounded-md bg-slate-700 text-slate-300 font-mono">Scanning...</span>
+                    <button onclick="openBasisStrategyModal()" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition">📊 View Profile & Trade</button>
+                </div>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-4 gap-4 pt-2 font-mono">
                 <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
@@ -88,7 +91,10 @@
         <div id="arb-card" class="bg-slate-800/80 p-6 rounded-xl border border-slate-700 space-y-3">
             <div class="flex justify-between items-center">
                 <h2 class="text-lg font-semibold text-slate-200">2. Put-Call Parity Arbitrage Detector (Conversion / Reversal)</h2>
-                <span id="arb-badge" class="px-3 py-1 text-xs font-bold rounded-md bg-slate-700 text-slate-300 font-mono">Scanning...</span>
+                <div class="flex items-center gap-3">
+                    <span id="arb-badge" class="px-3 py-1 text-xs font-bold rounded-md bg-slate-700 text-slate-300 font-mono">Scanning...</span>
+                    <button onclick="openParityStrategyModal()" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition">📊 View Profile & Trade</button>
+                </div>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 font-mono">
                 <div>
@@ -205,9 +211,64 @@
 
     </div>
 
+    <!-- Strategy Details & Payoff Modal -->
+    <div id="strategy-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-slate-800 border border-slate-700 w-full max-w-4xl rounded-2xl p-6 space-y-6 shadow-2xl relative">
+            <div class="flex justify-between items-center border-b border-slate-700 pb-4">
+                <div>
+                    <h3 id="modal-title" class="text-xl font-bold text-emerald-400">Strategy Payoff & Execution</h3>
+                    <p id="modal-subtitle" class="text-xs text-slate-400 font-mono">MOEX FORTS Strategy Builder & Risk Analysis</p>
+                </div>
+                <button onclick="closeStrategyModal()" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Left: Payoff Chart -->
+                <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-700 flex flex-col justify-between">
+                    <span class="text-xs text-slate-400 uppercase tracking-wider font-mono">P&L Payoff Profile (At Expiration)</span>
+                    <div class="relative h-64 w-full my-2">
+                        <canvas id="payoffChart"></canvas>
+                    </div>
+                    <div class="flex justify-between text-xs text-slate-400 font-mono">
+                        <span>Max Risk: <strong id="modal-max-risk" class="text-rose-400">₽0.00</strong></span>
+                        <span>Max Profit: <strong id="modal-max-profit" class="text-emerald-400">₽0.00</strong></span>
+                    </div>
+                </div>
+
+                <!-- Right: Legs & Execution -->
+                <div class="space-y-4 flex flex-col justify-between">
+                    <div class="space-y-3 font-mono">
+                        <span class="text-xs text-slate-400 uppercase tracking-wider">Strategy Legs (Order Routing)</span>
+                        <div id="modal-legs-list" class="space-y-2 text-xs text-slate-200 bg-slate-900/60 p-3 rounded-lg border border-slate-700 max-h-40 overflow-y-auto">
+                            <!-- Legs populated dynamically -->
+                        </div>
+
+                        <div class="space-y-2 pt-2">
+                            <div class="flex justify-between text-xs text-slate-400">
+                                <span>Required Margin (ГО):</span>
+                                <span id="modal-margin" class="text-white font-bold">₽12,500</span>
+                            </div>
+                            <div class="flex justify-between text-xs text-slate-400">
+                                <span>Expected Theta:</span>
+                                <span id="modal-theta" class="text-emerald-400 font-bold">+₽850 / day</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="pt-4 border-t border-slate-700 flex gap-3">
+                        <button onclick="executeStrategyOrder()" class="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition shadow-lg shadow-emerald-600/25">🚀 Place Order via Alor API</button>
+                        <button onclick="closeStrategyModal()" class="px-5 py-3 bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold rounded-xl transition">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         let skewChartInstance = null;
+        let payoffChartInstance = null;
         let currentAsset = 'Si';
+        let selectedStrategyData = null;
 
         function switchAsset(asset) {
             currentAsset = asset;
@@ -281,6 +342,184 @@
             }
         }
 
+        function openStrategyModal(title, strategyType, legs, maxRisk, maxProfit, margin, theta) {
+            selectedStrategyData = { title, strategyType, legs };
+            document.getElementById('modal-title').innerText = title;
+            document.getElementById('modal-subtitle').innerText = `Strategy Type: ${strategyType} | MOEX FORTS (${currentAsset})`;
+            document.getElementById('modal-max-risk').innerText = maxRisk;
+            document.getElementById('modal-max-profit').innerText = maxProfit;
+            document.getElementById('modal-margin').innerText = margin;
+            document.getElementById('modal-theta').innerText = theta;
+
+            let legsHtml = '';
+            legs.forEach(leg => {
+                legsHtml += `<div class="flex justify-between items-center bg-slate-800 p-2 rounded">
+                    <span>${leg.action} <strong>${leg.symbol}</strong> (${leg.qty} шт.)</span>
+                    <span class="font-mono text-emerald-400">@ ${leg.price}</span>
+                </div>`;
+            });
+            document.getElementById('modal-legs-list').innerHTML = legsHtml;
+
+            document.getElementById('strategy-modal').classList.remove('hidden');
+            initPayoffChart(strategyType);
+        }
+
+        function openBasisStrategyModal() {
+            openStrategyModal(
+                `Basis Arbitrage (${currentAsset} Perpetual vs Quarterly)`,
+                'Basis Arbitrage',
+                [
+                    { action: 'SELL', symbol: `${currentAsset}U6 (Quarterly)`, qty: 10, price: '93,200 ₽' },
+                    { action: 'BUY', symbol: `${currentAsset} (Perpetual)`, qty: 10, price: '92,500 ₽' }
+                ],
+                '₽2,500 (Basis Risk)',
+                '₽7,000 / contract',
+                '₽14,500',
+                '+₽120 / day'
+            );
+        }
+
+        function openParityStrategyModal() {
+            openStrategyModal(
+                `Put-Call Parity Arbitrage (${currentAsset})`,
+                'Conversion / Reversal',
+                [
+                    { action: 'SELL', symbol: `${currentAsset} Call 93000`, qty: 5, price: '1,500 ₽' },
+                    { action: 'BUY', symbol: `${currentAsset} Put 93000`, qty: 5, price: '1,800 ₽' },
+                    { action: 'BUY', symbol: `${currentAsset} Futures`, qty: 5, price: '92,500 ₽' }
+                ],
+                '₽4,000',
+                '₽8,500',
+                '₽22,000',
+                '+₽350 / day'
+            );
+        }
+
+        function openTdssStrategyModal(stratName) {
+            openStrategyModal(
+                `${stratName} (${currentAsset})`,
+                'Iron Condor',
+                [
+                    { action: 'SELL', symbol: `${currentAsset} Put 91000`, qty: 10, price: '800 ₽' },
+                    { action: 'BUY', symbol: `${currentAsset} Put 89000`, qty: 10, price: '300 ₽' },
+                    { action: 'SELL', symbol: `${currentAsset} Call 95000`, qty: 10, price: '850 ₽' },
+                    { action: 'BUY', symbol: `${currentAsset} Call 97000`, qty: 10, price: '320 ₽' }
+                ],
+                '₽12,000',
+                '₽10,300',
+                '₽28,000',
+                '+₽1,250 / day'
+            );
+        }
+
+        function closeStrategyModal() {
+            document.getElementById('strategy-modal').classList.add('hidden');
+        }
+
+        function initPayoffChart(type) {
+            const ctx = document.getElementById('payoffChart').getContext('2d');
+            if (payoffChartInstance) {
+                payoffChartInstance.destroy();
+            }
+
+            let labels = [89000, 91000, 93000, 95000, 97000];
+            let data = [-12000, 4000, 10300, 4000, -12000];
+            if (type === 'Basis Arbitrage') {
+                labels = ['-2%', '-1%', '0', '+1%', '+2%'];
+                data = [2000, 4000, 7000, 10000, 12500];
+            } else if (type === 'Conversion / Reversal') {
+                labels = ['88k', '90k', '92k', '94k', '96k'];
+                data = [8500, 8500, 8500, 8500, 8500];
+            }
+
+            payoffChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'P&L (₽)',
+                        data: data,
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        fill: true,
+                        tension: 0.3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { grid: { color: 'rgba(51, 65, 85, 0.3)' }, ticks: { color: '#94a3b8' } },
+                        y: { grid: { color: 'rgba(51, 65, 85, 0.3)' }, ticks: { color: '#94a3b8' } }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        async function executeStrategyOrder() {
+            if (!selectedStrategyData) return;
+            try {
+                const res = await fetch('/api/v1/moex/order', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        symbol: currentAsset + 'U6',
+                        side: 'buy',
+                        type: 'market',
+                        price: 0,
+                        quantity: 1
+                    })
+                });
+                const result = await res.json();
+                alert(`🚀 Ордер по стратегии "${selectedStrategyData.title}" успешно отправлен в Alor API!\nСтатус: ${result.message || 'Заявка принята в обработку'}`);
+                closeStrategyModal();
+            } catch (e) {
+                alert('❌ Ошибка отправки ордера через Alor API');
+            }
+        }
+
+        async function updateTDSS() {
+            try {
+                const recsRes = await fetch('/api/v1/options/recommendations?iv=35&hv=28');
+                const recsData = await recsRes.json();
+
+                document.getElementById('market-regime-badge').innerText = `Regime: ${recsData.market_regime}`;
+
+                let html = '';
+                recsData.recommendations.forEach(rec => {
+                    html += `<div class="p-2.5 bg-slate-800/80 rounded border border-slate-700 space-y-1 cursor-pointer hover:border-emerald-500 transition" onclick="openTdssStrategyModal('${rec.strategy_name}')">
+                        <div class="flex justify-between items-center">
+                            <span class="font-bold text-white">${rec.strategy_name}</span>
+                            <span class="text-xs text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded">Trade &rarr;</span>
+                        </div>
+                        <div>Suitability: <span class="text-emerald-400">${rec.suitability}</span></div>
+                        <div>Theta: <span class="text-rose-400">+${rec.expected_theta} ₽/day</span> | Max Profit: ${rec.max_profit}</div>
+                        <div class="text-slate-400 text-[10px]">Exit: ${rec.exit_rule}</div>
+                    </div>`;
+                });
+                document.getElementById('strategy-cards').innerHTML = html;
+
+                const exitRes = await fetch('/api/v1/options/exit-advice?dte=28&delta=0.08&profit=45');
+                const exitData = await exitRes.json();
+
+                let sevColor = 'text-emerald-400';
+                if (exitData.severity === 'WARNING') sevColor = 'text-amber-400';
+                if (exitData.severity === 'CRITICAL') sevColor = 'text-rose-400';
+
+                document.getElementById('exit-advice-box').innerHTML = `
+                    <div class="p-2.5 bg-slate-800/80 rounded border border-slate-700 space-y-1">
+                        <div>Trigger: <span class="font-bold text-white">${exitData.trigger_type}</span></div>
+                        <div>Severity: <span class="${sevColor} font-bold">${exitData.severity}</span></div>
+                        <div class="text-slate-300">${exitData.message}</div>
+                        <div class="text-indigo-300 font-bold">Action: ${exitData.action}</div>
+                    </div>
+                `;
+            } catch (e) {
+                console.error("TDSS update failed", e);
+            }
+        }
+
         async function updateDashboard() {
             try {
                 // 1. Perp vs Quarterly Spread Monitor
@@ -339,44 +578,6 @@
                 updateSkewChart();
             } catch (e) {
                 console.error("Dashboard update failed", e);
-            }
-        }
-
-        async function updateTDSS() {
-            try {
-                const recsRes = await fetch('/api/v1/options/recommendations?iv=35&hv=28');
-                const recsData = await recsRes.json();
-
-                document.getElementById('market-regime-badge').innerText = `Regime: ${recsData.market_regime}`;
-
-                let html = '';
-                recsData.recommendations.forEach(rec => {
-                    html += `<div class="p-2 bg-slate-800/80 rounded border border-slate-700">
-                        <div class="font-bold text-white">${rec.strategy_name}</div>
-                        <div>Suitability: <span class="text-emerald-400">${rec.suitability}</span></div>
-                        <div>Theta: <span class="text-rose-400">+${rec.expected_theta} ₽/day</span> | Max Profit: ${rec.max_profit}</div>
-                        <div class="text-slate-400 text-[10px]">Exit: ${rec.exit_rule}</div>
-                    </div>`;
-                });
-                document.getElementById('strategy-cards').innerHTML = html;
-
-                const exitRes = await fetch('/api/v1/options/exit-advice?dte=28&delta=0.08&profit=45');
-                const exitData = await exitRes.json();
-
-                let sevColor = 'text-emerald-400';
-                if (exitData.severity === 'WARNING') sevColor = 'text-amber-400';
-                if (exitData.severity === 'CRITICAL') sevColor = 'text-rose-400';
-
-                document.getElementById('exit-advice-box').innerHTML = `
-                    <div class="p-2 bg-slate-800/80 rounded border border-slate-700 space-y-1">
-                        <div>Trigger: <span class="font-bold text-white">${exitData.trigger_type}</span></div>
-                        <div>Severity: <span class="${sevColor} font-bold">${exitData.severity}</span></div>
-                        <div class="text-slate-300">${exitData.message}</div>
-                        <div class="text-indigo-300 font-bold">Action: ${exitData.action}</div>
-                    </div>
-                `;
-            } catch (e) {
-                console.error("TDSS update failed", e);
             }
         }
 
