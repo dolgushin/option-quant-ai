@@ -307,14 +307,23 @@ func moexOrderHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	entryPrice := req.Price
+	if entryPrice <= 0 {
+		entryPrice = 92500.0
+	}
+	currentPrice := req.Price
+	if currentPrice <= 0 {
+		currentPrice = 92520.0
+	}
+
 	quant.AddPosition(quant.Position{
 		ID:           fmt.Sprintf("pos-%d", time.Now().Unix()),
 		Strategy:     "Alor MOEX Execution",
 		Symbol:       req.Symbol,
 		Side:         strings.ToUpper(req.Side),
 		Quantity:     req.Quantity,
-		EntryPrice:   req.Price > 0 ? req.Price : 92500.0,
-		CurrentPrice: req.Price > 0 ? req.Price : 92520.0,
+		EntryPrice:   entryPrice,
+		CurrentPrice: currentPrice,
 		PnL:          250.0,
 		Delta:        0.00,
 		Theta:        450.0,
