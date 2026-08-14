@@ -295,6 +295,22 @@
                 <!-- Right: Legs & Execution -->
                 <div class="space-y-4 flex flex-col justify-between">
                     <div class="space-y-3 font-mono">
+                        <!-- Lot Size Controller -->
+                        <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-700 flex items-center justify-between">
+                            <div>
+                                <span class="text-xs text-slate-300 font-bold block uppercase flex items-center gap-1.5">
+                                    <span>📦 Множитель лотов</span>
+                                    <span class="text-[10px] px-1.5 py-0.2 bg-emerald-500/20 text-emerald-300 rounded border border-emerald-500/30">Lot Size</span>
+                                </span>
+                                <span class="text-[10px] text-slate-400">Масштабирует объем всех ног</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button onclick="changeStrategyLots(-1)" class="w-8 h-8 flex items-center justify-center bg-slate-800 hover:bg-slate-700 active:bg-slate-600 border border-slate-600 text-white font-bold text-lg rounded-lg transition shadow">−</button>
+                                <input id="strategy-lot-multiplier" type="number" min="1" max="500" value="1" oninput="setStrategyLots(this.value)" class="w-16 bg-slate-950 border border-emerald-500/50 text-center text-emerald-400 font-bold text-base rounded-lg py-1 focus:outline-none focus:border-emerald-400">
+                                <button onclick="changeStrategyLots(1)" class="w-8 h-8 flex items-center justify-center bg-slate-800 hover:bg-slate-700 active:bg-slate-600 border border-slate-600 text-white font-bold text-lg rounded-lg transition shadow">+</button>
+                            </div>
+                        </div>
+
                         <span class="text-xs text-slate-400 uppercase tracking-wider">Strategy Legs (Order Routing)</span>
                         <div id="modal-legs-list" class="space-y-2 text-xs text-slate-200 bg-slate-900/60 p-3 rounded-lg border border-slate-700 max-h-40 overflow-y-auto">
                             <!-- Legs populated dynamically -->
@@ -326,6 +342,7 @@
         let payoffChartInstance = null;
         let currentAsset = 'Si';
         let selectedStrategyData = null;
+        let currentLotMultiplier = 1;
 
         function switchAsset(asset) {
             currentAsset = asset;
@@ -399,26 +416,82 @@
             }
         }
 
+        function parseNumeric(val, fallback) {
+            if (typeof val === 'number') return val;
+            const parsed = parseFloat((val + '').replace(/[^0-9.-]+/g, ''));
+            return isNaN(parsed) ? fallback : parsed;
+        }
+
         function openStrategyModal(title, strategyType, legs, maxRisk, maxProfit, margin, theta) {
-            selectedStrategyData = { title, strategyType, legs };
+            currentLotMultiplier = 1;
+            const lotInput = document.getElementById('strategy-lot-multiplier');
+            if (lotInput) lotInput.value = 1;
+
+            selectedStrategyData = {
+                title,
+                strategyType,
+                baseLegs: JSON.parse(JSON.stringify(legs)),
+                baseRisk: parseNumeric(maxRisk, 4000),
+                baseProfit: parseNumeric(maxProfit, 8500),
+                baseMargin: parseNumeric(margin, 22000),
+                baseTheta: parseNumeric(theta, 350)
+            };
+
             document.getElementById('modal-title').innerText = title;
             document.getElementById('modal-subtitle').innerText = `Strategy Type: ${strategyType} | MOEX FORTS (${currentAsset})`;
-            document.getElementById('modal-max-risk').innerText = maxRisk;
-            document.getElementById('modal-max-profit').innerText = maxProfit;
-            document.getElementById('modal-margin').innerText = margin;
-            document.getElementById('modal-theta').innerText = theta;
+            
+            renderStrategyDetails();
+            document.getElementById('strategy-modal').classList.remove('hidden');
+        }
+
+        function changeStrategyLots(delta) {
+            let current = parseInt(document.getElementById('strategy-lot-multiplier').value) || 1;
+            let next = current + delta;
+            if (next < 1) next = 1;
+            if (next > 500) next = 500;
+            setStrategyLots(next);
+        }
+
+        function setStrategyLots(val) {
+            let num = parseInt(val) || 1;
+            if (num < 1) num = 1;
+            if (num > 500) num = 500;
+            currentLotMultiplier = num;
+            const inputEl = document.getElementById('strategy-lot-multiplier');
+            if (inputEl) inputEl.value = num;
+            renderStrategyDetails();
+        }
+
+        function renderStrategyDetails() {
+            if (!selectedStrategyData) return;
+            const mult = currentLotMultiplier;
+
+            const totalRisk = selectedStrategyData.baseRisk * mult;
+            const totalProfit = selectedStrategyData.baseProfit * mult;
+            const totalMargin = selectedStrategyData.baseMargin * mult;
+            const totalTheta = selectedStrategyData.baseTheta * mult;
+
+            document.getElementById('modal-max-risk').innerText = `₽${Math.round(totalRisk).toLocaleString()}`;
+            document.getElementById('modal-max-profit').innerText = `₽${Math.round(totalProfit).toLocaleString()}`;
+            document.getElementById('modal-margin').innerText = `₽${Math.round(totalMargin).toLocaleString()}`;
+            document.getElementById('modal-theta').innerText = `+₽${Math.round(totalTheta).toLocaleString()} / day`;
 
             let legsHtml = '';
-            legs.forEach(leg => {
-                legsHtml += `<div class="flex justify-between items-center bg-slate-800 p-2 rounded">
-                    <span>${leg.action} <strong>${leg.symbol}</strong> (${leg.qty} шт.)</span>
-                    <span class="font-mono text-emerald-400">@ ${leg.price}</span>
+            selectedStrategyData.baseLegs.forEach(leg => {
+                const scaledQty = leg.qty * mult;
+                const isBuy = leg.action === 'BUY';
+                legsHtml += `<div class="flex justify-between items-center bg-slate-800 p-2.5 rounded border border-slate-700/60 font-mono">
+                    <div class="flex items-center gap-2">
+                        <span class="px-2 py-0.5 text-[10px] font-bold rounded ${isBuy ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'}">${leg.action}</span>
+                        <span class="font-bold text-white">${leg.symbol}</span>
+                        <span class="text-emerald-400 font-bold">(${scaledQty} шт.)</span>
+                    </div>
+                    <span class="font-mono text-emerald-300 font-bold">@ ${leg.price}</span>
                 </div>`;
             });
             document.getElementById('modal-legs-list').innerHTML = legsHtml;
 
-            document.getElementById('strategy-modal').classList.remove('hidden');
-            initPayoffChart(strategyType);
+            initPayoffChart(selectedStrategyData.strategyType, mult);
         }
 
         function openBasisStrategyModal() {
@@ -429,10 +502,10 @@
                     { action: 'SELL', symbol: `${currentAsset}U6 (Quarterly)`, qty: 10, price: '93,200 ₽' },
                     { action: 'BUY', symbol: `${currentAsset} (Perpetual)`, qty: 10, price: '92,500 ₽' }
                 ],
-                '₽2,500 (Basis Risk)',
-                '₽7,000 / contract',
-                '₽14,500',
-                '+₽120 / day'
+                2500,
+                7000,
+                14500,
+                120
             );
         }
 
@@ -445,10 +518,10 @@
                     { action: 'BUY', symbol: `${currentAsset} Put 93000`, qty: 5, price: '1,800 ₽' },
                     { action: 'BUY', symbol: `${currentAsset} Futures`, qty: 5, price: '92,500 ₽' }
                 ],
-                '₽4,000',
-                '₽8,500',
-                '₽22,000',
-                '+₽350 / day'
+                4000,
+                8500,
+                22000,
+                350
             );
         }
 
@@ -462,10 +535,10 @@
                     { action: 'SELL', symbol: `${currentAsset} Call 95000`, qty: 10, price: '850 ₽' },
                     { action: 'BUY', symbol: `${currentAsset} Call 97000`, qty: 10, price: '320 ₽' }
                 ],
-                '₽12,000',
-                '₽10,300',
-                '₽28,000',
-                '+₽1,250 / day'
+                12000,
+                10300,
+                28000,
+                1250
             );
         }
 
@@ -473,20 +546,20 @@
             document.getElementById('strategy-modal').classList.add('hidden');
         }
 
-        function initPayoffChart(type) {
+        function initPayoffChart(type, mult = 1) {
             const ctx = document.getElementById('payoffChart').getContext('2d');
             if (payoffChartInstance) {
                 payoffChartInstance.destroy();
             }
 
             let labels = [89000, 91000, 93000, 95000, 97000];
-            let data = [-12000, 4000, 10300, 4000, -12000];
+            let data = [-12000 * mult, 4000 * mult, 10300 * mult, 4000 * mult, -12000 * mult];
             if (type === 'Basis Arbitrage') {
                 labels = ['-2%', '-1%', '0', '+1%', '+2%'];
-                data = [2000, 4000, 7000, 10000, 12500];
+                data = [2000 * mult, 4000 * mult, 7000 * mult, 10000 * mult, 12500 * mult];
             } else if (type === 'Conversion / Reversal') {
                 labels = ['88k', '90k', '92k', '94k', '96k'];
-                data = [8500, 8500, 8500, 8500, 8500];
+                data = [8500 * mult, 8500 * mult, 8500 * mult, 8500 * mult, 8500 * mult];
             }
 
             payoffChartInstance = new Chart(ctx, {
@@ -516,6 +589,8 @@
 
         async function executeStrategyOrder() {
             if (!selectedStrategyData) return;
+            const mult = currentLotMultiplier;
+            const totalQty = (selectedStrategyData.baseLegs[0]?.qty || 1) * mult;
             try {
                 const res = await fetch('/api/v1/moex/order', {
                     method: 'POST',
@@ -525,12 +600,14 @@
                         side: 'buy',
                         type: 'market',
                         price: 0,
-                        quantity: 1
+                        quantity: totalQty
                     })
                 });
                 const result = await res.json();
-                alert(`🚀 Ордер по стратегии "${selectedStrategyData.title}" успешно отправлен в Alor API!\nСтатус: ${result.message || 'Заявка принята в обработку'}`);
+                alert(`🚀 Стратегия "${selectedStrategyData.title}" объемом ${mult}x (${totalQty} шт.) успешно отправлена в Alor API!\nСтатус: ${result.message || 'Ордера приняты биржей'}`);
                 closeStrategyModal();
+                updatePositions();
+                updatePortfolio();
             } catch (e) {
                 alert('❌ Ошибка отправки ордера через Alor API');
             }

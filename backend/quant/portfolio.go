@@ -52,17 +52,19 @@ func GetPortfolio() PortfolioState {
 	defer positionsMu.Unlock()
 
 	totalPnL := 0.0
+	currentLockedMargin := 0.0
 	for _, p := range activePositions {
 		totalPnL += p.PnL
+		currentLockedMargin += float64(p.Quantity) * 1500.0
 	}
 
-	cash := initialCapital - lockedMargin + totalPnL
+	cash := initialCapital - currentLockedMargin + totalPnL
 	totalValue := initialCapital + totalPnL
 
 	return PortfolioState{
 		InitialCapital: initialCapital,
 		Cash:           cash,
-		LockedMargin:   lockedMargin,
+		LockedMargin:   currentLockedMargin,
 		TotalValue:     totalValue,
 	}
 }
