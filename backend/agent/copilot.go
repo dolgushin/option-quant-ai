@@ -64,8 +64,44 @@ func ProcessCopilotQuery(req CopilotRequest) CopilotResponse {
 		}
 	}
 
-	if strings.Contains(promptLower, "арбитраж") || strings.Contains(promptLower, "паритет") || strings.Contains(promptLower, "спрэд") {
-		advice := fmt.Sprintf("Сканирование Put-Call паритета и календарных спрэдов: текущий арбитражный спреды составляет %.2 руб. ", req.Spread)
+	if strings.Contains(promptLower, "колл спред") || strings.Contains(promptLower, "пут спред") || strings.Contains(promptLower, "вертикальный") || strings.Contains(promptLower, "verticl") {
+		advice := ""
+		action := "ANALYZE_SPREAD"
+		if strings.Contains(promptLower, "колл") {
+			advice = "Колл-спред (Bull Call Spread): Покупаем ATM/OTM Call и продаем Higher OTM Call. Выгоднее при низкой волатильности (IV < HV*1.2). Максимальная прибыль = Ширина спреда - Заплаченная премия. Максимальный убыток = Заплаченная премия."
+			action = "BULL_CALL_SPREAD"
+		} else if strings.Contains(promptLower, "пут") {
+			advice = "Пут-спред (Bull Put Spread): Продаем OTM Put и покупаем Far OTM Put. Выгоднее при высокой волатильности (IV > HV*1.2) — собираем кредитную премию. Максимальная прибыль = Собранная премия. Максимальный убыток = Ширина спреда - Собранная премия."
+			action = "BULL_PUT_SPREAD"
+		} else {
+			advice = "Вертикальные спреды: При росте (Bullish) и высокой IV — продавайте Bull Put Spread. При росте и низкой IV — покупайте Bull Call Spread. При падении (Bearish) и высокой IV — продавайте Bear Call Spread. При падении и низкой IV — покупайте Bear Put Spread."
+		}
+		return CopilotResponse{
+			Reply:    advice,
+			Action:   action,
+			ToolData: toolData,
+		}
+	}
+
+	if strings.Contains(promptLower, "ролл") || strings.Contains(promptLower, "роллиров") || strings.Contains(promptLower, "трансформ") {
+		advice := "Роллирование вертикального спреда (только при достижении точки TPR ~30% убытка): "
+		if req.Delta > 0.1 {
+			advice += "Позиция в убытке при бычьем взгляде. Рекомендация: трансформация в Лестницу (Ladder) или покупка около-ATM коллов для восстановления дельты."
+		} else if req.Delta < -0.1 {
+			advice += "Позиция в убытке при медвежьем взгляде. Рекомендация: трансформация в Backspread с покупкой Put для участия в падении."
+		} else {
+			advice += "Рынок во флэте. Рекомендация: продажа противоположных ног (Short Strangle / Condor) для сбора тета-распада."
+		}
+		advice += " Золотое правило: роллировать ТОЛЬКО если сохраняется исходный Edge. Роллирование для избежания фиксации убытка — ЗАПРЕЩЕНО."
+		return CopilotResponse{
+			Reply:    advice,
+			Action:   "ROLL_ADVICE",
+			ToolData: toolData,
+		}
+	}
+
+	if strings.Contains(promptLower, "арбитраж") || strings.Contains(promptLower, "паритет") {
+		advice := fmt.Sprintf("Сканирование Put-Call паритета и календарных спрэдов: текущий арбитражный спреды составляет %.2f руб. ", req.Spread)
 		action := "NO_ACTION"
 		if req.Spread > 10.0 {
 			advice += " Обнаружена возможность конверсии (Conversion): Call-опционы переоценены относительно Put и спота. Рекомендуется продать Call, купить Put и купить спот/фьючерс."
