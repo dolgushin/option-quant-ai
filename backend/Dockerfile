@@ -6,6 +6,7 @@ COPY *.go ./
 COPY quant/ ./quant/
 COPY alor/ ./alor/
 COPY agent/ ./agent/
+COPY secure/ ./secure/
 COPY static/ ./static/
 RUN CGO_ENABLED=0 GOOS=linux go build -o main .
 

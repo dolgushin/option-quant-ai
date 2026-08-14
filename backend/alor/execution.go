@@ -16,6 +16,11 @@ type ExecutionClient struct {
 	exchange   string
 }
 
+// SetPortfolio updates the Alor portfolio at runtime.
+func (e *ExecutionClient) SetPortfolio(portfolio string) {
+	e.portfolio = portfolio
+}
+
 type OrderRequest struct {
 	Instrument struct {
 		Symbol   string `json:"symbol"`

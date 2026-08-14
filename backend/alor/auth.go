@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -29,6 +30,34 @@ func NewAuthClient(refreshToken string) *AuthClient {
 		httpClient:   &http.Client{Timeout: 10 * time.Second},
 		baseURL:      "https://oauth.alor.ru",
 	}
+}
+
+// SetRefreshToken updates the refresh token at runtime (e.g. after the user saves
+// it through the UI) and invalidates the cached access token so the next request
+// re-authenticates with the new credentials.
+func (a *AuthClient) SetRefreshToken(refreshToken string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.refreshToken = refreshToken
+	a.accessToken = ""
+	a.expiresAt = time.Time{}
+}
+
+// HasRefreshToken reports whether a refresh token is configured.
+func (a *AuthClient) HasRefreshToken() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.refreshToken != ""
+}
+
+// ValidateRefreshToken tries to exchange the refresh token for an access token
+// and reports whether the token is valid.
+func (a *AuthClient) ValidateRefreshToken() (bool, string) {
+	_, err := a.GetAccessToken()
+	if err != nil {
+		return false, err.Error()
+	}
+	return true, "Refresh token is valid"
 }
 
 func (a *AuthClient) GetAccessToken() (string, error) {
@@ -57,7 +86,14 @@ func (a *AuthClient) GetAccessToken() (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("alor auth failed with status code: %d", resp.StatusCode)
+		body := ""
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(resp.Body)
+		body = strings.TrimSpace(buf.String())
+		if body == "" {
+			body = "no response body"
+		}
+		return "", fmt.Errorf("alor auth failed with status code %d: %s", resp.StatusCode, body)
 	}
 
 	var tokenRes TokenResponse

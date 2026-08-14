@@ -36,6 +36,8 @@
                 <div id="series-badge" class="px-3 py-2 bg-indigo-500/10 text-indigo-300 text-xs rounded-lg border border-indigo-500/30 font-mono">
                     Серия: Si-9.26 / SiU6
                 </div>
+
+                <button onclick="openTokenSettings()" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-bold rounded-lg transition" title="Alor API settings">🔑 Настройки</button>
             </div>
         </header>
 
@@ -280,6 +282,40 @@
     </div>
 
     <!-- Strategy Details & Payoff Modal -->
+    <div id="settings-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-slate-800 border border-slate-700 w-full max-w-lg rounded-2xl p-6 space-y-5 shadow-2xl relative">
+            <div class="flex justify-between items-center border-b border-slate-700 pb-4">
+                <div>
+                    <h3 class="text-xl font-bold text-emerald-400">🔑 Alor API Settings</h3>
+                    <p class="text-xs text-slate-400 font-mono">Refresh token шифруется (AES-256-GCM) и хранится на сервере</p>
+                </div>
+                <button onclick="closeTokenSettings()" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+            </div>
+
+            <div id="settings-token-status" class="px-3 py-2 bg-slate-900 rounded-lg border border-slate-700 text-xs text-slate-300 font-mono">
+                Проверка статуса...
+            </div>
+
+            <div class="space-y-3">
+                <div>
+                    <span class="text-xs text-slate-400 block font-mono">REFRESH TOKEN (Alor oauth)</span>
+                    <input id="input-refresh-token" type="password" placeholder="Вставьте refresh token из oauth.alor.ru" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-emerald-500">
+                </div>
+                <div>
+                    <span class="text-xs text-slate-400 block font-mono">PORTFOLIO (account, необязательно)</span>
+                    <input id="input-portfolio" type="text" placeholder="Например: TEST-01" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-emerald-500">
+                </div>
+            </div>
+
+            <p id="settings-save-result" class="text-xs font-mono hidden"></p>
+
+            <div class="pt-4 border-t border-slate-700 flex gap-3">
+                <button onclick="saveTokenSettings()" class="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition">🔒 Сохранить и проверить</button>
+                <button onclick="closeTokenSettings()" class="px-5 py-3 bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold rounded-xl transition">Отмена</button>
+            </div>
+        </div>
+    </div>
+
     <div id="strategy-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
         <div class="bg-slate-800 border border-slate-700 w-full max-w-4xl rounded-2xl p-6 space-y-6 shadow-2xl relative">
             <div class="flex justify-between items-center border-b border-slate-700 pb-4">
@@ -352,6 +388,7 @@
         let skewChartInstance = null;
         let payoffChartInstance = null;
         let currentAsset = 'Si';
+        let currentSpotPrice = 83200;
         let selectedStrategyData = null;
         let currentLotMultiplier = 1;
 
@@ -520,12 +557,14 @@
         }
 
         function openBasisStrategyModal() {
+            const spot = currentSpotPrice;
+            const quarterly = Math.round(spot * 1.012);
             openStrategyModal(
                 `Basis Arbitrage (${currentAsset} Perpetual vs Quarterly)`,
                 'Basis Arbitrage',
                 [
-                    { action: 'SELL', symbol: `${currentAsset}U6 (Quarterly)`, qty: 10, price: '93,200 ₽' },
-                    { action: 'BUY', symbol: `${currentAsset} (Perpetual)`, qty: 10, price: '92,500 ₽' }
+                    { action: 'SELL', symbol: `${currentAsset}U6 (Quarterly)`, qty: 10, price: `${quarterly.toLocaleString()} ₽` },
+                    { action: 'BUY', symbol: `${currentAsset} (Perpetual)`, qty: 10, price: `${Math.round(spot).toLocaleString()} ₽` }
                 ],
                 2500,
                 7000,
@@ -535,13 +574,15 @@
         }
 
         function openParityStrategyModal() {
+            const spot = currentSpotPrice;
+            const strike = Math.round(spot / 1000) * 1000;
             openStrategyModal(
                 `Put-Call Parity Arbitrage (${currentAsset})`,
                 'Conversion / Reversal',
                 [
-                    { action: 'SELL', symbol: `${currentAsset}93000C (Call)`, qty: 5, price: '1,500 ₽' },
-                    { action: 'BUY', symbol: `${currentAsset}93000P (Put)`, qty: 5, price: '1,800 ₽' },
-                    { action: 'BUY', symbol: `${currentAsset} Futures`, qty: 5, price: '92,500 ₽' }
+                    { action: 'SELL', symbol: `${currentAsset}${strike}C (Call)`, qty: 5, price: '≈ 0.5% премии' },
+                    { action: 'BUY', symbol: `${currentAsset}${strike}P (Put)`, qty: 5, price: '≈ 0.5% премии' },
+                    { action: 'BUY', symbol: `${currentAsset} Futures`, qty: 5, price: `${Math.round(spot).toLocaleString()} ₽` }
                 ],
                 4000,
                 8500,
@@ -551,14 +592,17 @@
         }
 
         function openTdssStrategyModal(stratName) {
+            const spot = currentSpotPrice;
+            const step = Math.round(spot * 0.02 / 1000) * 1000 || 1000;
+            const s = Math.round(spot / 1000) * 1000;
             openStrategyModal(
                 `${stratName} (${currentAsset})`,
                 'Iron Condor',
                 [
-                    { action: 'SELL', symbol: `${currentAsset}91000P (Put)`, qty: 10, price: '800 ₽' },
-                    { action: 'BUY', symbol: `${currentAsset}89000P (Put)`, qty: 10, price: '300 ₽' },
-                    { action: 'SELL', symbol: `${currentAsset}95000C (Call)`, qty: 10, price: '850 ₽' },
-                    { action: 'BUY', symbol: `${currentAsset}97000C (Call)`, qty: 10, price: '320 ₽' }
+                    { action: 'SELL', symbol: `${currentAsset}${s - step}P (Put)`, qty: 10, price: '≈ 1% премии' },
+                    { action: 'BUY', symbol: `${currentAsset}${s - 2 * step}P (Put)`, qty: 10, price: '≈ 0.4% премии' },
+                    { action: 'SELL', symbol: `${currentAsset}${s + step}C (Call)`, qty: 10, price: '≈ 1% премии' },
+                    { action: 'BUY', symbol: `${currentAsset}${s + 2 * step}C (Call)`, qty: 10, price: '≈ 0.4% премии' }
                 ],
                 12000,
                 10300,
@@ -772,6 +816,7 @@
                 const arb = await arbRes.json();
 
                 document.getElementById('spot-price').innerText = `₽${arb.spot_price.toLocaleString()}`;
+                currentSpotPrice = arb.spot_price;
                 document.getElementById('call-price').innerText = `₽${arb.actual_call_price.toLocaleString()}`;
                 document.getElementById('put-price').innerText = `₽${arb.actual_put_price.toLocaleString()}`;
                 document.getElementById('theoretical-diff').innerText = `₽${arb.theoretical_diff}`;
@@ -907,12 +952,78 @@
             }
         }
 
+        async function openTokenSettings() {
+            document.getElementById('settings-modal').classList.remove('hidden');
+            updateTokenStatus();
+        }
+
+        function closeTokenSettings() {
+            document.getElementById('settings-modal').classList.add('hidden');
+        }
+
+        async function updateTokenStatus() {
+            try {
+                const res = await fetch('/api/v1/settings/token');
+                const data = await res.json();
+                const el = document.getElementById('settings-token-status');
+                if (data.has_token) {
+                    el.className = 'px-3 py-2 bg-emerald-500/10 rounded-lg border border-emerald-500/30 text-xs text-emerald-400 font-mono';
+                    el.innerText = '✓ Токен сохранен (зашифрован). Нажмите «Сохранить и проверить» чтобы проверить валидность.';
+                } else {
+                    el.className = 'px-3 py-2 bg-amber-500/10 rounded-lg border border-amber-500/30 text-xs text-amber-400 font-mono';
+                    el.innerText = '⚠ Токен не настроен. Вставьте refresh token ниже. Цены берутся из публичного MOEX ISS API.';
+                }
+            } catch (e) {
+                console.error("Failed to load token status", e);
+            }
+        }
+
+        async function saveTokenSettings() {
+            const refreshToken = document.getElementById('input-refresh-token').value.trim();
+            if (!refreshToken) {
+                alert("Вставьте refresh token");
+                return;
+            }
+            const portfolio = document.getElementById('input-portfolio').value.trim();
+
+            const btn = document.getElementById('settings-save-result');
+            btn.className = 'text-xs font-mono text-slate-400';
+            btn.innerText = '⏳ Сохраняем и проверяем токен...';
+            btn.classList.remove('hidden');
+
+            try {
+                const res = await fetch('/api/v1/settings/token', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ refresh_token: refreshToken, portfolio: portfolio })
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    if (data.valid) {
+                        btn.className = 'px-3 py-2 bg-emerald-500/10 rounded-lg border border-emerald-500/30 text-xs text-emerald-400 font-mono';
+                        btn.innerText = '✅ Токен сохранен и валиден. Подключение к Alor работает.';
+                    } else {
+                        btn.className = 'px-3 py-2 bg-amber-500/10 rounded-lg border border-amber-500/30 text-xs text-amber-400 font-mono';
+                        btn.innerText = `⚠ Токен сохранен, но Alor его не принял: ${data.message}`;
+                    }
+                } else {
+                    btn.className = 'px-3 py-2 bg-rose-500/10 rounded-lg border border-rose-500/30 text-xs text-rose-400 font-mono';
+                    btn.innerText = `❌ Ошибка: ${data.error || res.status}`;
+                }
+            } catch (e) {
+                btn.className = 'px-3 py-2 bg-rose-500/10 rounded-lg border border-rose-500/30 text-xs text-rose-400 font-mono';
+                btn.innerText = '❌ Не удалось связаться с сервером';
+            }
+        }
+
         window.addEventListener('DOMContentLoaded', () => {
             initSkewChart();
             updateSeriesBadge();
             updateDashboard();
             updatePositions();
             updatePortfolio();
+            updateTokenStatus();
 
             setInterval(updateDashboard, 3000);
         });

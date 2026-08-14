@@ -8,6 +8,11 @@ services:
     restart: always
     environment:
       - PORT=9000
-      - ALOR_REFRESH_TOKEN=4d48250e-9099-41d8-b2b3-378bd0f12d9f
+      - DATA_DIR=/app/data
       - BYBIT_API_KEY=cdyMUskDTiQdpXWXiV
       - BYBIT_API_SECRET=56kv4jNlgCgBcIj6gtlU4G8cX6kIM1PfYX5k
+    volumes:
+      - quant_data:/app/data
+
+volumes:
+  quant_data:

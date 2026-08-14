@@ -17,6 +17,7 @@ import (
 	"option-quant-ai/agent"
 	"option-quant-ai/alor"
 	"option-quant-ai/quant"
+	"option-quant-ai/secure"
 )
 
 //go:embed static/*
@@ -58,11 +59,14 @@ func greeksHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 var (
+	// Version: 1.1.0 - Encrypted Alor token settings + MOEX ISS live prices
+
 	spotOverrides = map[string]float64{}
 	spotMu        sync.Mutex
 
 	// Current active futures series and their option series codes on MOEX FORTS.
-	// Example: Si-9.26 futures -> options series "SiU6" (September 2026)
+	// futuresSeries: display name shown to the user (futures code on MOEX).
+	// optionsSeries: Alor instrument root for options, e.g. SiU6.
 	futuresSeries = map[string]string{
 		"Si": "Si-9.26",
 		"RI": "RI-9.26",
@@ -73,10 +77,18 @@ var (
 		"RI": "RIU6",
 		"CR": "CRU6",
 	}
+
+	// tokenStore persists the Alor refresh token encrypted on disk.
+	tokenStore *secure.Store
+
+	alorAuth   *alor.AuthClient
+	alorMarket *alor.MarketClient
+	alorExec   *alor.ExecutionClient
 )
 
 // getSpotPrice returns the real-time futures/spot price.
-// It first checks a user override, then the live Alor/MOEX API, then falls back to a realistic estimate.
+// It first checks a user override, then MOEX ISS (public, no token), then the
+// Alor API, then falls back to a realistic estimate.
 func getSpotPrice(symbol string) (float64, error) {
 	spotMu.Lock()
 	if p, ok := spotOverrides[symbol]; ok {
@@ -88,28 +100,73 @@ func getSpotPrice(symbol string) (float64, error) {
 	if symbol == "BTC" || symbol == "ETH" {
 		q, err := quant.FetchCryptoSpot(symbol)
 		if err != nil {
-			return 83395.0, err
+			return 0, err
 		}
 		return q.Price, nil
 	}
 
-	// Try to fetch the real futures price from Alor / MOEX FORTS API
-	if futuresSymbol, ok := futuresSeries[symbol]; ok {
+	// 1) MOEX ISS public API — free, no token required, real FORTS prices.
+	if issCode, ok := optionsSeries[symbol]; ok {
+		if price, err := moexISSSpotPrice(issCode); err == nil && price > 0 {
+			return price, nil
+		}
+	}
+
+	// 2) Alor API (needs a valid refresh token).
+	if futuresSymbol, ok := futuresSeries[symbol]; ok && alorMarket != nil {
 		if quote, err := alorMarket.FetchSecurityQuote(futuresSymbol); err == nil && quote.Price > 0 {
 			return quote.Price, nil
 		}
 	}
 
+	// 3) Fallback to a realistic estimate.
 	switch symbol {
 	case "Si":
-		return 83395.0, nil
+		return 83200.0, nil
 	case "RI":
-		return 112000.0, nil
+		return 80240.0, nil
 	case "CR":
-		return 12.50, nil
+		return 1010.0, nil
 	default:
-		return 83395.0, nil
+		return 0, fmt.Errorf("no price source for symbol %s", symbol)
 	}
+}
+
+// moexISSSpotPrice fetches the LAST trade price of a FORTS futures contract
+// from the public MOEX ISS API (no authentication required).
+func moexISSSpotPrice(secid string) (float64, error) {
+	url := fmt.Sprintf("http://iss.moex.com/iss/engines/futures/markets/forts/boards/RFUD/securities/%s.json?iss.meta=off&iss.only=marketdata&marketdata.columns=SECID,LAST,OPEN,HIGH,LOW,LASTVOLUME", secid)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return 0, fmt.Errorf("moex iss request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("moex iss status: %d", resp.StatusCode)
+	}
+
+	var issResp struct {
+		Marketdata struct {
+			Data [][]interface{} `json:"data"`
+		} `json:"marketdata"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&issResp); err != nil {
+		return 0, fmt.Errorf("moex iss decode failed: %w", err)
+	}
+
+	if len(issResp.Marketdata.Data) == 0 || len(issResp.Marketdata.Data[0]) < 2 {
+		return 0, fmt.Errorf("moex iss: no data for %s", secid)
+	}
+
+	// Columns: [SECID, LAST, OPEN, HIGH, LOW, LASTVOLUME] -> index 1 is LAST.
+	last, ok := issResp.Marketdata.Data[0][1].(float64)
+	if !ok {
+		return 0, fmt.Errorf("moex iss: LAST not a number")
+	}
+	return last, nil
 }
 
 // seriesInfoHandler returns the current futures and options series for the given symbol.
@@ -178,7 +235,7 @@ func quoteHandler(w http.ResponseWriter, r *http.Request) {
 
 	price, err := getSpotPrice(symbol)
 	if err != nil {
-		price = 92500.0
+		price = 83200.0
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -203,7 +260,7 @@ func liveGreeksHandler(w http.ResponseWriter, r *http.Request) {
 
 	spotPrice, err := getSpotPrice(symbol)
 	if err != nil {
-		spotPrice = 92500.0
+		spotPrice = 83200.0
 	}
 
 	strike, _ := strconv.ParseFloat(strikeStr, 64)
@@ -256,7 +313,7 @@ func arbitrageHandler(w http.ResponseWriter, r *http.Request) {
 
 	spotPrice, err := getSpotPrice(symbol)
 	if err != nil {
-		spotPrice = 92500.0
+		spotPrice = 83200.0
 	}
 
 	strike, _ := strconv.ParseFloat(strikeStr, 64)
@@ -294,7 +351,7 @@ func skewHandler(w http.ResponseWriter, r *http.Request) {
 
 	spot, err := getSpotPrice(symbol)
 	if err != nil {
-		spot = 92500.0
+		spot = 83200.0
 	}
 
 	step := 1000.0
@@ -326,30 +383,108 @@ func skewHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-var (
-	alorAuth   = alor.NewAuthClient(os.Getenv("ALOR_REFRESH_TOKEN"))
+// initAlorClients initializes the Alor API clients using the encrypted token
+// stored on disk (falling back to the ALOR_REFRESH_TOKEN env var for backwards
+// compatibility on first deploy).
+func initAlorClients() {
+	refreshToken, _ := tokenStore.LoadToken()
+	if refreshToken == "" {
+		refreshToken = os.Getenv("ALOR_REFRESH_TOKEN")
+	}
+	portfolio, _ := tokenStore.LoadPortfolio()
+	if portfolio == "" {
+		portfolio = os.Getenv("ALOR_PORTFOLIO")
+	}
+
+	alorAuth = alor.NewAuthClient(refreshToken)
 	alorMarket = alor.NewMarketClient(alorAuth)
-	alorExec   = alor.NewExecutionClient(alorAuth, os.Getenv("ALOR_PORTFOLIO"))
-)
+	alorExec = alor.NewExecutionClient(alorAuth, portfolio)
+}
+
+// settingsTokenHandler GET returns token status; POST saves a new token encrypted.
+func settingsTokenHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	switch r.Method {
+	case http.MethodGet:
+		status := "not_configured"
+		if tokenStore != nil && tokenStore.HasToken() {
+			status = "configured"
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": status,
+			"has_token": tokenStore != nil && tokenStore.HasToken(),
+		})
+		return
+
+	case http.MethodPost:
+		var req struct {
+			RefreshToken string `json:"refresh_token"`
+			Portfolio    string `json:"portfolio"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+			return
+		}
+
+		if req.RefreshToken == "" {
+			http.Error(w, "refresh_token is required", http.StatusBadRequest)
+			return
+		}
+
+		// Save encrypted to disk first.
+		if err := tokenStore.SaveToken(req.RefreshToken); err != nil {
+			http.Error(w, "Failed to save token: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if req.Portfolio != "" {
+			_ = tokenStore.SavePortfolio(req.Portfolio)
+		}
+
+		// Apply to running clients and validate.
+		alorAuth.SetRefreshToken(req.RefreshToken)
+		if req.Portfolio != "" {
+			alorExec.SetPortfolio(req.Portfolio)
+		}
+
+		valid, msg := alorAuth.ValidateRefreshToken()
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":  true,
+			"valid":    valid,
+			"message":  msg,
+			"has_token": true,
+		})
+		return
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
 
 func moexQuoteHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	symbol := r.URL.Query().Get("symbol")
 	if symbol == "" {
-		symbol = "Si-3.25"
+		symbol = "Si"
 	}
 
-	quote, err := alorMarket.FetchSecurityQuote(symbol)
+	// Prefer public MOEX ISS for the futures series, fall back to Alor.
+	price, err := getSpotPrice(symbol)
 	if err != nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"symbol":   symbol,
-			"exchange": "MOEX",
-			"price":    92500.0,
-			"bid":      92490.0,
-			"ask":      92510.0,
-			"note":     "Mock fallback (ALOR_REFRESH_TOKEN not configured): " + err.Error(),
-		})
-		return
+		price = 0
+	}
+	quote := map[string]interface{}{
+		"symbol":   symbol,
+		"exchange": "MOEX",
+		"price":    price,
+		"bid":      price,
+		"ask":      price,
+	}
+	if price > 0 {
+		quote["note"] = "Real-time price from MOEX ISS / Alor"
+	} else {
+		quote["note"] = "No price source available: " + err.Error()
 	}
 
 	json.NewEncoder(w).Encode(quote)
@@ -367,10 +502,16 @@ func moexArbitrageHandler(w http.ResponseWriter, r *http.Request) {
 	callStr := r.URL.Query().Get("call")
 	putStr := r.URL.Query().Get("put")
 
-	spot := 92500.0
-	strike := 93000.0
+	spot, _ := getSpotPrice(symbol)
+	if spot <= 0 {
+		spot = 83200.0
+	}
+	strike := spot
 	if strikeStr != "" {
 		strike, _ = strconv.ParseFloat(strikeStr, 64)
+	}
+	if strike <= 0 {
+		strike = spot
 	}
 	days := 30.0
 	if daysStr != "" {
@@ -431,11 +572,11 @@ func moexOrderHandler(w http.ResponseWriter, r *http.Request) {
 
 	entryPrice := req.Price
 	if entryPrice <= 0 {
-		entryPrice = 92500.0
+		entryPrice, _ = getSpotPrice(req.Symbol)
 	}
 	currentPrice := req.Price
 	if currentPrice <= 0 {
-		currentPrice = 92520.0
+		currentPrice, _ = getSpotPrice(req.Symbol)
 	}
 
 	qty := req.Quantity
@@ -551,15 +692,11 @@ func moexPerpQuarterlyHandler(w http.ResponseWriter, r *http.Request) {
 		symbol = "Si"
 	}
 
-	perpPrice := 92500.0
-	quarterlyPrice := 93200.0
-	if symbol == "RI" {
-		perpPrice = 112000.0
-		quarterlyPrice = 113500.0
-	} else if symbol == "CR" {
-		perpPrice = 12.50
-		quarterlyPrice = 12.85
+	perpPrice, err := getSpotPrice(symbol)
+	if err != nil || perpPrice <= 0 {
+		perpPrice = 83200.0
 	}
+	quarterlyPrice := math.Round(perpPrice * 1.012)
 
 	spread := quarterlyPrice - perpPrice
 	annualizedReturn := (spread / perpPrice) * (365.0 / 90.0) * 100.0
@@ -595,7 +732,10 @@ func optionsRecommendationsHandler(w http.ResponseWriter, r *http.Request) {
 	if hvStr != "" {
 		hv, _ = strconv.ParseFloat(hvStr, 64)
 	}
-	spot := 92500.0
+	spot, _ := getSpotPrice("Si")
+	if spot <= 0 {
+		spot = 83200.0
+	}
 	if spotStr != "" {
 		spot, _ = strconv.ParseFloat(spotStr, 64)
 	}
@@ -698,6 +838,18 @@ func main() {
 		port = "8000"
 	}
 
+	// Encrypted token storage for Alor credentials.
+	dataDir := os.Getenv("DATA_DIR")
+	if dataDir == "" {
+		dataDir = "./data"
+	}
+	var err error
+	tokenStore, err = secure.NewStoreWithKey(dataDir, os.Getenv("ALOR_TOKEN_SECRET"))
+	if err != nil {
+		log.Fatalf("Failed to initialize secure store: %v", err)
+	}
+	initAlorClients()
+
 	subFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
 		log.Fatalf("Failed to create sub filesystem: %v", err)
@@ -720,6 +872,9 @@ func main() {
 	http.HandleFunc("/api/v1/moex/order", moexOrderHandler)
 	http.HandleFunc("/api/v1/moex/perp-quarterly", moexPerpQuarterlyHandler)
 	http.HandleFunc("/api/v1/series", seriesInfoHandler)
+
+	// Settings (encrypted Alor token)
+	http.HandleFunc("/api/v1/settings/token", settingsTokenHandler)
 
 	// Positions & Portfolio Handlers
 	http.HandleFunc("/api/v1/positions", positionsHandler)
