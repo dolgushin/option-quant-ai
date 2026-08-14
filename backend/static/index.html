@@ -32,6 +32,10 @@
                 <div id="connection-status" class="px-3 py-2 bg-emerald-500/10 text-emerald-400 text-xs rounded-lg border border-emerald-500/20 font-mono flex items-center gap-2">
                     <div class="w-2 h-2 bg-emerald-400 rounded-full animate-ping"></div> Alor API Connected
                 </div>
+
+                <div id="series-badge" class="px-3 py-2 bg-indigo-500/10 text-indigo-300 text-xs rounded-lg border border-indigo-500/30 font-mono">
+                    Серия: Si-9.26 / SiU6
+                </div>
             </div>
         </header>
 
@@ -363,7 +367,21 @@
                     }
                 }
             });
+            updateSeriesBadge();
             updateDashboard();
+        }
+
+        async function updateSeriesBadge() {
+            try {
+                const res = await fetch(`/api/v1/series?symbol=${currentAsset}`);
+                const data = await res.json();
+                const badge = document.getElementById('series-badge');
+                if (badge) {
+                    badge.innerText = `Серия: ${data.futures_series} / ${data.options_series}`;
+                }
+            } catch (e) {
+                console.error("Failed to load series info", e);
+            }
         }
 
         function initSkewChart() {
@@ -445,7 +463,7 @@
             };
 
             document.getElementById('modal-title').innerText = title;
-            document.getElementById('modal-subtitle').innerText = `Strategy Type: ${strategyType} | MOEX FORTS (${currentAsset})`;
+            document.getElementById('modal-subtitle').innerText = `Strategy Type: ${strategyType} | MOEX FORTS (${currentAsset}) | Серия опционов: ${currentAsset}U6`;
             
             renderStrategyDetails();
             document.getElementById('strategy-modal').classList.remove('hidden');
@@ -521,8 +539,8 @@
                 `Put-Call Parity Arbitrage (${currentAsset})`,
                 'Conversion / Reversal',
                 [
-                    { action: 'SELL', symbol: `${currentAsset} Call 93000`, qty: 5, price: '1,500 ₽' },
-                    { action: 'BUY', symbol: `${currentAsset} Put 93000`, qty: 5, price: '1,800 ₽' },
+                    { action: 'SELL', symbol: `${currentAsset}93000C (Call)`, qty: 5, price: '1,500 ₽' },
+                    { action: 'BUY', symbol: `${currentAsset}93000P (Put)`, qty: 5, price: '1,800 ₽' },
                     { action: 'BUY', symbol: `${currentAsset} Futures`, qty: 5, price: '92,500 ₽' }
                 ],
                 4000,
@@ -537,10 +555,10 @@
                 `${stratName} (${currentAsset})`,
                 'Iron Condor',
                 [
-                    { action: 'SELL', symbol: `${currentAsset} Put 91000`, qty: 10, price: '800 ₽' },
-                    { action: 'BUY', symbol: `${currentAsset} Put 89000`, qty: 10, price: '300 ₽' },
-                    { action: 'SELL', symbol: `${currentAsset} Call 95000`, qty: 10, price: '850 ₽' },
-                    { action: 'BUY', symbol: `${currentAsset} Call 97000`, qty: 10, price: '320 ₽' }
+                    { action: 'SELL', symbol: `${currentAsset}91000P (Put)`, qty: 10, price: '800 ₽' },
+                    { action: 'BUY', symbol: `${currentAsset}89000P (Put)`, qty: 10, price: '300 ₽' },
+                    { action: 'SELL', symbol: `${currentAsset}95000C (Call)`, qty: 10, price: '850 ₽' },
+                    { action: 'BUY', symbol: `${currentAsset}97000C (Call)`, qty: 10, price: '320 ₽' }
                 ],
                 12000,
                 10300,
@@ -891,6 +909,7 @@
 
         window.addEventListener('DOMContentLoaded', () => {
             initSkewChart();
+            updateSeriesBadge();
             updateDashboard();
             updatePositions();
             updatePortfolio();

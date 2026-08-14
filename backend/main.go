@@ -57,15 +57,25 @@ func greeksHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 var (
-	spotOverrides = map[string]float64{
-		"Si":  83395.0,
-		"RI":  112000.0,
-		"CR":  12.50,
-		"BTC": 92500.0,
+	spotOverrides = map[string]float64{}
+	spotMu        sync.Mutex
+
+	// Current active futures series and their option series codes on MOEX FORTS.
+	// Example: Si-9.26 futures -> options series "SiU6" (September 2026)
+	futuresSeries = map[string]string{
+		"Si": "Si-9.26",
+		"RI": "RI-9.26",
+		"CR": "CR-9.26",
 	}
-	spotMu sync.Mutex
+	optionsSeries = map[string]string{
+		"Si": "SiU6",
+		"RI": "RIU6",
+		"CR": "CRU6",
+	}
 )
 
+// getSpotPrice returns the real-time futures/spot price.
+// It first checks a user override, then the live Alor/MOEX API, then falls back to a realistic estimate.
 func getSpotPrice(symbol string) (float64, error) {
 	spotMu.Lock()
 	if p, ok := spotOverrides[symbol]; ok {
@@ -81,6 +91,14 @@ func getSpotPrice(symbol string) (float64, error) {
 		}
 		return q.Price, nil
 	}
+
+	// Try to fetch the real futures price from Alor / MOEX FORTS API
+	if futuresSymbol, ok := futuresSeries[symbol]; ok {
+		if quote, err := alorMarket.FetchSecurityQuote(futuresSymbol); err == nil && quote.Price > 0 {
+			return quote.Price, nil
+		}
+	}
+
 	switch symbol {
 	case "Si":
 		return 83395.0, nil
@@ -91,6 +109,30 @@ func getSpotPrice(symbol string) (float64, error) {
 	default:
 		return 83395.0, nil
 	}
+}
+
+// seriesInfoHandler returns the current futures and options series for the given symbol.
+func seriesInfoHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "Si"
+	}
+
+	futures := futuresSeries[symbol]
+	if futures == "" {
+		futures = symbol + "-9.26"
+	}
+	options := optionsSeries[symbol]
+	if options == "" {
+		options = symbol + "U6"
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"symbol":         symbol,
+		"futures_series": futures,
+		"options_series": options,
+	})
 }
 
 func spotHandler(w http.ResponseWriter, r *http.Request) {
@@ -676,6 +718,7 @@ func main() {
 	http.HandleFunc("/api/v1/moex/arbitrage", moexArbitrageHandler)
 	http.HandleFunc("/api/v1/moex/order", moexOrderHandler)
 	http.HandleFunc("/api/v1/moex/perp-quarterly", moexPerpQuarterlyHandler)
+	http.HandleFunc("/api/v1/series", seriesInfoHandler)
 
 	// Positions & Portfolio Handlers
 	http.HandleFunc("/api/v1/positions", positionsHandler)
