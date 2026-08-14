@@ -523,6 +523,44 @@ func gammaScalpingStepHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func verticalSpreadHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	ivStr := r.URL.Query().Get("iv")
+	hvStr := r.URL.Query().Get("hv")
+	outlook := r.URL.Query().Get("outlook")
+	if outlook == "" {
+		outlook = "BULLISH"
+	}
+
+	iv := 35.0
+	if ivStr != "" {
+		iv, _ = strconv.ParseFloat(ivStr, 64)
+	}
+	hv := 28.0
+	if hvStr != "" {
+		hv, _ = strconv.ParseFloat(hvStr, 64)
+	}
+
+	rec := quant.EvaluateVerticalSpreads(iv, hv, outlook)
+	json.NewEncoder(w).Encode(rec)
+}
+
+func rollingAdviceHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	direction := r.URL.Query().Get("direction")
+	if direction == "" {
+		direction = "BULLISH"
+	}
+	drawdownStr := r.URL.Query().Get("drawdown")
+	drawdown := 35.0
+	if drawdownStr != "" {
+		drawdown, _ = strconv.ParseFloat(drawdownStr, 64)
+	}
+
+	advice := quant.GetSpreadRollingAdvice(direction, drawdown)
+	json.NewEncoder(w).Encode(advice)
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -555,6 +593,8 @@ func main() {
 	http.HandleFunc("/api/v1/positions/close", closePositionHandler)
 	http.HandleFunc("/api/v1/options/exit-advice", optionsExitAdviceHandler)
 	http.HandleFunc("/api/v1/options/gamma-step", gammaScalpingStepHandler)
+	http.HandleFunc("/api/v1/options/vertical-spread", verticalSpreadHandler)
+	http.HandleFunc("/api/v1/options/rolling-advice", rollingAdviceHandler)
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

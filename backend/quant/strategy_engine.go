@@ -133,3 +133,98 @@ func AnalyzeExitTriggers(dte float64, delta float64, profitPct float64) ExitAdvi
 		Action:      "HOLD",
 	}
 }
+
+type RollingAdvice struct {
+	StrategyType      string `json:"strategy_type"`
+	Condition         string `json:"condition"`
+	RecommendedAction string `json:"recommended_action"`
+	Details           string `json:"details"`
+}
+
+// EvaluateVerticalSpreads decides whether Call Spread or Put Spread is more advantageous based on IV and outlook
+func EvaluateVerticalSpreads(iv, hv float64, outlook string) StrategyRecommendation {
+	if outlook == "BULLISH" {
+		if iv > hv*1.2 {
+			return StrategyRecommendation{
+				StrategyName: "Bull Put Spread (Credit Put Spread)",
+				Regime:       "High IV / Bullish",
+				Suitability:  "Выгоднее: высокая IV позволяет продать дорогой пут и купить защиту дешевле, собирая временной распад.",
+				TargetLegs:   []string{"Sell OTM Put", "Buy Far OTM Put"},
+				ExpectedTheta: 450.0,
+				MaxProfit:    "Net Premium Collected",
+				RiskProfile:  "Defined risk (Strike Width - Premium)",
+				ExitRule:     "Take profit at 50% max profit. Roll if tested.",
+			}
+		} else {
+			return StrategyRecommendation{
+				StrategyName: "Bull Call Spread (Debit Call Spread)",
+				Regime:       "Low/Normal IV / Bullish",
+				Suitability:  "Выгоднее: IV низкая, покупка колл-спреда дешевле по премии при ожидании роста.",
+				TargetLegs:   []string{"Buy ATM/OTM Call", "Sell Higher OTM Call"},
+				ExpectedTheta: -120.0,
+				MaxProfit:    "Spread Width - Net Debit",
+				RiskProfile:  "Limited to net debit paid",
+				ExitRule:     "Take profit at 70% max profit.",
+			}
+		}
+	} else { // BEARISH
+		if iv > hv*1.2 {
+			return StrategyRecommendation{
+				StrategyName: "Bear Call Spread (Credit Call Spread)",
+				Regime:       "High IV / Bearish",
+				Suitability:  "Выгоднее: высокая IV идеальна для продажи колл-спреда (сбор премии за счет падения или стояния рынка).",
+				TargetLegs:   []string{"Sell OTM Call", "Buy Far OTM Call"},
+				ExpectedTheta: 480.0,
+				MaxProfit:    "Net Premium Collected",
+				RiskProfile:  "Defined risk",
+				ExitRule:     "Take profit at 50% max profit.",
+			}
+		} else {
+			return StrategyRecommendation{
+				StrategyName: "Bear Put Spread (Debit Put Spread)",
+				Regime:       "Low/Normal IV / Bearish",
+				Suitability:  "Выгоднее: покупка пут-спреда при недорогой волатильности для защиты от падения.",
+				TargetLegs:   []string{"Buy ATM Put", "Sell Lower OTM Put"},
+				ExpectedTheta: -150.0,
+				MaxProfit:    "Spread Width - Net Debit",
+				RiskProfile:  "Limited to net debit paid",
+				ExitRule:     "Take profit at 70% max profit.",
+			}
+		}
+	}
+}
+
+// GetSpreadRollingAdvice returns rolling and transformation options when spread hits Decision Point (TPR)
+func GetSpreadRollingAdvice(marketDirection string, drawdownPct float64) RollingAdvice {
+	if drawdownPct >= 30.0 {
+		switch marketDirection {
+		case "BULLISH":
+			return RollingAdvice{
+				StrategyType:      "Vertical Spread Rolling",
+				Condition:         "Цена пошла против позиции (достигнута точка TPR при ожидании роста)",
+				RecommendedAction: "Реконструкция в Лестницу (Ladder) или покупка около-ATM коллов",
+				Details:           "Сохраняем восходящий взгляд, но снижаем дельта-риск путем перестройки в асимметричный спред.",
+			}
+		case "BEARISH":
+			return RollingAdvice{
+				StrategyType:      "Vertical Spread Rolling",
+				Condition:         "Достигнута точка TPR при ожидании падения",
+				RecommendedAction: "Трансформация в Backspread с покупкой Put",
+				Details:           "Участие в сильном нисходящем движении с дополнительным хеджированием волатильности.",
+			}
+		default:
+			return RollingAdvice{
+				StrategyType:      "Vertical Spread Rolling",
+				Condition:         "Рынок ушел в боковик (Флэт)",
+				RecommendedAction: "Продажа противоположных ног (трансформация в Short Strangle / Condor)",
+				Details:           "Использование накопленного тета-распада для компенсации просадки по направлению.",
+			}
+		}
+	}
+	return RollingAdvice{
+		StrategyType:      "Vertical Spread",
+		Condition:         "Позиция стабильна",
+		RecommendedAction: "Удержание до достижения 70% профита или сработки Stop-Loss",
+		Details:           "Правило роллирования: роллировать ТОЛЬКО если сохраняется исходный Edge. Запрещено увеличивать риск ради избежания фиксации убытка.",
+	}
+}
