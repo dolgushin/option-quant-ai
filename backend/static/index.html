@@ -33,7 +33,7 @@
                     <div class="w-2 h-2 bg-emerald-400 rounded-full animate-ping"></div> Alor API Connected
                 </div>
 
-                <div id="series-badge" class="px-3 py-2 bg-indigo-500/10 text-indigo-300 text-xs rounded-lg border border-indigo-500/30 font-mono">
+                <div id="series-badge" onclick="openSeriesSelector()" class="px-3 py-2 bg-indigo-500/10 text-indigo-300 text-xs rounded-lg border border-indigo-500/30 font-mono cursor-pointer hover:bg-indigo-500/20" title="Нажмите, чтобы выбрать серию опционов">
                     Серия: Si-9.26 / SiU6
                 </div>
 
@@ -282,6 +282,26 @@
     </div>
 
     <!-- Strategy Details & Payoff Modal -->
+    <div id="series-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-slate-800 border border-slate-700 w-full max-w-md rounded-2xl p-6 space-y-5 shadow-2xl relative">
+            <div class="flex justify-between items-center border-b border-slate-700 pb-4">
+                <div>
+                    <h3 class="text-xl font-bold text-indigo-400">📅 Серия опционов</h3>
+                    <p id="series-modal-subtitle" class="text-xs text-slate-400 font-mono">Si</p>
+                </div>
+                <button onclick="closeSeriesSelector()" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+            </div>
+
+            <div id="series-list" class="space-y-2 max-h-80 overflow-y-auto">
+                <!-- Series rows populated dynamically -->
+            </div>
+
+            <div class="pt-4 border-t border-slate-700 flex gap-3">
+                <button onclick="closeSeriesSelector()" class="flex-1 py-3 bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold rounded-xl transition">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
     <div id="settings-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
         <div class="bg-slate-800 border border-slate-700 w-full max-w-lg rounded-2xl p-6 space-y-5 shadow-2xl relative">
             <div class="flex justify-between items-center border-b border-slate-700 pb-4">
@@ -389,6 +409,7 @@
         let payoffChartInstance = null;
         let currentAsset = 'Si';
         let currentSpotPrice = 83200;
+        let currentSeriesInfo = null;
         let selectedStrategyData = null;
         let currentLotMultiplier = 1;
 
@@ -414,10 +435,69 @@
                 const data = await res.json();
                 const badge = document.getElementById('series-badge');
                 if (badge) {
-                    badge.innerText = `Серия: ${data.futures_series} / ${data.options_series}`;
+                    currentSeriesInfo = data;
+                    let typeTag = '';
+                    if (data.type) typeTag = ` · ${data.type}`;
+                    if (data.days_to_exp > 0) typeTag += ` · ${data.days_to_exp} дн.`;
+                    badge.innerText = `Серия: ${data.options_series}${typeTag}`;
                 }
             } catch (e) {
                 console.error("Failed to load series info", e);
+            }
+        }
+
+        function openSeriesSelector() {
+            document.getElementById('series-modal').classList.remove('hidden');
+            document.getElementById('series-modal-subtitle').innerText = `Актив: ${currentAsset} — выберите серию`;
+            loadSeriesList();
+        }
+
+        function closeSeriesSelector() {
+            document.getElementById('series-modal').classList.add('hidden');
+        }
+
+        async function loadSeriesList() {
+            const listEl = document.getElementById('series-list');
+            listEl.innerHTML = '<div class="text-xs text-slate-400 font-mono p-2">Загрузка серий...</div>';
+            try {
+                const res = await fetch(`/api/v1/series?symbol=${currentAsset}`);
+                const data = await res.json();
+                const series = data.series || [];
+                if (series.length === 0) {
+                    listEl.innerHTML = '<div class="text-xs text-slate-400 font-mono p-2">Серии не найдены. Проверьте связь с MOEX ISS.</div>';
+                    return;
+                }
+                listEl.innerHTML = series.map(s => `
+                    <div class="flex items-center justify-between bg-slate-900/60 p-3 rounded-lg border ${s.is_current ? 'border-indigo-500 bg-indigo-500/10' : 'border-slate-700'} cursor-pointer hover:border-indigo-400 transition" onclick="setSeries('${s.code}')">
+                        <div>
+                            <div class="text-sm font-bold text-white">${s.code} <span class="text-xs text-slate-400 font-mono">${s.short_name}</span></div>
+                            <div class="text-xs text-slate-400 font-mono">Экспирация: ${s.expiry || '—'} · ${s.days_to_exp > 0 ? s.days_to_exp + ' дн.' : 'сегодня'} · ${s.type}</div>
+                        </div>
+                        ${s.is_current ? '<span class="text-xs px-2 py-1 bg-indigo-500 text-white font-bold rounded">✓ ТЕКУЩАЯ</span>' : ''}
+                    </div>
+                `).join('');
+            } catch (e) {
+                listEl.innerHTML = '<div class="text-xs text-rose-400 font-mono p-2">Ошибка загрузки серий</div>';
+            }
+        }
+
+        async function setSeries(code) {
+            try {
+                const res = await fetch('/api/v1/series/set', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol: currentAsset, series: code })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    closeSeriesSelector();
+                    updateSeriesBadge();
+                    updateDashboard();
+                } else {
+                    alert('Ошибка выбора серии: ' + (data.error || 'unknown'));
+                }
+            } catch (e) {
+                alert('Не удалось сменить серию');
             }
         }
 
@@ -500,7 +580,9 @@
             };
 
             document.getElementById('modal-title').innerText = title;
-            document.getElementById('modal-subtitle').innerText = `Strategy Type: ${strategyType} | MOEX FORTS (${currentAsset}) | Серия опционов: ${currentAsset}U6`;
+            const seriesCode = (currentSeriesInfo && currentSeriesInfo.options_series) ? currentSeriesInfo.options_series : `${currentAsset}U6`;
+            const expiryText = (currentSeriesInfo && currentSeriesInfo.expiry) ? ` | Экспирация: ${currentSeriesInfo.expiry} (${currentSeriesInfo.type || 'серия'}, ${currentSeriesInfo.days_to_exp || 0} дн.)` : '';
+            document.getElementById('modal-subtitle').innerText = `Strategy Type: ${strategyType} | MOEX FORTS (${currentAsset}) | Серия опционов: ${seriesCode}${expiryText}`;
             
             renderStrategyDetails();
             document.getElementById('strategy-modal').classList.remove('hidden');

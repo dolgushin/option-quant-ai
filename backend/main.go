@@ -64,19 +64,14 @@ var (
 	spotOverrides = map[string]float64{}
 	spotMu        sync.Mutex
 
-	// Current active futures series and their option series codes on MOEX FORTS.
-	// futuresSeries: display name shown to the user (futures code on MOEX).
-	// optionsSeries: Alor instrument root for options, e.g. SiU6.
-	futuresSeries = map[string]string{
-		"Si": "Si-9.26",
-		"RI": "RI-9.26",
-		"CR": "CR-9.26",
-	}
-	optionsSeries = map[string]string{
+	// Selected options series per asset (MOEX code: SiU6 = September 2026).
+	// The user can switch between quarterly/monthly series via POST /api/v1/series.
+	selectedSeries = map[string]string{
 		"Si": "SiU6",
 		"RI": "RIU6",
 		"CR": "CRU6",
 	}
+	seriesMu sync.Mutex
 
 	// tokenStore persists the Alor refresh token encrypted on disk.
 	tokenStore *secure.Store
@@ -85,6 +80,115 @@ var (
 	alorMarket *alor.MarketClient
 	alorExec   *alor.ExecutionClient
 )
+
+// futuresContract is a MOEX FORTS futures contract with its expiry date.
+type futuresContract struct {
+	Code        string // e.g. "SiU6"
+	ShortName   string // e.g. "Si-9.26"
+	LastDelDate string // e.g. "2026-09-17"
+}
+
+var (
+	contractCache     []futuresContract
+	contractCacheTime time.Time
+	contractMu        sync.Mutex
+)
+
+// moexFuturesContracts fetches the full list of FORTS futures contracts with
+// their last-delivery (expiry) dates from the public MOEX ISS API, cached.
+func moexFuturesContracts() ([]futuresContract, error) {
+	contractMu.Lock()
+	defer contractMu.Unlock()
+	if len(contractCache) > 0 && time.Since(contractCacheTime) < 10*time.Minute {
+		return contractCache, nil
+	}
+
+	url := "http://iss.moex.com/iss/engines/futures/markets/forts/securities.json?iss.meta=off&iss.only=securities&securities.columns=SECID,SHORTNAME,LASTDELDATE"
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var data struct {
+		Securities struct {
+			Data [][]interface{} `json:"data"`
+		} `json:"securities"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+
+	var contracts []futuresContract
+	for _, row := range data.Securities.Data {
+		if len(row) < 3 {
+			continue
+		}
+		code, _ := row[0].(string)
+		short, _ := row[1].(string)
+		delDate, _ := row[2].(string)
+		if code != "" {
+			contracts = append(contracts, futuresContract{Code: code, ShortName: short, LastDelDate: delDate})
+		}
+	}
+
+	contractCache = contracts
+	contractCacheTime = time.Now()
+	return contracts, nil
+}
+
+// futuresContractsForSymbol returns available contracts for a symbol root (Si, RI, CR),
+// newest to oldest, for the dropdown in the UI.
+func futuresContractsForSymbol(symbol string) []futuresContract {
+	contracts, err := moexFuturesContracts()
+	if err != nil {
+		return nil
+	}
+	var out []futuresContract
+	for _, c := range contracts {
+		if strings.HasPrefix(c.Code, symbol) {
+			out = append(out, c)
+		}
+	}
+	// Newest expiry first.
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].LastDelDate > out[i].LastDelDate {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out
+}
+
+// seriesType classifies a contract as quarterly, monthly or weekly by its expiry.
+func seriesType(lastDelDate string, ref time.Time) string {
+	if lastDelDate == "" {
+		return "серия"
+	}
+	t, err := time.Parse("2006-01-02", lastDelDate)
+	if err != nil {
+		return "серия"
+	}
+	dte := int(t.Sub(ref).Hours() / 24)
+	if dte <= 7 {
+		return "недельная"
+	}
+	if t.Month()%3 == 0 {
+		return "квартальная"
+	}
+	return "месячная"
+}
+
+// dteInDays returns days-to-expiry from a MOEX expiry date string.
+func dteInDays(lastDelDate string, ref time.Time) int {
+	t, err := time.Parse("2006-01-02", lastDelDate)
+	if err != nil {
+		return 0
+	}
+	return int(t.Sub(ref).Hours() / 24)
+}
 
 // getSpotPrice returns the real-time futures/spot price.
 // It first checks a user override, then MOEX ISS (public, no token), then the
@@ -106,14 +210,17 @@ func getSpotPrice(symbol string) (float64, error) {
 	}
 
 	// 1) MOEX ISS public API — free, no token required, real FORTS prices.
-	if issCode, ok := optionsSeries[symbol]; ok {
+	seriesMu.Lock()
+	issCode := selectedSeries[symbol]
+	seriesMu.Unlock()
+	if issCode != "" {
 		if price, err := moexISSSpotPrice(issCode); err == nil && price > 0 {
 			return price, nil
 		}
 	}
 
 	// 2) Alor API (needs a valid refresh token).
-	if futuresSymbol, ok := futuresSeries[symbol]; ok && alorMarket != nil {
+	if futuresSymbol, ok := futuresSeriesAlor(symbol); ok && alorMarket != nil {
 		if quote, err := alorMarket.FetchSecurityQuote(futuresSymbol); err == nil && quote.Price > 0 {
 			return quote.Price, nil
 		}
@@ -169,7 +276,29 @@ func moexISSSpotPrice(secid string) (float64, error) {
 	return last, nil
 }
 
-// seriesInfoHandler returns the current futures and options series for the given symbol.
+// futuresSeriesAlor converts a MOEX series code (e.g. "SiU6") into the
+// human-readable Alor futures name (e.g. "Si-9.26") using cached MOEX data.
+func futuresSeriesAlor(symbol string) (string, bool) {
+	seriesMu.Lock()
+	code := selectedSeries[symbol]
+	seriesMu.Unlock()
+	if code == "" {
+		return "", false
+	}
+	contracts, err := moexFuturesContracts()
+	if err == nil {
+		for _, c := range contracts {
+			if c.Code == code {
+				return c.ShortName, true
+			}
+		}
+	}
+	// Fallback guess: keep the code itself (Alor also accepts SiU6-style codes).
+	return code, true
+}
+
+// seriesInfoHandler returns the current series, its expiry date, type
+// (weekly/monthly/quarterly) and the full list of available series.
 func seriesInfoHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	symbol := r.URL.Query().Get("symbol")
@@ -177,19 +306,97 @@ func seriesInfoHandler(w http.ResponseWriter, r *http.Request) {
 		symbol = "Si"
 	}
 
-	futures := futuresSeries[symbol]
-	if futures == "" {
-		futures = symbol + "-9.26"
+	seriesMu.Lock()
+	current := selectedSeries[symbol]
+	seriesMu.Unlock()
+
+	now := time.Now()
+	contracts := futuresContractsForSymbol(symbol)
+
+	type seriesItem struct {
+		Code        string `json:"code"`
+		ShortName   string `json:"short_name"`
+		Expiry      string `json:"expiry"`
+		DaysToExp   int    `json:"days_to_exp"`
+		Type        string `json:"type"`
+		IsCurrent   bool   `json:"is_current"`
 	}
-	options := optionsSeries[symbol]
-	if options == "" {
-		options = symbol + "U6"
+
+	var items []seriesItem
+	currentExpiry := ""
+	currentShort := ""
+	for _, c := range contracts {
+		// Only include series that are still alive (expiry in the future).
+		if c.LastDelDate != "" && c.LastDelDate < now.Format("2006-01-02") {
+			continue
+		}
+		items = append(items, seriesItem{
+			Code:      c.Code,
+			ShortName: c.ShortName,
+			Expiry:    c.LastDelDate,
+			DaysToExp: dteInDays(c.LastDelDate, now),
+			Type:      seriesType(c.LastDelDate, now),
+			IsCurrent: c.Code == current,
+		})
+		if c.Code == current {
+			currentExpiry = c.LastDelDate
+			currentShort = c.ShortName
+		}
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"symbol":         symbol,
-		"futures_series": futures,
-		"options_series": options,
+		"futures_series": currentShort,
+		"options_series": current,
+		"expiry":         currentExpiry,
+		"days_to_exp":    dteInDays(currentExpiry, now),
+		"type":           seriesType(currentExpiry, now),
+		"series":         items,
+	})
+}
+
+// setSeriesHandler switches the active options/futures series for an asset.
+func setSeriesHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Symbol string `json:"symbol"`
+		Series string `json:"series"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+	if req.Symbol == "" || req.Series == "" {
+		http.Error(w, "symbol and series are required", http.StatusBadRequest)
+		return
+	}
+
+	// Verify the series exists for this symbol.
+	found := false
+	for _, c := range futuresContractsForSymbol(req.Symbol) {
+		if c.Code == req.Series {
+			found = true
+			break
+		}
+	}
+	if !found {
+		http.Error(w, "unknown series for symbol: "+req.Series, http.StatusBadRequest)
+		return
+	}
+
+	seriesMu.Lock()
+	selectedSeries[req.Symbol] = req.Series
+	seriesMu.Unlock()
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"symbol":   req.Symbol,
+		"series":   req.Series,
 	})
 }
 
@@ -696,6 +903,11 @@ func moexPerpQuarterlyHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil || perpPrice <= 0 {
 		perpPrice = 83200.0
 	}
+
+	seriesMu.Lock()
+	currentSeries := selectedSeries[symbol]
+	seriesMu.Unlock()
+
 	quarterlyPrice := math.Round(perpPrice * 1.012)
 
 	spread := quarterlyPrice - perpPrice
@@ -703,13 +915,14 @@ func moexPerpQuarterlyHandler(w http.ResponseWriter, r *http.Request) {
 
 	strategy := "No Arbitrage"
 	if spread > 300.0 {
-		strategy = fmt.Sprintf("Sell Quarterly %sU6, Buy Perpetual %s (Contango Arbitrage / Carry)", symbol, symbol)
+		strategy = fmt.Sprintf("Sell Quarterly %s, Buy Perpetual %s (Contango Arbitrage / Carry)", currentSeries, symbol)
 	} else if spread < -100.0 {
-		strategy = fmt.Sprintf("Buy Quarterly %sU6, Sell Perpetual %s (Backwardation)", symbol, symbol)
+		strategy = fmt.Sprintf("Buy Quarterly %s, Sell Perpetual %s (Backwardation)", currentSeries, symbol)
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"symbol":            symbol,
+		"series":            currentSeries,
 		"perpetual_price":   perpPrice,
 		"quarterly_price":   quarterlyPrice,
 		"spread":            math.Round(spread*100) / 100,
@@ -872,6 +1085,7 @@ func main() {
 	http.HandleFunc("/api/v1/moex/order", moexOrderHandler)
 	http.HandleFunc("/api/v1/moex/perp-quarterly", moexPerpQuarterlyHandler)
 	http.HandleFunc("/api/v1/series", seriesInfoHandler)
+	http.HandleFunc("/api/v1/series/set", setSeriesHandler)
 
 	// Settings (encrypted Alor token)
 	http.HandleFunc("/api/v1/settings/token", settingsTokenHandler)
