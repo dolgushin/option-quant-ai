@@ -8,6 +8,6 @@ services:
     restart: always
     environment:
       - PORT=9000
-      - ALOR_REFRESH_TOKEN=your_alor_refresh_token_here
-      - BYBIT_API_KEY=your_bybit_api_key_here
-      - BYBIT_API_SECRET=your_bybit_api_secret_here
+      - ALOR_REFRESH_TOKEN=4d48250e-9099-41d8-b2b3-378bd0f12d9f
+      - BYBIT_API_KEY=cdyMUskDTiQdpXWXiV
+      - BYBIT_API_SECRET=56kv4jNlgCgBcIj6gtlU4G8cX6kIM1PfYX5k
