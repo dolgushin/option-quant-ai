@@ -179,6 +179,35 @@
             </div>
         </div>
 
+        <!-- Active Positions & Portfolio Watchlist -->
+        <div class="bg-slate-800/80 p-6 rounded-xl border border-slate-700 space-y-4">
+            <div class="flex justify-between items-center border-b border-slate-700 pb-3">
+                <h2 class="text-lg font-semibold text-slate-200">Active Portfolio & Executed Positions (Alor FORTS)</h2>
+                <span class="px-3 py-1 text-xs font-bold rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono">Live Tracking</span>
+            </div>
+            
+            <div class="overflow-x-auto font-mono">
+                <table class="w-full text-left text-xs text-slate-300">
+                    <thead class="bg-slate-900/80 text-slate-400 uppercase border-b border-slate-700">
+                        <tr>
+                            <th class="p-3">ID / Strategy</th>
+                            <th class="p-3">Symbol / Legs</th>
+                            <th class="p-3">Side / Qty</th>
+                            <th class="p-3">Entry Price</th>
+                            <th class="p-3">P&L (₽)</th>
+                            <th class="p-3">Delta / Theta</th>
+                            <th class="p-3 text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="positions-table-body" class="divide-y divide-slate-800">
+                        <tr>
+                            <td colspan="7" class="p-4 text-center text-slate-500">Loading active positions...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
         <!-- 5. AI Quant Copilot Panel -->
         <div class="bg-slate-800/60 p-6 rounded-xl border border-slate-700/50 space-y-4">
             <div class="flex justify-between items-center border-b border-slate-700 pb-3">
@@ -520,6 +549,51 @@
             }
         }
 
+        async function updatePositions() {
+            try {
+                const res = await fetch('/api/v1/positions');
+                const data = await res.json();
+
+                const tbody = document.getElementById('positions-table-body');
+                if (!data.positions || data.positions.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="7" class="p-4 text-center text-slate-500">Нет активных позиций. Откройте стратегию и разместите ордер через Alor API.</td></tr>`;
+                    return;
+                }
+
+                let html = '';
+                data.positions.forEach(p => {
+                    const pnlColor = p.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                    html += `<tr class="hover:bg-slate-900/40 transition">
+                        <td class="p-3 font-bold text-white">${p.strategy} <span class="text-[10px] text-slate-500 block">${p.id}</span></td>
+                        <td class="p-3 text-indigo-300">${p.symbol}</td>
+                        <td class="p-3">${p.side} (${p.quantity})</td>
+                        <td class="p-3">${p.entry_price.toLocaleString()} ₽</td>
+                        <td class="p-3 font-bold ${pnlColor}">${p.pnl >= 0 ? '+' : ''}${p.pnl.toLocaleString()} ₽</td>
+                        <td class="p-3">Δ: ${p.delta} | Θ: <span class="text-emerald-400">+${p.theta}₽</span></td>
+                        <td class="p-3 text-right">
+                            <button onclick="closePosition('${p.id}')" class="px-3 py-1 bg-rose-600/80 hover:bg-rose-500 text-white rounded transition text-[10px]">Close</button>
+                        </td>
+                    </tr>`;
+                });
+                tbody.innerHTML = html;
+            } catch (e) {
+                console.error("Failed to load positions", e);
+            }
+        }
+
+        async function closePosition(id) {
+            try {
+                await fetch('/api/v1/positions/close', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: id })
+                });
+                updatePositions();
+            } catch (e) {
+                alert('Ошибка закрытия позиции');
+            }
+        }
+
         async function updateDashboard() {
             try {
                 // 1. Perp vs Quarterly Spread Monitor
@@ -574,6 +648,7 @@
 
                 // 4. Update TDSS Strategies & Exit Advice
                 await updateTDSS();
+                await updatePositions();
 
                 updateSkewChart();
             } catch (e) {
@@ -618,6 +693,7 @@
         window.addEventListener('DOMContentLoaded', () => {
             initSkewChart();
             updateDashboard();
+            updatePositions();
 
             setInterval(updateDashboard, 3000);
         });

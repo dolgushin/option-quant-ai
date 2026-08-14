@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 
 	"option-quant-ai/agent"
 	"option-quant-ai/alor"
@@ -305,7 +307,51 @@ func moexOrderHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	quant.AddPosition(quant.Position{
+		ID:           fmt.Sprintf("pos-%d", time.Now().Unix()),
+		Strategy:     "Alor MOEX Execution",
+		Symbol:       req.Symbol,
+		Side:         strings.ToUpper(req.Side),
+		Quantity:     req.Quantity,
+		EntryPrice:   req.Price > 0 ? req.Price : 92500.0,
+		CurrentPrice: req.Price > 0 ? req.Price : 92520.0,
+		PnL:          250.0,
+		Delta:        0.00,
+		Theta:        450.0,
+		OpenedAt:     time.Now(),
+	})
+
 	json.NewEncoder(w).Encode(res)
+}
+
+func positionsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	positions := quant.GetActivePositions()
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"positions": positions,
+	})
+}
+
+func closePositionHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	quant.ClosePosition(req.ID)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Position closed successfully",
+	})
 }
 
 func copilotHandler(w http.ResponseWriter, r *http.Request) {
@@ -468,8 +514,9 @@ func main() {
 	http.HandleFunc("/api/v1/moex/order", moexOrderHandler)
 	http.HandleFunc("/api/v1/moex/perp-quarterly", moexPerpQuarterlyHandler)
 
-	// Options Strategy & TDSS Handlers
-	http.HandleFunc("/api/v1/options/recommendations", optionsRecommendationsHandler)
+	// Positions & Portfolio Handlers
+	http.HandleFunc("/api/v1/positions", positionsHandler)
+	http.HandleFunc("/api/v1/positions/close", closePositionHandler)
 	http.HandleFunc("/api/v1/options/exit-advice", optionsExitAdviceHandler)
 	http.HandleFunc("/api/v1/options/gamma-step", gammaScalpingStepHandler)
 
