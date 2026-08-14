@@ -56,24 +56,73 @@ func greeksHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(greeks)
 }
 
+var (
+	spotOverrides = map[string]float64{
+		"Si":  83395.0,
+		"RI":  112000.0,
+		"CR":  12.50,
+		"BTC": 92500.0,
+	}
+	spotMu sync.Mutex
+)
+
 func getSpotPrice(symbol string) (float64, error) {
+	spotMu.Lock()
+	if p, ok := spotOverrides[symbol]; ok {
+		spotMu.Unlock()
+		return p, nil
+	}
+	spotMu.Unlock()
+
 	if symbol == "BTC" || symbol == "ETH" {
 		q, err := quant.FetchCryptoSpot(symbol)
 		if err != nil {
-			return 92500.0, err
+			return 83395.0, err
 		}
 		return q.Price, nil
 	}
 	switch symbol {
 	case "Si":
-		return 92500.0, nil
+		return 83395.0, nil
 	case "RI":
 		return 112000.0, nil
 	case "CR":
 		return 12.50, nil
 	default:
-		return 92500.0, nil
+		return 83395.0, nil
 	}
+}
+
+func spotHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Symbol string  `json:"symbol"`
+		Price  float64 `json:"price"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Price <= 0 {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	symbol := req.Symbol
+	if symbol == "" {
+		symbol = "Si"
+	}
+
+	spotMu.Lock()
+	spotOverrides[symbol] = req.Price
+	spotMu.Unlock()
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"symbol":  symbol,
+		"price":   req.Price,
+	})
 }
 
 func quoteHandler(w http.ResponseWriter, r *http.Request) {
@@ -620,6 +669,7 @@ func main() {
 	http.HandleFunc("/api/v1/greeks/live", liveGreeksHandler)
 	http.HandleFunc("/api/v1/arbitrage/check", arbitrageHandler)
 	http.HandleFunc("/api/v1/options/skew", skewHandler)
+	http.HandleFunc("/api/v1/spot", spotHandler)
 
 	// MOEX / Alor Handlers
 	http.HandleFunc("/api/v1/moex/quote", moexQuoteHandler)

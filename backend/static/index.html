@@ -37,12 +37,19 @@
 
         <!-- Capital & Portfolio Bar -->
         <div class="bg-slate-800/90 p-4 rounded-xl border border-emerald-500/30 flex flex-col md:flex-row justify-between items-center gap-4 font-mono">
-            <div class="flex flex-wrap items-center gap-4">
+            <div class="flex flex-wrap items-center gap-6">
                 <div>
                     <span class="text-xs text-slate-400 block">НАЧАЛЬНЫЙ КАПИТАЛ (₽)</span>
                     <div class="flex items-center gap-2 mt-1">
-                        <input id="input-initial-capital" type="number" value="1000000" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-36 focus:outline-none focus:border-emerald-500">
-                        <button onclick="saveInitialCapital()" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded transition">Сохранить</button>
+                        <input id="input-initial-capital" type="number" value="1000000" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-32 focus:outline-none focus:border-emerald-500">
+                        <button onclick="saveInitialCapital()" class="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded transition">Ок</button>
+                    </div>
+                </div>
+                <div>
+                    <span class="text-xs text-slate-400 block">ЦЕНА ФЬЮЧЕРСА / СПОТ (₽)</span>
+                    <div class="flex items-center gap-2 mt-1">
+                        <input id="input-spot-price" type="number" value="83395" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-32 focus:outline-none focus:border-indigo-500">
+                        <button onclick="saveSpotPrice()" class="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded transition">Установить</button>
                     </div>
                 </div>
                 <div class="hidden md:block h-8 w-px bg-slate-700"></div>
@@ -855,6 +862,30 @@
                 }
             } catch (e) {
                 alert("Ошибка при сохранении капитала");
+            }
+        }
+
+        async function saveSpotPrice() {
+            const val = document.getElementById('input-spot-price').value;
+            const price = parseFloat(val);
+            if (isNaN(price) || price <= 0) {
+                alert("Некорректная цена спот/фьючерса");
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/v1/spot', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol: currentAsset, price: price })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    updateDashboard();
+                    alert(`✅ Спот-цена для ${currentAsset} установлена: ₽${price.toLocaleString()}`);
+                }
+            } catch (e) {
+                alert("Ошибка при установке цены спот");
             }
         }
 
