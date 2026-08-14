@@ -21,6 +21,9 @@ import (
 //go:embed static/*
 var staticFiles embed.FS
 
+// Version: 1.0.1 - Initial capital widget added
+
+
 type GreeksRequest struct {
 	IsCall bool    `json:"is_call"`
 	S      float64 `json:"spot_price"`
