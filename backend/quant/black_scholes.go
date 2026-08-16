@@ -62,3 +62,35 @@ func CalculateBlackScholes(isCall bool, S, K, T, r, sigma float64) OptionGreeks 
 		Rho:   math.Round(rho*10000) / 10000,
 	}
 }
+
+// ImpliedVolatility inverts the Black-Scholes price to recover the volatility
+// that makes the model match the observed market price (Newton-Raphson).
+func ImpliedVolatility(isCall bool, marketPrice, S, K, T, r float64) float64 {
+	if T <= 0 || marketPrice <= 0 {
+		return 0
+	}
+
+	// Reasonable starting guess: at-the-money approximation.
+	sigma := 0.30
+	for i := 0; i < 100; i++ {
+		g := CalculateBlackScholes(isCall, S, K, T, r, sigma)
+		diff := g.Price - marketPrice
+		if math.Abs(diff) < 0.0001 {
+			break
+		}
+		// vega = dPrice/dSigma (per 1% move: /100), so scale accordingly.
+		vega := g.Vega * 100.0
+		if vega < 1e-9 {
+			break
+		}
+		step := diff / vega
+		sigma -= step
+		if sigma < 0.0001 {
+			sigma = 0.0001
+		}
+		if sigma > 5.0 {
+			sigma = 5.0
+		}
+	}
+	return math.Round(sigma*10000) / 10000
+}

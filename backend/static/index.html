@@ -619,7 +619,7 @@
             document.getElementById('modal-max-risk').innerText = `₽${Math.round(totalRisk).toLocaleString()}`;
             document.getElementById('modal-max-profit').innerText = `₽${Math.round(totalProfit).toLocaleString()}`;
             document.getElementById('modal-margin').innerText = `₽${Math.round(totalMargin).toLocaleString()}`;
-            document.getElementById('modal-theta').innerText = `+₽${Math.round(totalTheta).toLocaleString()} / day`;
+            document.getElementById('modal-theta').innerText = `${totalTheta >= 0 ? '+' : '−'}₽${Math.round(Math.abs(totalTheta)).toLocaleString()} / day (живые цены MOEX)`;
 
             let legsHtml = '';
             selectedStrategyData.baseLegs.forEach(leg => {
@@ -669,39 +669,135 @@
         function openParityStrategyModal() {
             const spot = currentSpotPrice;
             const strike = Math.round(spot / 1000) * 1000;
-            openStrategyModal(
-                `Put-Call Parity Arbitrage (${currentAsset})`,
-                'Conversion / Reversal',
-                [
-                    { action: 'SELL', symbol: `${currentAsset}${strike}C (Call)`, qty: 5, price: '≈ 0.5% премии' },
-                    { action: 'BUY', symbol: `${currentAsset}${strike}P (Put)`, qty: 5, price: '≈ 0.5% премии' },
-                    { action: 'BUY', symbol: `${currentAsset} Futures`, qty: 5, price: `${Math.round(spot).toLocaleString()} ₽` }
-                ],
-                4000,
-                8500,
-                22000,
-                350
-            );
+
+            // Live real data from MOEX ISS (prices, GO, implied vol, theta).
+            fetch(`/api/v1/strategy/parity?symbol=${currentAsset}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data && data.call_found && data.put_found && data.call.price > 0 && data.put.price > 0) {
+                        const callPrice = Math.round(data.call.price);
+                        const putPrice = Math.round(data.put.price);
+                        const futurePrice = Math.round(data.spot_price);
+                        const callSecid = data.call.secid;
+                        const putSecid = data.put.secid;
+                        const seriesCode = data.series || `${currentAsset}U6`;
+
+                        const pnlPerContract = Math.round((data.reversal_pnl > data.conversion_pnl ? data.reversal_pnl : data.conversion_pnl) * 100) / 100;
+                        const useReversal = data.reversal_pnl >= data.conversion_pnl;
+                        const legs = useReversal ? [
+                            { action: 'BUY', symbol: `${callSecid} (Call)`, qty: 10, price: `${callPrice.toLocaleString()} ₽` },
+                            { action: 'SELL', symbol: `${putSecid} (Put)`, qty: 10, price: `${putPrice.toLocaleString()} ₽` },
+                            { action: 'SELL', symbol: `${seriesCode} Futures`, qty: 10, price: `${futurePrice.toLocaleString()} ₽` }
+                        ] : [
+                            { action: 'SELL', symbol: `${callSecid} (Call)`, qty: 10, price: `${callPrice.toLocaleString()} ₽` },
+                            { action: 'BUY', symbol: `${putSecid} (Put)`, qty: 10, price: `${putPrice.toLocaleString()} ₽` },
+                            { action: 'BUY', symbol: `${seriesCode} Futures`, qty: 10, price: `${futurePrice.toLocaleString()} ₽` }
+                        ];
+
+                        openStrategyModal(
+                            `Put-Call Parity Arbitrage (${currentAsset}) — ${useReversal ? 'Reversal' : 'Conversion'}`,
+                            'Conversion / Reversal',
+                            legs,
+                            Math.max(0, pnlPerContract * 10),
+                            Math.max(pnlPerContract * 10, 0),
+                            data.total_margin * 10,
+                            Math.max(data.theta_per_contract * 10, 0)
+                        );
+                    } else {
+                        // Fallback to approximate modal if live chain is unavailable.
+                        openStrategyModal(
+                            `Put-Call Parity Arbitrage (${currentAsset})`,
+                            'Conversion / Reversal',
+                            [
+                                { action: 'SELL', symbol: `${currentAsset}${strike}C (Call)`, qty: 5, price: '≈ 0.5% премии' },
+                                { action: 'BUY', symbol: `${currentAsset}${strike}P (Put)`, qty: 5, price: '≈ 0.5% премии' },
+                                { action: 'BUY', symbol: `${currentAsset} Futures`, qty: 5, price: `${Math.round(spot).toLocaleString()} ₽` }
+                            ],
+                            4000,
+                            8500,
+                            22000,
+                            350
+                        );
+                    }
+                })
+                .catch(() => {
+                    openStrategyModal(
+                        `Put-Call Parity Arbitrage (${currentAsset})`,
+                        'Conversion / Reversal',
+                        [
+                            { action: 'SELL', symbol: `${currentAsset}${strike}C (Call)`, qty: 5, price: '≈ 0.5% премии' },
+                            { action: 'BUY', symbol: `${currentAsset}${strike}P (Put)`, qty: 5, price: '≈ 0.5% премии' },
+                            { action: 'BUY', symbol: `${currentAsset} Futures`, qty: 5, price: `${Math.round(spot).toLocaleString()} ₽` }
+                        ],
+                        4000,
+                        8500,
+                        22000,
+                        350
+                    );
+                });
         }
 
         function openTdssStrategyModal(stratName) {
             const spot = currentSpotPrice;
-            const step = Math.round(spot * 0.02 / 1000) * 1000 || 1000;
-            const s = Math.round(spot / 1000) * 1000;
-            openStrategyModal(
-                `${stratName} (${currentAsset})`,
-                'Iron Condor',
-                [
-                    { action: 'SELL', symbol: `${currentAsset}${s - step}P (Put)`, qty: 10, price: '≈ 1% премии' },
-                    { action: 'BUY', symbol: `${currentAsset}${s - 2 * step}P (Put)`, qty: 10, price: '≈ 0.4% премии' },
-                    { action: 'SELL', symbol: `${currentAsset}${s + step}C (Call)`, qty: 10, price: '≈ 1% премии' },
-                    { action: 'BUY', symbol: `${currentAsset}${s + 2 * step}C (Call)`, qty: 10, price: '≈ 0.4% премии' }
-                ],
-                12000,
-                10300,
-                28000,
-                1250
-            );
+
+            // Live real data from MOEX ISS for a market Iron Condor.
+            fetch(`/api/v1/strategy/ironcondor?symbol=${currentAsset}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data && data.legs && data.legs.length === 4) {
+                        const legs = data.legs.map(l => ({
+                            action: l.action,
+                            symbol: `${l.secid} (${l.action === 'SELL' ? (l.strike < data.spot_price ? 'Put' : 'Call') : (l.strike < data.spot_price ? 'Put' : 'Call')})`,
+                            qty: 10,
+                            price: `${Math.round(l.price).toLocaleString()} ₽`
+                        }));
+                        openStrategyModal(
+                            `${stratName} (${currentAsset}) — Iron Condor`,
+                            'Iron Condor',
+                            legs,
+                            Math.max(data.max_loss * 10, 0),
+                            Math.max(data.max_profit * 10, 0),
+                            Math.abs(data.max_loss) * 10,
+                            Math.max(data.theta_per_contract * 10, 0)
+                        );
+                    } else {
+                        // Fallback.
+                        const step = Math.round(spot * 0.02 / 1000) * 1000 || 1000;
+                        const s = Math.round(spot / 1000) * 1000;
+                        openStrategyModal(
+                            `${stratName} (${currentAsset})`,
+                            'Iron Condor',
+                            [
+                                { action: 'SELL', symbol: `${currentAsset}${s - step}P (Put)`, qty: 10, price: '≈ 1% премии' },
+                                { action: 'BUY', symbol: `${currentAsset}${s - 2 * step}P (Put)`, qty: 10, price: '≈ 0.4% премии' },
+                                { action: 'SELL', symbol: `${currentAsset}${s + step}C (Call)`, qty: 10, price: '≈ 1% премии' },
+                                { action: 'BUY', symbol: `${currentAsset}${s + 2 * step}C (Call)`, qty: 10, price: '≈ 0.4% премии' }
+                            ],
+                            12000,
+                            10300,
+                            28000,
+                            1250
+                        );
+                    }
+                })
+                .catch(() => {
+                    const step = Math.round(spot * 0.02 / 1000) * 1000 || 1000;
+                    const s = Math.round(spot / 1000) * 1000;
+                    openStrategyModal(
+                        `${stratName} (${currentAsset})`,
+                        'Iron Condor',
+                        [
+                            { action: 'SELL', symbol: `${currentAsset}${s - step}P (Put)`, qty: 10, price: '≈ 1% премии' },
+                            { action: 'BUY', symbol: `${currentAsset}${s - 2 * step}P (Put)`, qty: 10, price: '≈ 0.4% премии' },
+                            { action: 'SELL', symbol: `${currentAsset}${s + step}C (Call)`, qty: 10, price: '≈ 1% премии' },
+                            { action: 'BUY', symbol: `${currentAsset}${s + 2 * step}C (Call)`, qty: 10, price: '≈ 0.4% премии' }
+                        ],
+                        12000,
+                        10300,
+                        28000,
+                        1250
+                    );
+                });
         }
 
         function closeStrategyModal() {

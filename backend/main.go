@@ -59,7 +59,7 @@ func greeksHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 var (
-	// Version: 1.1.0 - Encrypted Alor token settings + MOEX ISS live prices
+	// Version: 1.2.0 - Real MOEX option prices, GO and parity strategy via ISS
 
 	spotOverrides = map[string]float64{}
 	spotMu        sync.Mutex
@@ -274,6 +274,165 @@ func moexISSSpotPrice(secid string) (float64, error) {
 		return 0, fmt.Errorf("moex iss: LAST not a number")
 	}
 	return last, nil
+}
+
+// optionContract describes a MOEX FORTS option: SECID, underlying asset code,
+// strike, call/put flag, expiry date and exchange margin (GO) figures.
+type optionContract struct {
+	SecID     string  // e.g. "Si85000BI6"
+	AssetCode string  // e.g. "Si"
+	Expiry    string  // e.g. "2026-09-17"
+	Strike    float64 // e.g. 85000
+	IsCall    bool
+	IMNP      float64 // GO for a short option position (seller)
+	IMP       float64 // GO for a long option position (buyer)
+	PrevPrice float64
+}
+
+var (
+	optionCache     []optionContract
+	optionCacheTime time.Time
+	optionMu        sync.Mutex
+)
+
+// moexOptionContracts fetches the full FORTS options list (SECID, strike,
+// call/put, expiry, margins) from the public MOEX ISS API, cached.
+// The ISS options endpoint cannot filter by asset, so we filter in Go.
+func moexOptionContracts() ([]optionContract, error) {
+	optionMu.Lock()
+	defer optionMu.Unlock()
+	if len(optionCache) > 0 && time.Since(optionCacheTime) < 10*time.Minute {
+		return optionCache, nil
+	}
+
+	url := "http://iss.moex.com/iss/engines/futures/markets/options/boards/RFUD/securities.json?iss.meta=off&iss.only=securities&securities.columns=SECID,LASTDELDATE,ASSETCODE,OPTIONTYPE,STRIKE,IMNP,IMP,PREVPRICE"
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var data struct {
+		Securities struct {
+			Data [][]interface{} `json:"data"`
+		} `json:"securities"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+
+	var opts []optionContract
+	for _, row := range data.Securities.Data {
+		if len(row) < 8 {
+			continue
+		}
+		secid, _ := row[0].(string)
+		expiry, _ := row[1].(string)
+		asset, _ := row[2].(string)
+		otype, _ := row[3].(string)
+		strike, _ := row[4].(float64)
+		imnp, _ := row[5].(float64)
+		imp, _ := row[6].(float64)
+		prev, _ := row[7].(float64)
+		if secid == "" || asset == "" {
+			continue
+		}
+		opts = append(opts, optionContract{
+			SecID:     secid,
+			AssetCode: asset,
+			Expiry:    expiry,
+			Strike:    strike,
+			IsCall:    otype == "C",
+			IMNP:      imnp,
+			IMP:       imp,
+			PrevPrice: prev,
+		})
+	}
+
+	optionCache = opts
+	optionCacheTime = time.Now()
+	return opts, nil
+}
+
+// moexOptionsForAsset returns the option chain for a given underlying asset
+// (Si, RI, CR) and expiry date, filtered from the cached full list.
+// ISS uses different asset codes than our UI symbols: RI->RTS, CR->CNY.
+func moexOptionsForAsset(asset, expiry string) []optionContract {
+	issAsset := asset
+	switch asset {
+	case "RI":
+		issAsset = "RTS"
+	case "CR":
+		issAsset = "CNY"
+	}
+	opts, err := moexOptionContracts()
+	if err != nil {
+		return nil
+	}
+	var out []optionContract
+	for _, o := range opts {
+		if o.AssetCode == issAsset && o.Expiry == expiry {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// moexOptionQuote fetches the live LAST/BID/OFFER for an option SECID.
+func moexOptionQuote(secid string) (last, bid, offer float64, err error) {
+	url := fmt.Sprintf("http://iss.moex.com/iss/engines/futures/markets/options/boards/RFUD/securities/%s.json?iss.meta=off&iss.only=marketdata&marketdata.columns=SECID,LAST,BID,OFFER", secid)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("moex iss option request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, 0, fmt.Errorf("moex iss option status: %d", resp.StatusCode)
+	}
+
+	var issResp struct {
+		Marketdata struct {
+			Data [][]interface{} `json:"data"`
+		} `json:"marketdata"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&issResp); err != nil {
+		return 0, 0, 0, fmt.Errorf("moex iss option decode failed: %w", err)
+	}
+
+	if len(issResp.Marketdata.Data) == 0 || len(issResp.Marketdata.Data[0]) < 4 {
+		return 0, 0, 0, fmt.Errorf("moex iss: no option data for %s", secid)
+	}
+
+	row := issResp.Marketdata.Data[0]
+	last, _ = row[1].(float64)
+	bid, _ = row[2].(float64)
+	offer, _ = row[3].(float64)
+	if last <= 0 {
+		last = bid
+	}
+	return last, bid, offer, nil
+}
+
+// nearestStrike returns the option strike closest to the spot price from the
+// given chain (falling back to spot rounded to the asset step).
+func nearestStrike(chain []optionContract, spot float64) float64 {
+	if len(chain) == 0 {
+		return spot
+	}
+	best := chain[0].Strike
+	bestDist := math.Abs(best - spot)
+	for _, o := range chain {
+		d := math.Abs(o.Strike - spot)
+		if d < bestDist {
+			best = o.Strike
+			bestDist = d
+		}
+	}
+	return best
 }
 
 // futuresSeriesAlor converts a MOEX series code (e.g. "SiU6") into the
@@ -986,6 +1145,423 @@ func currentSeriesExpiry(symbol string) *time.Time {
 	return nil
 }
 
+// strategyParityHandler computes a real put-call parity (Conversion / Reversal)
+// for the current series using live MOEX ISS option prices and exchange margins.
+// URL: /api/v1/strategy/parity?symbol=Si
+func strategyParityHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "Si"
+	}
+
+	spot, err := getSpotPrice(symbol)
+	if err != nil || spot <= 0 {
+		spot = 83200.0
+	}
+
+	seriesMu.Lock()
+	seriesCode := selectedSeries[symbol]
+	seriesMu.Unlock()
+
+	expiry := ""
+	expiryTime := currentSeriesExpiry(symbol)
+	if expiryTime != nil {
+		expiry = expiryTime.Format("2006-01-02")
+	}
+
+	chain := moexOptionsForAsset(symbol, expiry)
+	strike := nearestStrike(chain, spot)
+
+	var callOpt, putOpt *optionContract
+	for i := range chain {
+		if chain[i].Strike == strike {
+			if chain[i].IsCall && callOpt == nil {
+				callOpt = &chain[i]
+			} else if !chain[i].IsCall && putOpt == nil {
+				putOpt = &chain[i]
+			}
+		}
+	}
+
+	response := map[string]interface{}{
+		"symbol":       symbol,
+		"series":       seriesCode,
+		"expiry":       expiry,
+		"days_to_exp":  dteInDays(expiry, time.Now()),
+		"spot_price":   spot,
+		"strike":       strike,
+		"chain_count":  len(chain),
+		"call_found":   callOpt != nil,
+		"put_found":    putOpt != nil,
+		"note":         "Live MOEX ISS prices",
+	}
+
+	if callOpt == nil || putOpt == nil {
+		response["error"] = "option chain not found for strike " + fmt.Sprintf("%.0f", strike)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Live market prices.
+	callLast, callBid, callOffer, _ := moexOptionQuote(callOpt.SecID)
+	putLast, putBid, putOffer, _ := moexOptionQuote(putOpt.SecID)
+	if callLast <= 0 {
+		callLast = callOpt.PrevPrice
+	}
+	if putLast <= 0 {
+		putLast = putOpt.PrevPrice
+	}
+
+	days := dteInDays(expiry, time.Now())
+	if days <= 0 {
+		days = 30
+	}
+	t := float64(days) / 365.0
+	rRate := 0.16 // MOEX Key rate / RUONIA approximation
+
+	// Implied volatilities recovered from real market prices.
+	callIV := quant.ImpliedVolatility(true, callLast, spot, strike, t, rRate)
+	putIV := quant.ImpliedVolatility(false, putLast, spot, strike, t, rRate)
+	iv := (callIV + putIV) / 2.0
+	if callIV <= 0 && putIV > 0 {
+		iv = putIV
+	} else if putIV <= 0 && callIV > 0 {
+		iv = callIV
+	}
+
+	// Theoretical prices + greeks at the market IV.
+	callG := quant.CalculateBlackScholes(true, spot, strike, t, rRate, iv)
+	putG := quant.CalculateBlackScholes(false, spot, strike, t, rRate, iv)
+
+	// Put-call parity for futures options (Black-76): C - P == (F - K) * exp(-rT).
+	discount := math.Exp(-rRate * t)
+	theoreticalDiff := (spot - strike) * discount
+	actualDiff := callLast - putLast
+	paritySpread := actualDiff - theoreticalDiff
+
+	// Conversion: Sell Call, Buy Put, Buy Future -> locked profit = C - P + (K - F).
+	conversionPnl := callLast - putLast + (strike - spot)
+	reversalPnl := -conversionPnl
+
+	strategy := "No Arbitrage"
+	if paritySpread > 30.0 {
+		strategy = "Conversion (Sell Call, Buy Put, Buy Future)"
+	} else if paritySpread < -30.0 {
+		strategy = "Reversal (Buy Call, Sell Put, Sell Future)"
+	}
+
+	// Real margins: short option GO (IMNP) + futures initial margin (INITIALMARGIN).
+	futureMargin := 0.0
+	for _, fc := range futuresContractsForSymbol(symbol) {
+		if fc.Code == seriesCode {
+			if m := moexFutureInitialMargin(fc.Code); m > 0 {
+				futureMargin = m
+			}
+			break
+		}
+	}
+	shortOptionGO := callOpt.IMNP // selling the call locks this margin
+	if strategy == "Reversal" {
+		shortOptionGO = putOpt.IMNP
+	}
+	totalMargin := shortOptionGO + futureMargin
+
+	// Position theta: short call (-theta) + long put (+theta), per contract.
+	thetaPerContract := -callG.Theta + putG.Theta
+
+	response["call"] = map[string]interface{}{
+		"secid":         callOpt.SecID,
+		"price":         callLast,
+		"bid":           callBid,
+		"offer":         callOffer,
+		"implied_vol":   callIV * 100,
+		"theoretical":   callG.Price,
+		"theta":         callG.Theta,
+		"delta":         callG.Delta,
+		"margin_short":  callOpt.IMNP,
+	}
+	response["put"] = map[string]interface{}{
+		"secid":         putOpt.SecID,
+		"price":         putLast,
+		"bid":           putBid,
+		"offer":         putOffer,
+		"implied_vol":   putIV * 100,
+		"theoretical":   putG.Price,
+		"theta":         putG.Theta,
+		"delta":         putG.Delta,
+		"margin_short":  putOpt.IMNP,
+	}
+	response["theoretical_diff"] = math.Round(theoreticalDiff*100) / 100
+	response["actual_diff"] = math.Round(actualDiff*100) / 100
+	response["parity_spread"] = math.Round(paritySpread*100) / 100
+	response["conversion_pnl"] = math.Round(conversionPnl*100) / 100
+	response["reversal_pnl"] = math.Round(reversalPnl*100) / 100
+	response["strategy"] = strategy
+	response["implied_vol"] = math.Round(iv*10000) / 100
+	response["future_margin"] = math.Round(futureMargin*100) / 100
+	response["short_option_go"] = math.Round(shortOptionGO*100) / 100
+	response["total_margin"] = math.Round(totalMargin*100) / 100
+	response["theta_per_contract"] = math.Round(thetaPerContract*100) / 100
+	response["risk_free"] = rRate
+
+	json.NewEncoder(w).Encode(response)
+}
+
+// strategyIronCondorHandler computes a real Iron Condor (TDSS) using live MOEX
+// ISS option prices and margins: sell OTM put, buy further OTM put, sell OTM
+// call, buy further OTM call.
+// URL: /api/v1/strategy/ironcondor?symbol=Si&width=1
+func strategyIronCondorHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "Si"
+	}
+	widthStr := r.URL.Query().Get("width")
+	width := 1.0
+	if widthStr != "" {
+		width, _ = strconv.ParseFloat(widthStr, 64)
+	}
+	if width < 0.5 {
+		width = 1.0
+	}
+
+	spot, err := getSpotPrice(symbol)
+	if err != nil || spot <= 0 {
+		spot = 83200.0
+	}
+
+	seriesMu.Lock()
+	seriesCode := selectedSeries[symbol]
+	seriesMu.Unlock()
+
+	expiry := ""
+	expiryTime := currentSeriesExpiry(symbol)
+	if expiryTime != nil {
+		expiry = expiryTime.Format("2006-01-02")
+	}
+
+	chain := moexOptionsForAsset(symbol, expiry)
+
+	atmStrike := nearestStrike(chain, spot)
+
+	// Collect unique strikes sorted ascending.
+	seen := map[float64]bool{}
+	var strikes []float64
+	for _, o := range chain {
+		if !seen[o.Strike] {
+			seen[o.Strike] = true
+			strikes = append(strikes, o.Strike)
+		}
+	}
+	for i := 0; i < len(strikes); i++ {
+		for j := i + 1; j < len(strikes); j++ {
+			if strikes[j] < strikes[i] {
+				strikes[i], strikes[j] = strikes[j], strikes[i]
+			}
+		}
+	}
+
+	// Step = most common distance between adjacent strikes near ATM.
+	step := 0.0
+	freq := map[float64]int{}
+	for i := 1; i < len(strikes); i++ {
+		d := math.Round((strikes[i]-strikes[i-1])*10000) / 10000
+		if d > 0 {
+			freq[d]++
+		}
+	}
+	for d, c := range freq {
+		if c > 0 && d > 0 && (step == 0 || c > freq[step]) {
+			step = d
+		}
+	}
+	if step <= 0 {
+		step = 1000.0
+		if symbol == "RI" {
+			step = 2000.0
+		} else if symbol == "CR" {
+			step = 0.1
+		}
+	}
+
+	// Find strikes as neighbours of the ATM strike in the sorted list:
+	// sell put = 1 below ATM, buy put = 2 below, sell call = 1 above, buy call = 2 above.
+	atmIdx := -1
+	for i, s := range strikes {
+		if s == atmStrike {
+			atmIdx = i
+			break
+		}
+	}
+	var sellPutStrike, buyPutStrike, sellCallStrike, buyCallStrike float64
+	if atmIdx >= 0 {
+		if atmIdx-1 >= 0 {
+			sellPutStrike = strikes[atmIdx-1]
+		}
+		if atmIdx-2 >= 0 {
+			buyPutStrike = strikes[atmIdx-2]
+		}
+		if atmIdx+1 < len(strikes) {
+			sellCallStrike = strikes[atmIdx+1]
+		}
+		if atmIdx+2 < len(strikes) {
+			buyCallStrike = strikes[atmIdx+2]
+		}
+	}
+	// If ATM not found, fall back to nearest below/above scan.
+	if atmIdx < 0 {
+		for _, s := range strikes {
+			if s < atmStrike && sellPutStrike == 0 {
+				sellPutStrike = s
+			}
+			if s > atmStrike && sellCallStrike == 0 {
+				sellCallStrike = s
+			}
+		}
+	}
+
+	findOpt := func(strike float64, isCall bool) *optionContract {
+		for i := range chain {
+			if chain[i].Strike == strike && chain[i].IsCall == isCall {
+				return &chain[i]
+			}
+		}
+		return nil
+	}
+
+	sellPut := findOpt(sellPutStrike, false)
+	buyPut := findOpt(buyPutStrike, false)
+	sellCall := findOpt(sellCallStrike, true)
+	buyCall := findOpt(buyCallStrike, true)
+
+	response := map[string]interface{}{
+		"symbol":       symbol,
+		"series":       seriesCode,
+		"expiry":       expiry,
+		"days_to_exp":  dteInDays(expiry, time.Now()),
+		"spot_price":   spot,
+		"atm_strike":   atmStrike,
+		"step":         step,
+		"note":         "Live MOEX ISS prices",
+		"sell_put":     sellPut != nil,
+		"buy_put":      buyPut != nil,
+		"sell_call":    sellCall != nil,
+		"buy_call":     buyCall != nil,
+	}
+
+	if sellPut == nil || buyPut == nil || sellCall == nil || buyCall == nil {
+		response["error"] = "iron condor legs not found for strikes"
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	days := dteInDays(expiry, time.Now())
+	if days <= 0 {
+		days = 30
+	}
+	t := float64(days) / 365.0
+	rRate := 0.16
+
+	legs := []struct {
+		opt    *optionContract
+		isCall bool
+	}{
+		{sellPut, false}, {buyPut, false}, {sellCall, true}, {buyCall, true},
+	}
+
+	type legOut struct {
+		SecID        string  `json:"secid"`
+		Action       string  `json:"action"`
+		Strike       float64 `json:"strike"`
+		Price        float64 `json:"price"`
+		Theta        float64 `json:"theta"`
+		Delta        float64 `json:"delta"`
+		MarginShort  float64 `json:"margin_short"`
+	}
+
+	var legResults []legOut
+	credit := 0.0
+	thetaTotal := 0.0
+	for i, lg := range legs {
+		last, _, _, _ := moexOptionQuote(lg.opt.SecID)
+		if last <= 0 {
+			last = lg.opt.PrevPrice
+		}
+		iv := quant.ImpliedVolatility(lg.isCall, last, spot, lg.opt.Strike, t, rRate)
+		if iv <= 0 {
+			iv = 0.30
+		}
+		g := quant.CalculateBlackScholes(lg.isCall, spot, lg.opt.Strike, t, rRate, iv)
+
+		isShort := i == 0 || i == 2 // sell put / sell call
+		action := "BUY"
+		thetaSign := 1.0
+		if isShort {
+			action = "SELL"
+			credit += last
+			thetaSign = -1.0
+		} else {
+			credit -= last
+		}
+		thetaTotal += thetaSign * g.Theta
+
+		legResults = append(legResults, legOut{
+			SecID:       lg.opt.SecID,
+			Action:      action,
+			Strike:      lg.opt.Strike,
+			Price:       math.Round(last*100) / 100,
+			Theta:       math.Round(thetaSign*g.Theta*100) / 100,
+			Delta:       math.Round(g.Delta*100) / 100,
+			MarginShort: lg.opt.IMNP,
+		})
+	}
+
+	// Iron condor max profit = net credit; max loss = credit - wing width.
+	wingWidth := buyCallStrike - sellCallStrike
+	if wingWidth <= 0 {
+		wingWidth = buyPutStrike - sellPutStrike
+	}
+	maxLoss := credit - wingWidth
+
+	response["legs"] = legResults
+	response["net_credit"] = math.Round(credit*100) / 100
+	response["width_step"] = math.Round(wingWidth*10000) / 10000
+	response["max_profit"] = math.Round(credit*100) / 100
+	response["max_loss"] = math.Round(maxLoss*100) / 100
+	response["theta_per_contract"] = math.Round(thetaTotal*100) / 100
+
+	json.NewEncoder(w).Encode(response)
+}
+
+// moexFutureInitialMargin fetches the exchange initial margin (INITIALMARGIN)
+// for a FORTS futures contract from MOEX ISS securities description.
+func moexFutureInitialMargin(secid string) float64 {
+	url := fmt.Sprintf("http://iss.moex.com/iss/engines/futures/markets/forts/boards/RFUD/securities/%s.json?iss.meta=off&iss.only=securities&securities.columns=SECID,INITIALMARGIN", secid)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+
+	var issResp struct {
+		Securities struct {
+			Data [][]interface{} `json:"data"`
+		} `json:"securities"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&issResp); err != nil {
+		return 0
+	}
+	if len(issResp.Securities.Data) == 0 || len(issResp.Securities.Data[0]) < 2 {
+		return 0
+	}
+	m, _ := issResp.Securities.Data[0][1].(float64)
+	return m
+}
+
 func optionsRecommendationsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	ivStr := r.URL.Query().Get("iv")
@@ -1139,6 +1715,8 @@ func main() {
 	http.HandleFunc("/api/v1/moex/arbitrage", moexArbitrageHandler)
 	http.HandleFunc("/api/v1/moex/order", moexOrderHandler)
 	http.HandleFunc("/api/v1/moex/perp-quarterly", moexPerpQuarterlyHandler)
+	http.HandleFunc("/api/v1/strategy/parity", strategyParityHandler)
+	http.HandleFunc("/api/v1/strategy/ironcondor", strategyIronCondorHandler)
 	http.HandleFunc("/api/v1/series", seriesInfoHandler)
 	http.HandleFunc("/api/v1/series/set", setSeriesHandler)
 
