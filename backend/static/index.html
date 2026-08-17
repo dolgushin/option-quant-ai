@@ -725,28 +725,37 @@
 
         function openBasisStrategyModal() {
             const perp = currentPerpQuarterly;
-            let quarterlyPrice, perpPrice, qSeries;
+            let quarterlyPrice, perpPrice, qSeries, curSeries;
             if (perp && perp.quarterly_price && perp.perpetual_price) {
                 quarterlyPrice = Math.round(perp.quarterly_price);
                 perpPrice = Math.round(perp.perpetual_price);
                 qSeries = perp.quarterly_series || `${currentAsset}U6`;
+                curSeries = perp.series || `${currentAsset}U6`;
             } else {
                 const spot = currentSpotPrice;
                 quarterlyPrice = Math.round(spot * 1.012);
                 perpPrice = Math.round(spot);
                 qSeries = `${currentAsset}U6`;
+                curSeries = `${currentAsset}U6`;
             }
+
+            // Spread in points × contract multiplier × lot size = rough P&L for
+            // a basis convergence trade. Both legs are REAL futures contracts.
+            const mult = (currentAsset === 'RI' ? 100 : currentAsset === 'CR' ? 1000 : 1000);
+            const spreadPts = Math.abs(quarterlyPrice - perpPrice);
+            const spreadPnl = Math.round(spreadPts * mult * 10);
+
             openStrategyModal(
-                `Basis Arbitrage (${currentAsset} Perpetual vs Quarterly)`,
+                `Basis Arbitrage (${curSeries} vs ${qSeries})`,
                 'Basis Arbitrage',
                 [
-                    { action: 'SELL', symbol: `${qSeries} (Quarterly)`, qty: 10, price: `${quarterlyPrice.toLocaleString()} ₽` },
-                    { action: 'BUY', symbol: `${currentAsset} (Perpetual)`, qty: 10, price: `${perpPrice.toLocaleString()} ₽` }
+                    { action: 'SELL', symbol: `${qSeries} (Quarterly)`, secid: qSeries, kind: 'FUTURES', qty: 10, price: `${quarterlyPrice.toLocaleString()} ₽` },
+                    { action: 'BUY', symbol: `${curSeries} (Current)`, secid: curSeries, kind: 'FUTURES', qty: 10, price: `${perpPrice.toLocaleString()} ₽` }
                 ],
-                2500,
-                7000,
-                14500,
-                120
+                spreadPnl,
+                spreadPnl,
+                Math.round(spreadPts * mult * 10),
+                0
             );
         }
 
@@ -821,31 +830,49 @@
                 });
         }
 
+        function strategyTypeFromName(name) {
+            const n = name.toLowerCase();
+            if (n.includes('condor')) return 'iron_condor';
+            if (n.includes('butterfly')) return 'iron_butterfly';
+            if (n.includes('bull') && n.includes('put')) return 'bull_put_spread';
+            if (n.includes('bear') && n.includes('call')) return 'bear_call_spread';
+            if (n.includes('bull') && n.includes('call')) return 'bull_call_spread';
+            if (n.includes('bear') && n.includes('put')) return 'bear_put_spread';
+            if (n.includes('gamma') || n.includes('scalping') || n.includes('straddle')) return 'long_volatility';
+            return 'iron_condor';
+        }
+
         function openTdssStrategyModal(stratName) {
             const spot = currentSpotPrice;
+            const strategy = strategyTypeFromName(stratName);
 
-            // Live real data from MOEX ISS for a market Iron Condor.
-            fetch(`/api/v1/strategy/ironcondor?symbol=${currentAsset}`)
+            if (strategy === 'long_volatility') {
+                alert('Стратегия "Long Volatility & Gamma Scalping" требует активного дельта-хеджирования и не может быть построена как статичный портфель. Используйте кондор/бабочку/спреды.');
+                return;
+            }
+
+            // Live real data from MOEX ISS for the actual strategy legs.
+            fetch(`/api/v1/strategy/build?strategy=${strategy}&symbol=${currentAsset}`)
                 .then(res => res.json())
                 .then(data => {
-                    if (data && data.legs && data.legs.length === 4) {
+                    if (data && data.legs && data.legs.length >= 2) {
                         const legs = data.legs.map(l => ({
                             action: l.action,
-                            symbol: `${l.secid} (${l.strike < data.spot_price ? 'Put' : 'Call'})`,
+                            symbol: `${l.secid} (${l.is_call ? 'Call' : 'Put'})`,
                             secid: l.secid,
                             kind: 'OPTION',
                             strike: l.strike,
-                            isCall: l.strike >= data.spot_price,
+                            isCall: l.is_call,
                             qty: 10,
                             price: `${Math.round(l.price).toLocaleString()} ₽`
                         }));
                         openStrategyModal(
-                            `${stratName} (${currentAsset}) — Iron Condor`,
-                            'Iron Condor',
+                            `${stratName} (${currentAsset}) — ${data.strategy_name}`,
+                            data.strategy_name,
                             legs,
-                            Math.max(data.max_loss * 10, 0),
-                            Math.max(data.max_profit * 10, 0),
-                            Math.abs(data.max_loss) * 10,
+                            Math.max(data.max_loss, 0) * 10,
+                            Math.max(data.max_profit, 0) * 10,
+                            data.margin_short_total * 10,
                             Math.max(data.theta_per_contract * 10, 0)
                         );
                     } else {
@@ -892,20 +919,70 @@
             document.getElementById('strategy-modal').classList.add('hidden');
         }
 
+        function computePayoffFromLegs(legs, mult) {
+            const parsed = (legs || []).map(l => {
+                const isFut = (l.kind === 'FUTURES') || (parseNumeric(l.strike, 0) === 0 && !l.isCall && l.action !== undefined);
+                return {
+                    action: l.action,
+                    strike: parseNumeric(l.strike, isFut ? 0 : null),
+                    isCall: !!l.isCall,
+                    isFut,
+                    qty: (parseNumeric(l.qty, 1) || 1) * mult,
+                    premium: parseNumeric(l.price, 0)
+                };
+            });
+            if (!parsed.length || parsed.some(p => p.strike === null)) return null;
+
+            const strikes = parsed.filter(p => !p.isFut).map(p => p.strike);
+            const minS = Math.min(...strikes);
+            const maxS = Math.max(...strikes);
+            const span = Math.max(maxS - minS, 1);
+            const lo = minS - span * 1.2;
+            const hi = maxS + span * 1.2;
+
+            const labels = [];
+            const data = [];
+            for (let i = 0; i <= 40; i++) {
+                const S = lo + (hi - lo) * i / 40;
+                let pnl = 0;
+                parsed.forEach(p => {
+                    if (p.isFut) {
+                        const isShort = p.action === 'SELL';
+                        pnl += (isShort ? p.premium - S : S - p.premium) * p.qty;
+                        return;
+                    }
+                    const payoff = p.isCall ? Math.max(0, S - p.strike) : Math.max(0, p.strike - S);
+                    const isShort = p.action === 'SELL';
+                    pnl += (isShort ? p.premium - payoff : payoff - p.premium) * p.qty;
+                });
+                labels.push(Math.round(S).toLocaleString());
+                data.push(Math.round(pnl * 100) / 100);
+            }
+            return { labels, data };
+        }
+
         function initPayoffChart(type, mult = 1) {
             const ctx = document.getElementById('payoffChart').getContext('2d');
             if (payoffChartInstance) {
                 payoffChartInstance.destroy();
             }
 
-            let labels = [89000, 91000, 93000, 95000, 97000];
-            let data = [-12000 * mult, 4000 * mult, 10300 * mult, 4000 * mult, -12000 * mult];
-            if (type === 'Basis Arbitrage') {
-                labels = ['-2%', '-1%', '0', '+1%', '+2%'];
-                data = [2000 * mult, 4000 * mult, 7000 * mult, 10000 * mult, 12500 * mult];
-            } else if (type === 'Conversion / Reversal') {
-                labels = ['88k', '90k', '92k', '94k', '96k'];
-                data = [8500 * mult, 8500 * mult, 8500 * mult, 8500 * mult, 8500 * mult];
+            let labels, data;
+            const real = computePayoffFromLegs(selectedStrategyData && selectedStrategyData.baseLegs, mult);
+            if (real) {
+                labels = real.labels;
+                data = real.data;
+            } else {
+                // Fallback only when real legs have no numeric strikes (e.g. basis).
+                labels = [89000, 91000, 93000, 95000, 97000];
+                data = [-12000 * mult, 4000 * mult, 10300 * mult, 4000 * mult, -12000 * mult];
+                if (type === 'Basis Arbitrage') {
+                    labels = ['-2%', '-1%', '0', '+1%', '+2%'];
+                    data = [2000 * mult, 4000 * mult, 7000 * mult, 10000 * mult, 12500 * mult];
+                } else if (type === 'Conversion / Reversal') {
+                    labels = ['88k', '90k', '92k', '94k', '96k'];
+                    data = [8500 * mult, 8500 * mult, 8500 * mult, 8500 * mult, 8500 * mult];
+                }
             }
 
             payoffChartInstance = new Chart(ctx, {

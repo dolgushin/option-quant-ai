@@ -1971,6 +1971,255 @@ func strategyIronCondorHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// strategyBuildHandler builds real option legs for any supported TDSS strategy
+// using live MOEX ISS prices and exchange margin (IMNP for shorts, IMP for longs).
+// URL: /api/v1/strategy/build?strategy=iron_condor&symbol=Si
+// Supported strategies: iron_condor, iron_butterfly, bull_put_spread,
+// bear_call_spread, bull_call_spread, bear_put_spread.
+func strategyBuildHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	strategy := r.URL.Query().Get("strategy")
+	if strategy == "" {
+		strategy = "iron_condor"
+	}
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "Si"
+	}
+
+	spot, err := getSpotPrice(symbol)
+	if err != nil || spot <= 0 {
+		spot = 83200.0
+	}
+
+	seriesMu.Lock()
+	seriesCode := selectedSeries[symbol]
+	seriesMu.Unlock()
+
+	expiry := ""
+	expiryTime := currentSeriesExpiry(symbol)
+	if expiryTime != nil {
+		expiry = expiryTime.Format("2006-01-02")
+	}
+
+	chain := moexOptionsForAsset(symbol, expiry)
+	if len(chain) == 0 {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "option chain not available"})
+		return
+	}
+
+	atmStrike := nearestStrike(chain, spot)
+
+	// Collect unique strikes sorted ascending.
+	seen := map[float64]bool{}
+	var strikes []float64
+	for _, o := range chain {
+		if !seen[o.Strike] {
+			seen[o.Strike] = true
+			strikes = append(strikes, o.Strike)
+		}
+	}
+	for i := 0; i < len(strikes); i++ {
+		for j := i + 1; j < len(strikes); j++ {
+			if strikes[j] < strikes[i] {
+				strikes[i], strikes[j] = strikes[j], strikes[i]
+			}
+		}
+	}
+
+	atmIdx := -1
+	for i, s := range strikes {
+		if s == atmStrike {
+			atmIdx = i
+			break
+		}
+	}
+	if atmIdx < 0 {
+		atmIdx = len(strikes) / 2
+	}
+
+	// Strike offset from ATM for each strategy. Each leg is defined by
+	// (offsetFromATM, isCall, isShort) so the option type is explicit.
+	type legSpec struct {
+		offset  int
+		isCall  bool
+		isShort bool
+	}
+	var specs []legSpec
+	displayName := strategy
+	switch strategy {
+	case "iron_butterfly":
+		displayName = "Iron Butterfly"
+		// short ATM put + short ATM call, long wings one step out.
+		specs = []legSpec{{0, false, true}, {0, true, true}, {-1, false, false}, {1, true, false}}
+	case "bull_put_spread":
+		displayName = "Bull Put Spread"
+		specs = []legSpec{{-1, false, true}, {-2, false, false}}
+	case "bear_call_spread":
+		displayName = "Bear Call Spread"
+		specs = []legSpec{{1, true, true}, {2, true, false}}
+	case "bull_call_spread":
+		displayName = "Bull Call Spread"
+		specs = []legSpec{{0, true, false}, {1, true, true}}
+	case "bear_put_spread":
+		displayName = "Bear Put Spread"
+		specs = []legSpec{{0, false, false}, {-1, false, true}}
+	default: // iron_condor
+		displayName = "Iron Condor"
+		specs = []legSpec{{-1, false, true}, {-2, false, false}, {1, true, true}, {2, true, false}}
+	}
+
+	findOpt := func(strike float64, isCall bool) *optionContract {
+		for i := range chain {
+			if chain[i].Strike == strike && chain[i].IsCall == isCall {
+				return &chain[i]
+			}
+		}
+		return nil
+	}
+
+	days := dteInDays(expiry, time.Now())
+	if days <= 0 {
+		days = 30
+	}
+	t := float64(days) / 365.0
+	rRate := 0.16
+
+	type legOut struct {
+		SecID       string  `json:"secid"`
+		Action      string  `json:"action"`
+		Strike      float64 `json:"strike"`
+		IsCall      bool    `json:"is_call"`
+		Price       float64 `json:"price"`
+		Theta       float64 `json:"theta"`
+		Delta       float64 `json:"delta"`
+		MarginShort float64 `json:"margin_short"`
+	}
+
+	var legResults []legOut
+	credit := 0.0
+	debit := 0.0
+	thetaTotal := 0.0
+	marginShort := 0.0
+	for _, sp := range specs {
+		idx := atmIdx + sp.offset
+		if idx < 0 || idx >= len(strikes) {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": fmt.Sprintf("%s legs not found for strikes", displayName),
+			})
+			return
+		}
+		strike := strikes[idx]
+		isCall := sp.isCall
+		opt := findOpt(strike, isCall)
+		if opt == nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": fmt.Sprintf("%s: option not found at strike %v (call=%v)", displayName, strike, isCall),
+			})
+			return
+		}
+		last, _, _, _ := moexOptionQuote(opt.SecID)
+		if last <= 0 {
+			last = opt.PrevPrice
+		}
+		iv := quant.ImpliedVolatility(isCall, last, spot, strike, t, rRate)
+		if iv <= 0 {
+			iv = 0.30
+		}
+		g := quant.CalculateBlackScholes(isCall, spot, strike, t, rRate, iv)
+
+		action := "BUY"
+		thetaSign := 1.0
+		if sp.isShort {
+			action = "SELL"
+			credit += last
+			thetaSign = -1.0
+			if opt.IMNP > 0 {
+				marginShort += opt.IMNP
+			}
+		} else {
+			debit += last
+		}
+		thetaTotal += thetaSign * g.Theta
+
+		legResults = append(legResults, legOut{
+			SecID:       opt.SecID,
+			Action:      action,
+			Strike:      strike,
+			IsCall:      isCall,
+			Price:       math.Round(last*100) / 100,
+			Theta:       math.Round(thetaSign*g.Theta*100) / 100,
+			Delta:       math.Round(g.Delta*100) / 100,
+			MarginShort: opt.IMNP,
+		})
+	}
+
+	netCredit := credit - debit
+
+	// Wing width = distance between short strike and long wing on the same
+	// side (max of the two sides for condor/butterfly).
+	wingWidth := 0.0
+	for _, sp := range specs {
+		if !sp.isShort {
+			continue
+		}
+		for _, sp2 := range specs {
+			if sp2.isShort || (sp.isCall != sp2.isCall) {
+				continue
+			}
+			w := math.Abs(strikes[atmIdx+sp.offset] - strikes[atmIdx+sp2.offset])
+			if w > wingWidth {
+				wingWidth = w
+			}
+		}
+	}
+	if wingWidth <= 0 {
+		wingWidth = 1.0
+	}
+
+	var maxProfit, maxLoss float64
+	switch strategy {
+	case "bull_call_spread", "bear_put_spread":
+		// Debit spreads: net debit = buy - sell; max loss = net debit,
+		// max profit = wing width - net debit.
+		netDebit := debit - credit
+		if netDebit < 0 {
+			netDebit = 0
+		}
+		maxProfit = wingWidth - netDebit
+		maxLoss = netDebit
+	default:
+		// Credit strategies: max profit = net credit, max loss = wing - credit.
+		maxProfit = netCredit
+		maxLoss = wingWidth - netCredit
+	}
+	if maxProfit < 0 {
+		maxProfit = 0
+	}
+	if maxLoss < 0 {
+		maxLoss = 0
+	}
+
+	response := map[string]interface{}{
+		"symbol":              symbol,
+		"series":              seriesCode,
+		"expiry":              expiry,
+		"days_to_exp":         dteInDays(expiry, time.Now()),
+		"spot_price":          spot,
+		"atm_strike":          atmStrike,
+		"strategy_name":       displayName,
+		"note":                "Live MOEX ISS prices",
+		"legs":                legResults,
+		"net_credit":          math.Round(netCredit*100) / 100,
+		"width_step":          math.Round(wingWidth*10000) / 10000,
+		"max_profit":          math.Round(maxProfit*100) / 100,
+		"max_loss":            math.Round(maxLoss*100) / 100,
+		"theta_per_contract":  math.Round(thetaTotal*100) / 100,
+		"margin_short_total":  math.Round(marginShort*100) / 100,
+	}
+	json.NewEncoder(w).Encode(response)
+}
+
 // moexFutureInitialMargin fetches the exchange initial margin (INITIALMARGIN)
 // for a FORTS futures contract from MOEX ISS securities description.
 func moexFutureInitialMargin(secid string) float64 {
@@ -2157,6 +2406,7 @@ func main() {
 	http.HandleFunc("/api/v1/moex/perp-quarterly", moexPerpQuarterlyHandler)
 	http.HandleFunc("/api/v1/strategy/parity", strategyParityHandler)
 	http.HandleFunc("/api/v1/strategy/ironcondor", strategyIronCondorHandler)
+	http.HandleFunc("/api/v1/strategy/build", strategyBuildHandler)
 	http.HandleFunc("/api/v1/series", seriesInfoHandler)
 	http.HandleFunc("/api/v1/series/set", setSeriesHandler)
 
