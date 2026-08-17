@@ -2072,6 +2072,12 @@ func buildStrategy(symbol, strategy string) map[string]interface{} {
 	case "bear_put_spread":
 		displayName = "Bear Put Spread"
 		specs = []legSpec{{0, false, false}, {-1, false, true}}
+	case "long_straddle":
+		displayName = "Long Straddle"
+		specs = []legSpec{{0, false, false}, {0, true, false}}
+	case "long_strangle":
+		displayName = "Long Strangle"
+		specs = []legSpec{{-1, false, false}, {1, true, false}}
 	default: // iron_condor
 		displayName = "Iron Condor"
 		specs = []legSpec{{-1, false, true}, {-2, false, false}, {1, true, true}, {2, true, false}}
@@ -2185,6 +2191,10 @@ func buildStrategy(symbol, strategy string) map[string]interface{} {
 
 	var maxProfit, maxLoss float64
 	switch strategy {
+	case "long_straddle", "long_strangle":
+		// Long volatility: risk = total premium paid, upside unbounded.
+		maxLoss = debit
+		maxProfit = 0
 	case "bull_call_spread", "bear_put_spread":
 		// Debit spreads: net debit = buy - sell; max loss = net debit,
 		// max profit = wing width - net debit.
@@ -2206,6 +2216,8 @@ func buildStrategy(symbol, strategy string) map[string]interface{} {
 		maxLoss = 0
 	}
 
+	unlimited := strategy == "long_straddle" || strategy == "long_strangle"
+
 	return map[string]interface{}{
 		"symbol":              symbol,
 		"series":              seriesCode,
@@ -2215,6 +2227,7 @@ func buildStrategy(symbol, strategy string) map[string]interface{} {
 		"atm_strike":          atmStrike,
 		"strategy_name":       displayName,
 		"note":                "Live MOEX ISS prices",
+		"unlimited_max_profit": unlimited,
 		"legs":                legResults,
 		"net_credit":          math.Round(netCredit*100) / 100,
 		"width_step":          math.Round(wingWidth*10000) / 10000,
@@ -2306,6 +2319,9 @@ func optionsRecommendationsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if sp, ok := b["spot_price"].(float64); ok {
 			recs[i].RealSpot = sp
+		}
+		if un, ok := b["unlimited_max_profit"].(bool); ok {
+			recs[i].Unlimited = un
 		}
 	}
 

@@ -29,6 +29,7 @@ type StrategyRecommendation struct {
 	RealMaxLoss    float64  `json:"real_max_loss"`   // live, filled by handler
 	RealMargin     float64  `json:"real_margin"`     // live GO, filled by handler
 	RealSpot       float64  `json:"real_spot"`       // live spot, filled by handler
+	Unlimited      bool     `json:"unlimited"`       // long vol: max profit unbounded
 }
 
 type ExitAdvice struct {
@@ -81,9 +82,21 @@ func GenerateStrategyRecommendations(iv, hv, spot float64) []StrategyRecommendat
 			ExitRule:     "Time stop at 30% DTE left. Take profit at 20% max profit.",
 			StrategyType: "iron_butterfly",
 		})
+
+		recs = append(recs, StrategyRecommendation{
+			StrategyName: "Long Strangle (Long Volatility & Gamma Scalping)",
+			Regime:       string(regime),
+			Suitability:  "Medium (дешёвая покупка волатильности перед возможным движением)",
+			TargetLegs:   []string{"Buy OTM Put", "Buy OTM Call"},
+			ExpectedTheta: 0,
+			MaxProfit:    "Unlimited on breakout",
+			RiskProfile:  "Defined risk (total premium paid)",
+			ExitRule:     "Reset delta when price moves by calculated Move Step.",
+			StrategyType: "long_strangle",
+		})
 	} else {
 		recs = append(recs, StrategyRecommendation{
-			StrategyName: "Long Volatility & Gamma Scalping",
+			StrategyName: "Long Straddle (Long Volatility & Gamma Scalping)",
 			Regime:       string(regime),
 			Suitability:  "High (Explosive movement expected)",
 			TargetLegs:   []string{"Buy ATM Straddle / Strangle", "Delta Hedge via Futures"},
@@ -91,7 +104,7 @@ func GenerateStrategyRecommendations(iv, hv, spot float64) []StrategyRecommendat
 			MaxProfit:    "Unlimited on breakout",
 			RiskProfile:  "Theta decay cost, mitigated by gamma scalping",
 			ExitRule:     "Reset delta when price moves by calculated Move Step.",
-			StrategyType: "long_volatility",
+			StrategyType: "long_straddle",
 		})
 	}
 

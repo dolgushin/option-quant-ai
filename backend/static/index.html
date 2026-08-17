@@ -662,7 +662,8 @@
                 strategyType,
                 baseLegs: JSON.parse(JSON.stringify(legs)),
                 baseRisk: parseNumeric(maxRisk, 4000),
-                baseProfit: parseNumeric(maxProfit, 8500),
+                baseProfit: typeof maxProfit === 'number' ? maxProfit : 0,
+                unlimitedMaxProfit: typeof maxProfit !== 'number',
                 baseMargin: parseNumeric(margin, 22000),
                 baseTheta: parseNumeric(theta, 350)
             };
@@ -704,7 +705,7 @@
             const totalTheta = selectedStrategyData.baseTheta * mult;
 
             document.getElementById('modal-max-risk').innerText = `₽${Math.round(totalRisk).toLocaleString()}`;
-            document.getElementById('modal-max-profit').innerText = `₽${Math.round(totalProfit).toLocaleString()}`;
+            document.getElementById('modal-max-profit').innerText = selectedStrategyData.unlimitedMaxProfit ? 'неограничена' : `₽${Math.round(totalProfit).toLocaleString()}`;
             document.getElementById('modal-margin').innerText = `₽${Math.round(totalMargin).toLocaleString()}`;
             document.getElementById('modal-theta').innerText = `${totalTheta >= 0 ? '+' : '−'}₽${Math.round(Math.abs(totalTheta)).toLocaleString()} / day (живые цены MOEX)`;
 
@@ -841,7 +842,9 @@
             if (n.includes('bear') && n.includes('call')) return 'bear_call_spread';
             if (n.includes('bull') && n.includes('call')) return 'bull_call_spread';
             if (n.includes('bear') && n.includes('put')) return 'bear_put_spread';
-            if (n.includes('gamma') || n.includes('scalping') || n.includes('straddle')) return 'long_volatility';
+            if (n.includes('strangle')) return 'long_strangle';
+            if (n.includes('straddle')) return 'long_straddle';
+            if (n.includes('gamma') || n.includes('scalping')) return 'long_strangle';
             return 'iron_condor';
         }
 
@@ -849,8 +852,35 @@
             const spot = currentSpotPrice;
             const strategy = strategyTypeFromName(stratName);
 
-            if (strategy === 'long_volatility') {
-                alert('Стратегия "Long Volatility & Gamma Scalping" требует активного дельта-хеджирования и не может быть построена как статичный портфель. Используйте кондор/бабочку/спреды.');
+            if (strategy === 'long_strangle' || strategy === 'long_straddle') {
+                fetch(`/api/v1/strategy/build?strategy=${strategy}&symbol=${currentAsset}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data && data.legs && data.legs.length >= 2) {
+                            const legs = data.legs.map(l => ({
+                                action: l.action,
+                                symbol: `${l.secid} (${l.is_call ? 'Call' : 'Put'})`,
+                                secid: l.secid,
+                                kind: 'OPTION',
+                                strike: l.strike,
+                                isCall: l.is_call,
+                                qty: 10,
+                                price: `${Math.round(l.price).toLocaleString()} ₽`
+                            }));
+                            openStrategyModal(
+                                `${stratName} (${currentAsset}) — ${data.strategy_name}`,
+                                data.strategy_name,
+                                legs,
+                                Math.max(data.max_loss, 0) * 10,
+                                data.unlimited_max_profit ? 'неограничена' : Math.max(data.max_profit, 0) * 10,
+                                data.margin_short_total * 10,
+                                Math.max(data.theta_per_contract * 10, 0)
+                            );
+                        } else {
+                            alert(`Ошибка построения позиции: ${data.error || 'нет данных'}`);
+                        }
+                    })
+                    .catch(e => alert('❌ Ошибка построения long-volatility позиции'));
                 return;
             }
 
@@ -1064,13 +1094,19 @@
 
                 let html = '';
                 recsData.recommendations.forEach(rec => {
-                    const hasReal = rec.real_theta !== undefined && rec.real_theta !== 0;
-                    const thetaTxt = hasReal
+                    const isLongVol = rec.strategy_type === 'long_strangle' || rec.strategy_type === 'long_straddle';
+                    const hasRealTheta = rec.real_theta !== undefined && rec.real_theta !== 0;
+                    const thetaTxt = hasRealTheta
                         ? `${rec.real_theta >= 0 ? '+' : ''}${Math.round(rec.real_theta).toLocaleString()} ₽/day (живые MOEX)`
-                        : rec.strategy_type === 'long_volatility' ? 'отрицательная (покупка волатильности)' : 'нет данных';
-                    const profitTxt = rec.real_max_profit !== undefined && rec.real_max_profit > 0
-                        ? `Макс прибыль: ${Math.round(rec.real_max_profit).toLocaleString()} ₽ | Макс риск: ${Math.round(rec.real_max_loss).toLocaleString()} ₽`
-                        : `Max Profit: ${rec.max_profit}`;
+                        : 'нет данных';
+                    let profitTxt;
+                    if (isLongVol && rec.real_max_loss !== undefined && rec.real_max_loss > 0) {
+                        profitTxt = `Премия (макс. риск): ${Math.round(rec.real_max_loss).toLocaleString()} ₽ | Макс прибыль: неограничена (живые MOEX)`;
+                    } else if (rec.real_max_profit !== undefined && rec.real_max_profit > 0) {
+                        profitTxt = `Макс прибыль: ${Math.round(rec.real_max_profit).toLocaleString()} ₽ | Макс риск: ${Math.round(rec.real_max_loss).toLocaleString()} ₽`;
+                    } else {
+                        profitTxt = `Max Profit: ${rec.max_profit}`;
+                    }
                     html += `<div class="p-2.5 bg-slate-800/80 rounded border border-slate-700 space-y-1 cursor-pointer hover:border-emerald-500 transition" onclick="openTdssStrategyModal('${rec.strategy_name}')">
                         <div class="flex justify-between items-center">
                             <span class="font-bold text-white">${rec.strategy_name}</span>
