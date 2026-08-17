@@ -3,6 +3,11 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Runtime data (encrypted tokens, portfolio state)
+/data/
+backend/data/
+*.enc
+
 # C extensions
 *.so
 

@@ -232,17 +232,82 @@
                     <thead class="bg-slate-900/80 text-slate-400 uppercase border-b border-slate-700">
                         <tr>
                             <th class="p-3">ID / Strategy</th>
-                            <th class="p-3">Symbol / Legs</th>
-                            <th class="p-3">Side / Qty</th>
-                            <th class="p-3">Entry Price</th>
+                            <th class="p-3">Legs</th>
+                            <th class="p-3">Symbol / Expiry</th>
+                            <th class="p-3">Value (вход / сейчас)</th>
                             <th class="p-3">P&L (₽)</th>
                             <th class="p-3">Delta / Theta</th>
+                            <th class="p-3">Margin (ГО)</th>
                             <th class="p-3 text-right">Actions</th>
                         </tr>
                     </thead>
                     <tbody id="positions-table-body" class="divide-y divide-slate-800">
                         <tr>
-                            <td colspan="7" class="p-4 text-center text-slate-500">Loading active positions...</td>
+                            <td colspan="8" class="p-4 text-center text-slate-500">Loading active positions...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Trade Statistics & History -->
+        <div class="bg-slate-800/80 p-6 rounded-xl border border-slate-700 space-y-4">
+            <div class="flex justify-between items-center border-b border-slate-700 pb-3">
+                <h2 class="text-lg font-semibold text-slate-200">📈 Statistics & Trade History</h2>
+                <span id="trades-count" class="px-3 py-1 text-xs font-bold rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-mono">0 сделок</span>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono text-center">
+                <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
+                    <span class="text-xs text-slate-500 block">РЕАЛИЗОВАННЫЙ P&L</span>
+                    <span id="stat-realized" class="text-lg font-bold text-indigo-400">₽0</span>
+                </div>
+                <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
+                    <span class="text-xs text-slate-500 block">НЕРЕАЛИЗОВАННЫЙ P&L</span>
+                    <span id="stat-unrealized" class="text-lg font-bold text-white">₽0</span>
+                </div>
+                <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
+                    <span class="text-xs text-slate-500 block">WIN RATE</span>
+                    <span id="stat-winrate" class="text-lg font-bold text-emerald-400">0%</span>
+                </div>
+                <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
+                    <span class="text-xs text-slate-500 block">PROFIT FACTOR</span>
+                    <span id="stat-profitfactor" class="text-lg font-bold text-amber-400">—</span>
+                </div>
+                <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
+                    <span class="text-xs text-slate-500 block">СРЕДНИЙ ВЫИГРЫШ</span>
+                    <span id="stat-avgwin" class="text-lg font-bold text-emerald-400">₽0</span>
+                </div>
+                <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
+                    <span class="text-xs text-slate-500 block">СРЕДНИЙ УБЫТОК</span>
+                    <span id="stat-avgloss" class="text-lg font-bold text-rose-400">₽0</span>
+                </div>
+                <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
+                    <span class="text-xs text-slate-500 block">ЛУЧШАЯ / ХУДШАЯ</span>
+                    <span id="stat-bestworst" class="text-lg font-bold text-slate-200">—</span>
+                </div>
+                <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
+                    <span class="text-xs text-slate-500 block">ПОБЕД / ПОРАЖЕНИЙ</span>
+                    <span id="stat-wl" class="text-lg font-bold text-slate-200">0 / 0</span>
+                </div>
+            </div>
+
+            <div class="overflow-x-auto font-mono">
+                <table class="w-full text-left text-xs text-slate-300">
+                    <thead class="bg-slate-900/80 text-slate-400 uppercase border-b border-slate-700">
+                        <tr>
+                            <th class="p-3">Strategy</th>
+                            <th class="p-3">Symbol</th>
+                            <th class="p-3">Opened</th>
+                            <th class="p-3">Closed</th>
+                            <th class="p-3">Entry / Exit</th>
+                            <th class="p-3">Realized P&L</th>
+                            <th class="p-3">%</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trades-table-body" class="divide-y divide-slate-800">
+                        <tr>
+                            <td colspan="7" class="p-4 text-center text-slate-500">Нет закрытых сделок</td>
                         </tr>
                     </tbody>
                 </table>
@@ -396,7 +461,7 @@
                     </div>
 
                     <div class="pt-4 border-t border-slate-700 flex gap-3">
-                        <button onclick="executeStrategyOrder()" class="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition shadow-lg shadow-emerald-600/25">🚀 Place Order via Alor API</button>
+                        <button onclick="executeStrategyOrder()" class="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition shadow-lg shadow-emerald-600/25">🚀 Открыть позицию (учёт + статистика)</button>
                         <button onclick="closeStrategyModal()" class="px-5 py-3 bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold rounded-xl transition">Cancel</button>
                     </div>
                 </div>
@@ -404,9 +469,28 @@
         </div>
     </div>
 
+    <div id="profile-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-slate-800 border border-slate-700 w-full max-w-2xl rounded-2xl p-6 space-y-5 shadow-2xl relative">
+            <div class="flex justify-between items-center border-b border-slate-700 pb-4">
+                <div>
+                    <h3 id="profile-modal-title" class="text-xl font-bold text-indigo-400">📊 Профиль позиции</h3>
+                    <p id="profile-modal-subtitle" class="text-xs text-slate-400 font-mono">P&L vs underlying price at expiration</p>
+                </div>
+                <button onclick="document.getElementById('profile-modal').classList.add('hidden')" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+            </div>
+            <div class="relative h-72 w-full">
+                <canvas id="positionProfileChart"></canvas>
+            </div>
+            <div class="pt-4 border-t border-slate-700 flex gap-3">
+                <button onclick="document.getElementById('profile-modal').classList.add('hidden')" class="flex-1 py-3 bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold rounded-xl transition">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let skewChartInstance = null;
         let payoffChartInstance = null;
+        let positionProfileChartInstance = null;
         let currentAsset = 'Si';
         let currentSpotPrice = 83200;
         let currentSeriesInfo = null;
@@ -685,13 +769,13 @@
                         const pnlPerContract = Math.round((data.reversal_pnl > data.conversion_pnl ? data.reversal_pnl : data.conversion_pnl) * 100) / 100;
                         const useReversal = data.reversal_pnl >= data.conversion_pnl;
                         const legs = useReversal ? [
-                            { action: 'BUY', symbol: `${callSecid} (Call)`, qty: 10, price: `${callPrice.toLocaleString()} ₽` },
-                            { action: 'SELL', symbol: `${putSecid} (Put)`, qty: 10, price: `${putPrice.toLocaleString()} ₽` },
-                            { action: 'SELL', symbol: `${seriesCode} Futures`, qty: 10, price: `${futurePrice.toLocaleString()} ₽` }
+                            { action: 'BUY', symbol: `${callSecid} (Call)`, secid: callSecid, kind: 'OPTION', strike: data.strike, isCall: true, qty: 10, price: `${callPrice.toLocaleString()} ₽` },
+                            { action: 'SELL', symbol: `${putSecid} (Put)`, secid: putSecid, kind: 'OPTION', strike: data.strike, isCall: false, qty: 10, price: `${putPrice.toLocaleString()} ₽` },
+                            { action: 'SELL', symbol: `${seriesCode} Futures`, secid: seriesCode, kind: 'FUTURES', strike: 0, isCall: false, qty: 10, price: `${futurePrice.toLocaleString()} ₽` }
                         ] : [
-                            { action: 'SELL', symbol: `${callSecid} (Call)`, qty: 10, price: `${callPrice.toLocaleString()} ₽` },
-                            { action: 'BUY', symbol: `${putSecid} (Put)`, qty: 10, price: `${putPrice.toLocaleString()} ₽` },
-                            { action: 'BUY', symbol: `${seriesCode} Futures`, qty: 10, price: `${futurePrice.toLocaleString()} ₽` }
+                            { action: 'SELL', symbol: `${callSecid} (Call)`, secid: callSecid, kind: 'OPTION', strike: data.strike, isCall: true, qty: 10, price: `${callPrice.toLocaleString()} ₽` },
+                            { action: 'BUY', symbol: `${putSecid} (Put)`, secid: putSecid, kind: 'OPTION', strike: data.strike, isCall: false, qty: 10, price: `${putPrice.toLocaleString()} ₽` },
+                            { action: 'BUY', symbol: `${seriesCode} Futures`, secid: seriesCode, kind: 'FUTURES', strike: 0, isCall: false, qty: 10, price: `${futurePrice.toLocaleString()} ₽` }
                         ];
 
                         openStrategyModal(
@@ -747,7 +831,11 @@
                     if (data && data.legs && data.legs.length === 4) {
                         const legs = data.legs.map(l => ({
                             action: l.action,
-                            symbol: `${l.secid} (${l.action === 'SELL' ? (l.strike < data.spot_price ? 'Put' : 'Call') : (l.strike < data.spot_price ? 'Put' : 'Call')})`,
+                            symbol: `${l.secid} (${l.strike < data.spot_price ? 'Put' : 'Call'})`,
+                            secid: l.secid,
+                            kind: 'OPTION',
+                            strike: l.strike,
+                            isCall: l.strike >= data.spot_price,
                             qty: 10,
                             price: `${Math.round(l.price).toLocaleString()} ₽`
                         }));
@@ -848,24 +936,40 @@
         async function executeStrategyOrder() {
             if (!selectedStrategyData) return;
             const mult = currentLotMultiplier;
-            const totalQty = (selectedStrategyData.baseLegs[0]?.qty || 1) * mult;
+
+            const legs = selectedStrategyData.baseLegs.map(l => ({
+                secid: l.secid || l.symbol.split(' ')[0],
+                kind: l.kind || 'FUTURES',
+                side: l.action,
+                quantity: (l.qty || 1) * mult,
+                strike: l.strike || 0,
+                is_call: !!l.isCall,
+                entry_price: parseFloat(String(l.price).replace(/[^\d.\-]/g, '')) || 0
+            }));
+
             try {
-                const res = await fetch('/api/v1/moex/order', {
+                const res = await fetch('/api/v1/positions/open', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        symbol: currentAsset + 'U6',
-                        side: 'buy',
-                        type: 'market',
-                        price: 0,
-                        quantity: totalQty
+                        strategy: selectedStrategyData.title,
+                        symbol: currentAsset,
+                        expiry: (currentSeriesInfo && currentSeriesInfo.expiry) || '',
+                        legs: legs
                     })
                 });
                 const result = await res.json();
-                alert(`🚀 Стратегия "${selectedStrategyData.title}" объемом ${mult}x (${totalQty} шт.) успешно отправлена в Alor API!\nСтатус: ${result.message || 'Ордера приняты биржей'}`);
-                closeStrategyModal();
-                updatePositions();
-                updatePortfolio();
+                if (result.success) {
+                    const pnl = result.position.pnl;
+                    const pnlTxt = (pnl >= 0 ? '+' : '') + Math.round(pnl).toLocaleString();
+                    alert(`✅ Стратегия "${selectedStrategyData.title}" (${mult}x) открыта и отслеживается.\nНачальная стоимость: ₽${Math.round(result.position.entry_value).toLocaleString()}\nPnL: ₽${pnlTxt}\nМаржа (ГО): ₽${Math.round(result.position.margin).toLocaleString()}\n\n${result.note || ''}`);
+                    closeStrategyModal();
+                    updatePositions();
+                    updatePortfolio();
+                    updateTrades();
+                } else {
+                    alert(`❌ Ошибка открытия позиции: ${result.error || 'unknown error'}`);
+                }
             } catch (e) {
                 alert('❌ Ошибка отправки ордера через Alor API');
             }
@@ -941,22 +1045,26 @@
 
                 const tbody = document.getElementById('positions-table-body');
                 if (!data.positions || data.positions.length === 0) {
-                    tbody.innerHTML = `<tr><td colspan="7" class="p-4 text-center text-slate-500">Нет активных позиций. Откройте стратегию и разместите ордер через Alor API.</td></tr>`;
+                    tbody.innerHTML = `<tr><td colspan="8" class="p-4 text-center text-slate-500">Нет активных позиций. Откройте стратегию (Parity / Iron Condor / Basis) и нажмите «Открыть позицию».</td></tr>`;
                     return;
                 }
 
                 let html = '';
                 data.positions.forEach(p => {
                     const pnlColor = p.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400';
-                    html += `<tr class="hover:bg-slate-900/40 transition">
+                    const pnlTxt = (p.pnl >= 0 ? '+' : '') + Math.round(p.pnl).toLocaleString();
+                    const legSummary = p.legs.map(l => `${l.side === 'SELL' ? 'S' : 'B'}${l.quantity}x ${l.secid}`).join('<br>');
+                    html += `<tr class="hover:bg-slate-900/40 transition align-top">
                         <td class="p-3 font-bold text-white">${p.strategy} <span class="text-[10px] text-slate-500 block">${p.id}</span></td>
-                        <td class="p-3 text-indigo-300">${p.symbol}</td>
-                        <td class="p-3">${p.side} (${p.quantity})</td>
-                        <td class="p-3">${p.entry_price.toLocaleString()} ₽</td>
-                        <td class="p-3 font-bold ${pnlColor}">${p.pnl >= 0 ? '+' : ''}${p.pnl.toLocaleString()} ₽</td>
-                        <td class="p-3">Δ: ${p.delta} | Θ: <span class="text-emerald-400">+${p.theta}₽</span></td>
-                        <td class="p-3 text-right">
-                            <button onclick="closePosition('${p.id}')" class="px-3 py-1 bg-rose-600/80 hover:bg-rose-500 text-white rounded transition text-[10px]">Close</button>
+                        <td class="p-3 text-indigo-300 text-[10px] leading-relaxed">${legSummary}</td>
+                        <td class="p-3">${p.symbol}${p.expiry ? `<span class="text-[10px] text-slate-500 block">до ${p.expiry}</span>` : ''}</td>
+                        <td class="p-3 font-mono text-[10px]">вход: ₽${Math.round(p.entry_value).toLocaleString()}<br>сейчас: ₽${Math.round(p.current_value).toLocaleString()}</td>
+                        <td class="p-3 font-bold ${pnlColor}">${pnlTxt} ₽<span class="text-[10px] block ${pnlColor}">${p.pnl_percent >= 0 ? '+' : ''}${p.pnl_percent.toFixed(2)}%</span></td>
+                        <td class="p-3 text-[10px]">Δ: ${p.delta} | Θ: <span class="text-emerald-400">+${Math.round(p.theta)}₽</span></td>
+                        <td class="p-3 text-[10px]">ГО: ₽${Math.round(p.margin).toLocaleString()}</td>
+                        <td class="p-3 text-right whitespace-nowrap">
+                            <button onclick="openPositionProfile('${p.id}')" class="px-2 py-1 bg-indigo-600/80 hover:bg-indigo-500 text-white rounded transition text-[10px] mr-1">Profile</button>
+                            <button onclick="closePosition('${p.id}')" class="px-2 py-1 bg-rose-600/80 hover:bg-rose-500 text-white rounded transition text-[10px]">Close</button>
                         </td>
                     </tr>`;
                 });
@@ -966,14 +1074,111 @@
             }
         }
 
-        async function closePosition(id) {
+        async function updateTrades() {
             try {
-                await fetch('/api/v1/positions/close', {
+                const res = await fetch('/api/v1/trades');
+                const data = await res.json();
+                const stats = data.stats || {};
+
+                document.getElementById('trades-count').innerText = `${stats.total_trades || 0} сделок`;
+                document.getElementById('stat-realized').innerText = `₽${Math.round(stats.total_realized_pnl || 0).toLocaleString()}`;
+                document.getElementById('stat-unrealized').innerText = `₽${Math.round(stats.total_unrealized_pnl || 0).toLocaleString()}`;
+                document.getElementById('stat-winrate').innerText = `${(stats.win_rate || 0).toFixed(1)}%`;
+                const pf = stats.profit_factor;
+                document.getElementById('stat-profitfactor').innerText = pf ? (pf >= 99999 ? '∞' : pf.toFixed(2)) : '—';
+                document.getElementById('stat-avgwin').innerText = `₽${Math.round(stats.avg_win || 0).toLocaleString()}`;
+                document.getElementById('stat-avgloss').innerText = `₽${Math.round(stats.avg_loss || 0).toLocaleString()}`;
+                document.getElementById('stat-bestworst').innerText = stats.best_trade ? `+₽${Math.round(stats.best_trade).toLocaleString()} / ${Math.round(stats.worst_trade || 0).toLocaleString()}₽` : '—';
+                document.getElementById('stat-wl').innerText = `${stats.winning_trades || 0} / ${stats.losing_trades || 0}`;
+
+                const tbody = document.getElementById('trades-table-body');
+                const trades = data.trades || [];
+                if (trades.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="7" class="p-4 text-center text-slate-500">Нет закрытых сделок</td></tr>`;
+                    return;
+                }
+                let html = '';
+                trades.slice().reverse().forEach(t => {
+                    const color = t.realized_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                    const pnlTxt = (t.realized_pnl >= 0 ? '+' : '') + Math.round(t.realized_pnl).toLocaleString();
+                    html += `<tr class="hover:bg-slate-900/40 transition">
+                        <td class="p-3 font-bold text-white">${t.strategy}</td>
+                        <td class="p-3 text-indigo-300">${t.symbol}</td>
+                        <td class="p-3 text-[10px]">${new Date(t.opened_at).toLocaleString()}</td>
+                        <td class="p-3 text-[10px]">${new Date(t.closed_at).toLocaleString()}</td>
+                        <td class="p-3 font-mono text-[10px]">₽${Math.round(t.entry_value).toLocaleString()} → ₽${Math.round(t.exit_value).toLocaleString()}</td>
+                        <td class="p-3 font-bold ${color}">${pnlTxt} ₽</td>
+                        <td class="p-3 ${color}">${t.pnl_percent >= 0 ? '+' : ''}${t.pnl_percent.toFixed(2)}%</td>
+                    </tr>`;
+                });
+                tbody.innerHTML = html;
+            } catch (e) {
+                console.error("Failed to load trades", e);
+            }
+        }
+
+        async function openPositionProfile(id) {
+            try {
+                const res = await fetch(`/api/v1/position/profile?id=${id}`);
+                const data = await res.json();
+                if (!data.points) {
+                    alert(`Ошибка: ${data.error || 'нет данных'}`);
+                    return;
+                }
+                document.getElementById('profile-modal-title').innerText = `📊 Профиль позиции — ${data.strategy}`;
+                document.getElementById('profile-modal-subtitle').innerText = `${data.symbol} | Спот: ₽${Math.round(data.spot).toLocaleString()}`;
+                document.getElementById('profile-modal').classList.remove('hidden');
+
+                const ctx = document.getElementById('positionProfileChart').getContext('2d');
+                if (positionProfileChartInstance) positionProfileChartInstance.destroy();
+
+                const labels = data.points.map(p => Math.round(p.spot));
+                const values = data.points.map(p => p.pnl);
+                positionProfileChartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'P&L (₽)',
+                            data: values,
+                            borderColor: '#34d399',
+                            backgroundColor: 'rgba(52,211,153,0.08)',
+                            fill: true,
+                            tension: 0.2,
+                            pointRadius: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { labels: { color: '#94a3b8' } } },
+                        scales: {
+                            x: { ticks: { color: '#64748b' }, grid: { color: 'rgba(100,116,139,0.15)' } },
+                            y: { ticks: { color: '#64748b' }, grid: { color: 'rgba(100,116,139,0.15)' } }
+                        }
+                    }
+                });
+            } catch (e) {
+                alert('Ошибка загрузки профиля позиции');
+            }
+        }
+
+        async function closePosition(id) {            if (!confirm('Закрыть позицию? Будет зафиксирован реализованный PnL и сделка попадёт в историю.')) return;
+            try {
+                const res = await fetch('/api/v1/positions/close', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ id: id })
                 });
+                const data = await res.json();
+                if (data.success && data.trade) {
+                    const pnl = data.trade.realized_pnl;
+                    const pnlTxt = (pnl >= 0 ? '+' : '') + Math.round(pnl).toLocaleString();
+                    alert(`✅ Позиция закрыта.\nРеализованный PnL: ₽${pnlTxt} (${data.trade.pnl_percent >= 0 ? '+' : ''}${data.trade.pnl_percent.toFixed(2)}%)`);
+                }
                 updatePositions();
+                updatePortfolio();
+                updateTrades();
             } catch (e) {
                 alert('Ошибка закрытия позиции');
             }
@@ -1037,6 +1242,7 @@
                 await updateTDSS();
                 await updatePositions();
                 await updatePortfolio();
+                await updateTrades();
 
                 updateSkewChart();
             } catch (e) {
@@ -1213,6 +1419,7 @@
             updateDashboard();
             updatePositions();
             updatePortfolio();
+            updateTrades();
             updateTokenStatus();
 
             setInterval(updateDashboard, 3000);

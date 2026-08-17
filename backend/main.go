@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -59,7 +60,7 @@ func greeksHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 var (
-	// Version: 1.2.0 - Real MOEX option prices, GO and parity strategy via ISS
+	// Version: 1.3.0 - Real position tracking, trade history and statistics
 
 	spotOverrides = map[string]float64{}
 	spotMu        sync.Mutex
@@ -295,6 +296,78 @@ var (
 	optionMu        sync.Mutex
 )
 
+// quoteCache caches recent option LAST quotes so mark-to-market repricing of a
+// multi-leg portfolio does not hammer ISS with one HTTP call per leg per tick.
+var (
+	quoteCache     = map[string]struct{ last, bid, offer, ts float64 }{}
+	quoteCacheTime time.Time
+	quoteMu        sync.Mutex
+)
+
+func cachedOptionQuote(secid string) (last, bid, offer float64) {
+	quoteMu.Lock()
+	if q, ok := quoteCache[secid]; ok && time.Since(time.Unix(int64(q.ts), 0)) < 5*time.Second {
+		quoteMu.Unlock()
+		return q.last, q.bid, q.offer
+	}
+	quoteMu.Unlock()
+
+	last, bid, offer, err := moexOptionQuote(secid)
+	if err != nil {
+		return 0, 0, 0
+	}
+	quoteMu.Lock()
+	quoteCache[secid] = struct{ last, bid, offer, ts float64 }{last, bid, offer, float64(time.Now().Unix())}
+	quoteMu.Unlock()
+	return last, bid, offer
+}
+
+// contractMultiplier returns the point value (₽ per 1 price point) for a FORTS
+// contract symbol. Option premiums are quoted in the same points as the futures.
+func contractMultiplier(symbol string) float64 {
+	switch symbol {
+	case "Si":
+		return 1000.0
+	case "RI":
+		return 100.0
+	case "CR":
+		return 1000.0
+	default:
+		return 1.0
+	}
+}
+
+// contractExpiry returns the option expiry date (YYYY-MM-DD) for a symbol by
+// looking at its chain, or the currently selected futures series expiry.
+func contractExpiry(symbol string) string {
+	if e := currentSeriesExpiry(symbol); e != nil {
+		return e.Format("2006-01-02")
+	}
+	seriesMu.Lock()
+	code := selectedSeries[symbol]
+	seriesMu.Unlock()
+	if code != "" {
+		if c := findContractByCode(code); c != nil && c.LastDelDate != "" {
+			return c.LastDelDate
+		}
+	}
+	return ""
+}
+
+// findContractByCode returns a futures contract by its SECID (e.g. SiU6).
+func findContractByCode(code string) *futuresContract {
+	contracts, err := moexFuturesContracts()
+	if err != nil {
+		return nil
+	}
+	for i := range contracts {
+		if contracts[i].Code == code {
+			return &contracts[i]
+		}
+	}
+	return nil
+}
+
 // moexOptionContracts fetches the full FORTS options list (SECID, strike,
 // call/put, expiry, margins) from the public MOEX ISS API, cached.
 // The ISS options endpoint cannot filter by asset, so we filter in Go.
@@ -377,6 +450,20 @@ func moexOptionsForAsset(asset, expiry string) []optionContract {
 		}
 	}
 	return out
+}
+
+// findOptionBySecID returns a cached option contract by its SECID.
+func findOptionBySecID(secid string) *optionContract {
+	opts, err := moexOptionContracts()
+	if err != nil {
+		return nil
+	}
+	for i := range opts {
+		if opts[i].SecID == secid {
+			return &opts[i]
+		}
+	}
+	return nil
 }
 
 // moexOptionQuote fetches the live LAST/BID/OFFER for an option SECID.
@@ -920,60 +1007,165 @@ func moexOrderHandler(w http.ResponseWriter, r *http.Request) {
 		Price    float64 `json:"price"`
 		Quantity int     `json:"quantity"`
 	}
-
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
 		return
 	}
 
-	res, err := alorExec.PlaceOrder(req.Symbol, req.Side, req.Type, req.Price, req.Quantity)
-	if err != nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"error":   err.Error(),
-			"note":    "Failed to execute order on Alor (check ALOR_REFRESH_TOKEN and ALOR_PORTFOLIO)",
-		})
-		return
+	// Record the position regardless of Alor availability so the terminal
+	// always tracks opened strategies. A live entry price is fetched from MOEX.
+	if req.Symbol == "" {
+		req.Symbol = "Si"
 	}
-
+	if req.Quantity <= 0 {
+		req.Quantity = 1
+	}
 	entryPrice := req.Price
 	if entryPrice <= 0 {
 		entryPrice, _ = getSpotPrice(req.Symbol)
 	}
-	currentPrice := req.Price
-	if currentPrice <= 0 {
-		currentPrice, _ = getSpotPrice(req.Symbol)
+
+	mult := contractMultiplier(req.Symbol)
+	side := strings.ToUpper(req.Side)
+	if side == "" {
+		side = "BUY"
+	}
+	p := quant.Position{
+		ID:       fmt.Sprintf("pos-%d", time.Now().Unix()),
+		Strategy: "Alor MOEX Execution",
+		Symbol:   req.Symbol,
+		Expiry:   contractExpiry(req.Symbol),
+		Legs: []quant.PositionLeg{{
+			SecID:        selectedSeriesFor(req.Symbol),
+			Symbol:       req.Symbol,
+			Kind:         "FUTURES",
+			Side:         side,
+			Quantity:     req.Quantity,
+			EntryPrice:   entryPrice,
+			CurrentPrice: entryPrice,
+		}},
+		OpenedAt: time.Now(),
+	}
+	secid := selectedSeriesFor(req.Symbol)
+	if m := moexFutureInitialMargin(secid); m > 0 {
+		p.Margin = m * float64(req.Quantity)
+	} else {
+		p.Margin = mult * float64(req.Quantity)
+	}
+	repricePosition(&p)
+	quant.SavePosition(p)
+
+	portfolio := quant.GetPortfolio()
+	stats := quant.ComputeStats()
+
+	var alorNote string
+	if alorExec != nil {
+		if _, err := alorExec.PlaceOrder(req.Symbol, side, req.Type, req.Price, req.Quantity); err != nil {
+			alorNote = fmt.Sprintf("Alor order failed (check ALOR_REFRESH_TOKEN and ALOR_PORTFOLIO): %v", err)
+		} else {
+			alorNote = "Alor order accepted"
+		}
+	} else {
+		alorNote = "Alor execution not configured; position tracked in paper portfolio"
 	}
 
-	qty := req.Quantity
-	if qty <= 0 {
-		qty = 1
-	}
-
-	quant.AddPosition(quant.Position{
-		ID:           fmt.Sprintf("pos-%d", time.Now().Unix()),
-		Strategy:     "Alor MOEX Execution",
-		Symbol:       req.Symbol,
-		Side:         strings.ToUpper(req.Side),
-		Quantity:     qty,
-		EntryPrice:   entryPrice,
-		CurrentPrice: currentPrice,
-		PnL:          25.0 * float64(qty),
-		Delta:        0.00,
-		Theta:        45.0 * float64(qty),
-		OpenedAt:     time.Now(),
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":   true,
+		"position":  p,
+		"portfolio": portfolio,
+		"stats":     stats,
+		"note":      alorNote,
 	})
+}
 
-	json.NewEncoder(w).Encode(res)
+// repricePosition refreshes every leg's current price from live MOEX quotes
+// and recomputes PnL, delta and theta of the position.
+func repricePosition(p *quant.Position) {
+	spot, _ := getSpotPrice(p.Symbol)
+	mult := contractMultiplier(p.Symbol)
+	rRate := 0.16
+	days := dteInDays(p.Expiry, time.Now())
+	if days <= 0 {
+		days = 30
+	}
+	t := float64(days) / 365.0
+
+	entryValue := 0.0
+	currentValue := 0.0
+	deltaTotal := 0.0
+	thetaTotal := 0.0
+
+	for i := range p.Legs {
+		leg := &p.Legs[i]
+		dir := 1.0
+		if leg.Side == "SELL" {
+			dir = -1.0
+		}
+
+		var last float64
+		if leg.Kind == "FUTURES" {
+			if s, err := getSpotPrice(p.Symbol); err == nil && s > 0 {
+				last = s
+			} else {
+				last = leg.CurrentPrice
+			}
+		} else {
+			l, b, o := cachedOptionQuote(leg.SecID)
+			if l > 0 {
+				last = l
+			} else if b > 0 {
+				last = b
+			} else if o > 0 {
+				last = o
+			} else {
+				last = leg.CurrentPrice
+			}
+		}
+		if last > 0 {
+			leg.CurrentPrice = last
+		}
+
+		entryValue += dir * leg.EntryPrice * mult * float64(leg.Quantity)
+		currentValue += dir * leg.CurrentPrice * mult * float64(leg.Quantity)
+
+		if leg.Kind == "OPTION" {
+			iv := quant.ImpliedVolatility(leg.IsCall, leg.CurrentPrice, spot, leg.Strike, t, rRate)
+			if iv <= 0 {
+				iv = 0.30
+			}
+			g := quant.CalculateBlackScholes(leg.IsCall, spot, leg.Strike, t, rRate, iv)
+			deltaTotal += dir * g.Delta * float64(leg.Quantity)
+			thetaTotal += dir * g.Theta * mult * float64(leg.Quantity)
+		} else {
+			deltaTotal += dir * 1.0 * float64(leg.Quantity)
+		}
+	}
+
+	p.EntryValue = entryValue
+	p.CurrentValue = currentValue
+	p.PnL = currentValue - entryValue
+	if entryValue != 0 {
+		p.PnLPercent = p.PnL / math.Abs(entryValue) * 100
+	}
+	p.Delta = math.Round(deltaTotal*100) / 100
+	p.Theta = math.Round(thetaTotal*100) / 100
 }
 
 func positionsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+
 	positions := quant.GetActivePositions()
+	for i := range positions {
+		repricePosition(&positions[i])
+		quant.SavePosition(positions[i])
+	}
+
 	portfolio := quant.GetPortfolio()
+	stats := quant.ComputeStats()
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"positions": positions,
 		"portfolio": portfolio,
+		"stats":     stats,
 	})
 }
 
@@ -1006,6 +1198,121 @@ func capitalHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func openPositionHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Strategy string `json:"strategy"`
+		Symbol   string `json:"symbol"`
+		Expiry   string `json:"expiry"`
+		Legs     []struct {
+			SecID      string  `json:"secid"`
+			Kind       string  `json:"kind"` // OPTION or FUTURES
+			Side       string  `json:"side"` // BUY or SELL
+			Quantity   int     `json:"quantity"`
+			Strike     float64 `json:"strike"`
+			IsCall     bool    `json:"is_call"`
+			EntryPrice float64 `json:"entry_price"`
+		} `json:"legs"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if req.Symbol == "" || len(req.Legs) == 0 {
+		http.Error(w, "Symbol and legs are required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Expiry == "" {
+		req.Expiry = contractExpiry(req.Symbol)
+	}
+	mult := contractMultiplier(req.Symbol)
+
+	p := quant.Position{
+		ID:       fmt.Sprintf("pos-%d", time.Now().Unix()),
+		Strategy: req.Strategy,
+		Symbol:   req.Symbol,
+		Expiry:   req.Expiry,
+		OpenedAt: time.Now(),
+	}
+
+	// Fill live entry prices and margins for every leg.
+	for _, l := range req.Legs {
+		entry := l.EntryPrice
+		if l.Kind == "FUTURES" {
+			if entry <= 0 {
+				entry, _ = getSpotPrice(req.Symbol)
+			}
+			leg := quant.PositionLeg{
+				SecID:        l.SecID,
+				Symbol:       req.Symbol,
+				Kind:         "FUTURES",
+				Side:         l.Side,
+				Quantity:     l.Quantity,
+				EntryPrice:   entry,
+				CurrentPrice: entry,
+			}
+			if secid := l.SecID; secid == "" {
+				secid = selectedSeriesFor(req.Symbol)
+			}
+			p.Legs = append(p.Legs, leg)
+			if secid := l.SecID; secid == "" {
+				continue
+			} else if m := moexFutureInitialMargin(secid); m > 0 {
+				p.Margin += m * float64(l.Quantity)
+			} else {
+				p.Margin += mult * float64(l.Quantity)
+			}
+			continue
+		}
+
+		// OPTION leg
+		if entry <= 0 {
+			if last, _, _, err := moexOptionQuote(l.SecID); err == nil && last > 0 {
+				entry = last
+			} else if opt := findOptionBySecID(l.SecID); opt != nil {
+				entry = opt.PrevPrice
+			}
+		}
+		leg := quant.PositionLeg{
+			SecID:        l.SecID,
+			Symbol:       req.Symbol,
+			Kind:         "OPTION",
+			Side:         l.Side,
+			Quantity:     l.Quantity,
+			Strike:       l.Strike,
+			IsCall:       l.IsCall,
+			EntryPrice:   entry,
+			CurrentPrice: entry,
+		}
+		p.Legs = append(p.Legs, leg)
+		if opt := findOptionBySecID(l.SecID); opt != nil {
+			if l.Side == "SELL" {
+				p.Margin += opt.IMNP * float64(l.Quantity)
+			} else {
+				p.Margin += opt.IMP * float64(l.Quantity)
+			}
+		}
+	}
+
+	repricePosition(&p)
+	quant.SavePosition(p)
+
+	portfolio := quant.GetPortfolio()
+	stats := quant.ComputeStats()
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":   true,
+		"position":  p,
+		"portfolio": portfolio,
+		"stats":     stats,
+	})
+}
+
 func closePositionHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {
@@ -1021,11 +1328,130 @@ func closePositionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	quant.ClosePosition(req.ID)
+	pos, found := quant.RemovePosition(req.ID)
+	if !found {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "position not found",
+		})
+		return
+	}
+
+	// Mark-to-market before closing so realized PnL reflects live prices.
+	repricePosition(&pos)
+
+	trade := quant.Trade{
+		ID:          fmt.Sprintf("trd-%d", time.Now().Unix()),
+		Strategy:    pos.Strategy,
+		Symbol:      pos.Symbol,
+		OpenedAt:    pos.OpenedAt,
+		ClosedAt:    time.Now(),
+		EntryValue:  pos.EntryValue,
+		ExitValue:   pos.CurrentValue,
+		RealizedPnL: pos.PnL,
+		PnLPercent:  pos.PnLPercent,
+	}
+	quant.AddTrade(trade)
+
+	portfolio := quant.GetPortfolio()
+	stats := quant.ComputeStats()
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"message": "Position closed successfully",
+		"success":   true,
+		"message":   "Position closed and recorded in trade history",
+		"trade":     trade,
+		"portfolio": portfolio,
+		"stats":     stats,
 	})
+}
+
+func tradesHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	trades := quant.GetTrades()
+	stats := quant.ComputeStats()
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"trades": trades,
+		"stats":  stats,
+	})
+}
+
+// positionProfileHandler returns the payoff profile (P&L vs underlying price at
+// expiration) for a single open position, computed from its real legs.
+func positionProfileHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "id query param required", http.StatusBadRequest)
+		return
+	}
+
+	var pos *quant.Position
+	for _, p := range quant.GetActivePositions() {
+		if p.ID == id {
+			pos = &p
+			break
+		}
+	}
+	if pos == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "position not found"})
+		return
+	}
+	repricePosition(pos)
+
+	spot, _ := getSpotPrice(pos.Symbol)
+	if spot <= 0 {
+		spot = pos.CurrentValue
+	}
+	mult := contractMultiplier(pos.Symbol)
+
+	lo := spot * 0.8
+	hi := spot * 1.2
+	steps := 40
+	type profPoint struct {
+		Spot float64 `json:"spot"`
+		PnL  float64 `json:"pnl"`
+	}
+	points := make([]profPoint, 0, steps+1)
+	for i := 0; i <= steps; i++ {
+		s := lo + (hi-lo)*float64(i)/float64(steps)
+		pnl := 0.0
+		for _, leg := range pos.Legs {
+			dir := 1.0
+			if leg.Side == "SELL" {
+				dir = -1.0
+			}
+			var value float64
+			switch leg.Kind {
+			case "FUTURES":
+				value = dir * (s - leg.EntryPrice) * mult * float64(leg.Quantity)
+			case "OPTION":
+				var intrinsic float64
+				if leg.IsCall {
+					intrinsic = math.Max(s-leg.Strike, 0)
+				} else {
+					intrinsic = math.Max(leg.Strike-s, 0)
+				}
+				value = dir * (intrinsic - leg.EntryPrice) * mult * float64(leg.Quantity)
+			}
+			pnl += value
+		}
+		points = append(points, profPoint{Spot: math.Round(s*100) / 100, PnL: math.Round(pnl*100) / 100})
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":       pos.ID,
+		"strategy": pos.Strategy,
+		"symbol":   pos.Symbol,
+		"spot":     spot,
+		"points":   points,
+	})
+}
+
+// selectedSeriesFor returns the currently selected futures series code for a symbol.
+func selectedSeriesFor(symbol string) string {
+	seriesMu.Lock()
+	defer seriesMu.Unlock()
+	return selectedSeries[symbol]
 }
 
 func copilotHandler(w http.ResponseWriter, r *http.Request) {
@@ -1694,6 +2120,10 @@ func main() {
 	}
 	initAlorClients()
 
+	// Load persisted portfolio (positions, trades, capital) from disk.
+	quant.SetDataFile(filepath.Join(dataDir, "portfolio.json"))
+	quant.Load()
+
 	subFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
 		log.Fatalf("Failed to create sub filesystem: %v", err)
@@ -1725,11 +2155,15 @@ func main() {
 
 	// Positions & Portfolio Handlers
 	http.HandleFunc("/api/v1/positions", positionsHandler)
+	http.HandleFunc("/api/v1/positions/open", openPositionHandler)
 	http.HandleFunc("/api/v1/positions/close", closePositionHandler)
+	http.HandleFunc("/api/v1/position/profile", positionProfileHandler)
+	http.HandleFunc("/api/v1/trades", tradesHandler)
 	http.HandleFunc("/api/v1/portfolio", portfolioHandler)
 	http.HandleFunc("/api/v1/capital", capitalHandler)
 	http.HandleFunc("/api/v1/copilot/ask", copilotHandler)
 	http.HandleFunc("/api/v1/options/exit-advice", optionsExitAdviceHandler)
+	http.HandleFunc("/api/v1/options/recommendations", optionsRecommendationsHandler)
 	http.HandleFunc("/api/v1/options/gamma-step", gammaScalpingStepHandler)
 	http.HandleFunc("/api/v1/options/vertical-spread", verticalSpreadHandler)
 	http.HandleFunc("/api/v1/options/rolling-advice", rollingAdviceHandler)
