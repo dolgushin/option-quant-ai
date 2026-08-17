@@ -1064,7 +1064,7 @@
                         <td class="p-3 text-[10px]">ГО: ₽${Math.round(p.margin).toLocaleString()}</td>
                         <td class="p-3 text-right whitespace-nowrap">
                             <button onclick="openPositionProfile('${p.id}')" class="px-2 py-1 bg-indigo-600/80 hover:bg-indigo-500 text-white rounded transition text-[10px] mr-1">Profile</button>
-                            <button onclick="closePosition('${p.id}')" class="px-2 py-1 bg-rose-600/80 hover:bg-rose-500 text-white rounded transition text-[10px]">Close</button>
+                            <button id="close-${p.id}" onclick="closePosition('${p.id}')" class="px-2 py-1 bg-rose-600/80 hover:bg-rose-500 text-white rounded transition text-[10px]">Close</button>
                         </td>
                     </tr>`;
                 });
@@ -1163,7 +1163,35 @@
             }
         }
 
-        async function closePosition(id) {            if (!confirm('Закрыть позицию? Будет зафиксирован реализованный PnL и сделка попадёт в историю.')) return;
+        let pendingCloseId = null;
+
+        async function closePosition(id) {
+            if (pendingCloseId !== id) {
+                pendingCloseId = id;
+                const btn = document.getElementById(`close-${id}`);
+                if (btn) {
+                    btn.innerText = 'Подтвердить?';
+                    btn.classList.add('bg-amber-500/90', 'hover:bg-amber-400', 'animate-pulse');
+                    setTimeout(() => {
+                        if (pendingCloseId === id) {
+                            pendingCloseId = null;
+                            const b = document.getElementById(`close-${id}`);
+                            if (b) {
+                                b.innerText = 'Close';
+                                b.classList.remove('bg-amber-500/90', 'hover:bg-amber-400', 'animate-pulse');
+                            }
+                        }
+                    }, 2500);
+                }
+                return;
+            }
+            pendingCloseId = null;
+
+            const btn = document.getElementById(`close-${id}`);
+            if (btn) {
+                btn.innerText = '...';
+                btn.disabled = true;
+            }
             try {
                 const res = await fetch('/api/v1/positions/close', {
                     method: 'POST',
@@ -1175,11 +1203,14 @@
                     const pnl = data.trade.realized_pnl;
                     const pnlTxt = (pnl >= 0 ? '+' : '') + Math.round(pnl).toLocaleString();
                     alert(`✅ Позиция закрыта.\nРеализованный PnL: ₽${pnlTxt} (${data.trade.pnl_percent >= 0 ? '+' : ''}${data.trade.pnl_percent.toFixed(2)}%)`);
+                } else {
+                    alert(`Ошибка закрытия: ${data.error || 'unknown'}`);
                 }
                 updatePositions();
                 updatePortfolio();
                 updateTrades();
             } catch (e) {
+                if (btn) { btn.disabled = false; btn.innerText = 'Close'; }
                 alert('Ошибка закрытия позиции');
             }
         }

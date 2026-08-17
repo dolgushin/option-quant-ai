@@ -1104,10 +1104,20 @@ func repricePosition(p *quant.Position) {
 
 		var last float64
 		if leg.Kind == "FUTURES" {
-			if s, err := getSpotPrice(p.Symbol); err == nil && s > 0 {
-				last = s
-			} else {
-				last = leg.CurrentPrice
+			// Prefer the actual contract quote (leg.SecID like "SiU6"); fall
+			// back to the symbol spot when no contract code is stored.
+			last = 0
+			if leg.SecID != "" && len(leg.SecID) >= 3 {
+				if c, err := moexISSSpotPrice(leg.SecID); err == nil && c > 0 {
+					last = c
+				}
+			}
+			if last <= 0 {
+				if s, err := getSpotPrice(p.Symbol); err == nil && s > 0 {
+					last = s
+				} else {
+					last = leg.CurrentPrice
+				}
 			}
 		} else {
 			l, b, o := cachedOptionQuote(leg.SecID)
