@@ -254,7 +254,10 @@
         <div class="bg-slate-800/80 p-6 rounded-xl border border-slate-700 space-y-4">
             <div class="flex justify-between items-center border-b border-slate-700 pb-3">
                 <h2 class="text-lg font-semibold text-slate-200">📈 Statistics & Trade History</h2>
-                <span id="trades-count" class="px-3 py-1 text-xs font-bold rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-mono">0 сделок</span>
+                <div class="flex items-center gap-2">
+                    <span id="trades-count" class="px-3 py-1 text-xs font-bold rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-mono">0 сделок</span>
+                    <button id="clear-history-btn" onclick="clearTradeHistory()" class="px-3 py-1 text-xs font-bold rounded-md bg-rose-500/10 text-rose-400 border border-rose-500/30 hover:bg-rose-500/20 transition">🗑 Очистить</button>
+                </div>
             </div>
 
             <div class="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono text-center">
@@ -1061,13 +1064,21 @@
 
                 let html = '';
                 recsData.recommendations.forEach(rec => {
+                    const hasReal = rec.real_theta !== undefined && rec.real_theta !== 0;
+                    const thetaTxt = hasReal
+                        ? `${rec.real_theta >= 0 ? '+' : ''}${Math.round(rec.real_theta).toLocaleString()} ₽/day (живые MOEX)`
+                        : rec.strategy_type === 'long_volatility' ? 'отрицательная (покупка волатильности)' : 'нет данных';
+                    const profitTxt = rec.real_max_profit !== undefined && rec.real_max_profit > 0
+                        ? `Макс прибыль: ${Math.round(rec.real_max_profit).toLocaleString()} ₽ | Макс риск: ${Math.round(rec.real_max_loss).toLocaleString()} ₽`
+                        : `Max Profit: ${rec.max_profit}`;
                     html += `<div class="p-2.5 bg-slate-800/80 rounded border border-slate-700 space-y-1 cursor-pointer hover:border-emerald-500 transition" onclick="openTdssStrategyModal('${rec.strategy_name}')">
                         <div class="flex justify-between items-center">
                             <span class="font-bold text-white">${rec.strategy_name}</span>
                             <span class="text-xs text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded">Trade &rarr;</span>
                         </div>
                         <div>Suitability: <span class="text-emerald-400">${rec.suitability}</span></div>
-                        <div>Theta: <span class="text-rose-400">+${rec.expected_theta} ₽/day</span> | Max Profit: ${rec.max_profit}</div>
+                        <div class="text-[10px] text-slate-300">Theta: <span class="text-rose-400">${thetaTxt}</span></div>
+                        <div class="text-[10px] text-slate-300">${profitTxt}</div>
                         <div class="text-slate-400 text-[10px]">Exit: ${rec.exit_rule}</div>
                     </div>`;
                 });
@@ -1075,13 +1086,16 @@
                 try {
                     const vsRes = await fetch('/api/v1/options/vertical-spread?iv=35&hv=28&outlook=BULLISH');
                     const vsData = await vsRes.json();
+                    const vsLive = vsData.real_max_profit !== undefined && vsData.real_max_profit > 0
+                        ? `Прибыль: ${Math.round(vsData.real_max_profit).toLocaleString()} ₽ | Риск: ${Math.round(vsData.real_max_loss).toLocaleString()} ₽ | Theta: ${vsData.real_theta >= 0 ? '+' : ''}${Math.round(vsData.real_theta).toLocaleString()} ₽/день`
+                        : `Max Profit: ${vsData.max_profit}`;
                     html += `<div class="p-2.5 bg-indigo-950/40 rounded border border-indigo-800 space-y-1 cursor-pointer hover:border-indigo-500 transition" onclick="openTdssStrategyModal('${vsData.strategy_name}')">
                         <div class="flex justify-between items-center">
                             <span class="font-bold text-indigo-300">⚡️ ${vsData.strategy_name}</span>
                             <span class="text-xs text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded">Spread Edge &rarr;</span>
                         </div>
                         <div class="text-xs text-slate-200">${vsData.suitability}</div>
-                        <div class="text-[10px] text-slate-400">Max Profit: ${vsData.max_profit}</div>
+                        <div class="text-[10px] text-slate-400">${vsLive}</div>
                     </div>`;
                 } catch (e) {}
 
@@ -1192,6 +1206,43 @@
             } catch (e) {
                 console.error("Failed to load trades", e);
             }
+        }
+
+        async function clearTradeHistory() {
+            const btn = document.getElementById('clear-history-btn');
+            if (btn.dataset.confirming === '1') {
+                try {
+                    btn.disabled = true;
+                    btn.innerText = 'Очищаем...';
+                    const res = await fetch('/api/v1/trades', { method: 'DELETE' });
+                    const data = await res.json();
+                    if (data.ok) {
+                        await updateTrades();
+                        btn.innerText = '🗑 Очистить';
+                        btn.disabled = false;
+                        btn.dataset.confirming = '';
+                    } else {
+                        alert(`❌ Ошибка очистки: ${data.error || 'unknown'}`);
+                        btn.innerText = '🗑 Очистить';
+                        btn.disabled = false;
+                        btn.dataset.confirming = '';
+                    }
+                } catch (e) {
+                    alert('❌ Ошибка очистки истории');
+                    btn.innerText = '🗑 Очистить';
+                    btn.disabled = false;
+                    btn.dataset.confirming = '';
+                }
+                return;
+            }
+            btn.dataset.confirming = '1';
+            btn.innerText = 'Подтвердить?';
+            setTimeout(() => {
+                if (btn.dataset.confirming === '1' && !btn.disabled) {
+                    btn.dataset.confirming = '';
+                    btn.innerText = '🗑 Очистить';
+                }
+            }, 2500);
         }
 
         async function openPositionProfile(id) {

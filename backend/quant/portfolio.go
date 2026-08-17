@@ -243,6 +243,16 @@ func AddTrade(t Trade) {
 	Persist()
 }
 
+// ClearTrades removes all closed-trade history and persists.
+func ClearTrades() int {
+	positionsMu.Lock()
+	n := len(tradeHistory)
+	tradeHistory = nil
+	positionsMu.Unlock()
+	Persist()
+	return n
+}
+
 // ComputeStats aggregates statistics over all closed trades.
 func ComputeStats() Stats {
 	positionsMu.Lock()

@@ -1376,6 +1376,18 @@ func closePositionHandler(w http.ResponseWriter, r *http.Request) {
 
 func tradesHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method == http.MethodDelete {
+		removed := quant.ClearTrades()
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":        true,
+			"removed":   removed,
+			"trades":    quant.GetTrades(),
+			"stats":     quant.ComputeStats(),
+		})
+		return
+	}
+
 	trades := quant.GetTrades()
 	stats := quant.ComputeStats()
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1971,18 +1983,15 @@ func strategyIronCondorHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// strategyBuildHandler builds real option legs for any supported TDSS strategy
-// using live MOEX ISS prices and exchange margin (IMNP for shorts, IMP for longs).
-// URL: /api/v1/strategy/build?strategy=iron_condor&symbol=Si
+// buildStrategy computes real option legs and P&L metrics for a supported TDSS
+// strategy using live MOEX ISS prices and exchange margin (IMNP for shorts).
+// Returns a response map (never nil); on failure the map contains "error".
 // Supported strategies: iron_condor, iron_butterfly, bull_put_spread,
 // bear_call_spread, bull_call_spread, bear_put_spread.
-func strategyBuildHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	strategy := r.URL.Query().Get("strategy")
+func buildStrategy(symbol, strategy string) map[string]interface{} {
 	if strategy == "" {
 		strategy = "iron_condor"
 	}
-	symbol := r.URL.Query().Get("symbol")
 	if symbol == "" {
 		symbol = "Si"
 	}
@@ -2004,8 +2013,7 @@ func strategyBuildHandler(w http.ResponseWriter, r *http.Request) {
 
 	chain := moexOptionsForAsset(symbol, expiry)
 	if len(chain) == 0 {
-		json.NewEncoder(w).Encode(map[string]interface{}{"error": "option chain not available"})
-		return
+		return map[string]interface{}{"error": "option chain not available"}
 	}
 
 	atmStrike := nearestStrike(chain, spot)
@@ -2104,19 +2112,17 @@ func strategyBuildHandler(w http.ResponseWriter, r *http.Request) {
 	for _, sp := range specs {
 		idx := atmIdx + sp.offset
 		if idx < 0 || idx >= len(strikes) {
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			return map[string]interface{}{
 				"error": fmt.Sprintf("%s legs not found for strikes", displayName),
-			})
-			return
+			}
 		}
 		strike := strikes[idx]
 		isCall := sp.isCall
 		opt := findOpt(strike, isCall)
 		if opt == nil {
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			return map[string]interface{}{
 				"error": fmt.Sprintf("%s: option not found at strike %v (call=%v)", displayName, strike, isCall),
-			})
-			return
+			}
 		}
 		last, _, _, _ := moexOptionQuote(opt.SecID)
 		if last <= 0 {
@@ -2200,7 +2206,7 @@ func strategyBuildHandler(w http.ResponseWriter, r *http.Request) {
 		maxLoss = 0
 	}
 
-	response := map[string]interface{}{
+	return map[string]interface{}{
 		"symbol":              symbol,
 		"series":              seriesCode,
 		"expiry":              expiry,
@@ -2217,7 +2223,15 @@ func strategyBuildHandler(w http.ResponseWriter, r *http.Request) {
 		"theta_per_contract":  math.Round(thetaTotal*100) / 100,
 		"margin_short_total":  math.Round(marginShort*100) / 100,
 	}
-	json.NewEncoder(w).Encode(response)
+}
+
+// strategyBuildHandler builds real option legs for any supported TDSS strategy.
+// URL: /api/v1/strategy/build?strategy=iron_condor&symbol=Si
+func strategyBuildHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	strategy := r.URL.Query().Get("strategy")
+	symbol := r.URL.Query().Get("symbol")
+	json.NewEncoder(w).Encode(buildStrategy(symbol, strategy))
 }
 
 // moexFutureInitialMargin fetches the exchange initial margin (INITIALMARGIN)
@@ -2271,6 +2285,29 @@ func optionsRecommendationsHandler(w http.ResponseWriter, r *http.Request) {
 
 	recs := quant.GenerateStrategyRecommendations(iv, hv, spot)
 	regime := quant.ClassifyMarketRegime(iv, hv, false)
+
+	// Enrich each recommendation with live market numbers from buildStrategy.
+	for i := range recs {
+		b := buildStrategy("Si", recs[i].StrategyType)
+		if err, _ := b["error"].(string); err != "" {
+			continue
+		}
+		if mp, ok := b["max_profit"].(float64); ok {
+			recs[i].RealMaxProfit = mp
+		}
+		if ml, ok := b["max_loss"].(float64); ok {
+			recs[i].RealMaxLoss = ml
+		}
+		if th, ok := b["theta_per_contract"].(float64); ok {
+			recs[i].RealTheta = th
+		}
+		if mg, ok := b["margin_short_total"].(float64); ok {
+			recs[i].RealMargin = mg
+		}
+		if sp, ok := b["spot_price"].(float64); ok {
+			recs[i].RealSpot = sp
+		}
+	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"market_regime":   string(regime),
@@ -2342,6 +2379,26 @@ func verticalSpreadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rec := quant.EvaluateVerticalSpreads(iv, hv, outlook)
+
+	// Enrich with live market numbers for the chosen spread strategy.
+	if b := buildStrategy("Si", rec.StrategyType); b["error"] == nil {
+		if mp, ok := b["max_profit"].(float64); ok {
+			rec.RealMaxProfit = mp
+		}
+		if ml, ok := b["max_loss"].(float64); ok {
+			rec.RealMaxLoss = ml
+		}
+		if th, ok := b["theta_per_contract"].(float64); ok {
+			rec.RealTheta = th
+		}
+		if mg, ok := b["margin_short_total"].(float64); ok {
+			rec.RealMargin = mg
+		}
+		if sp, ok := b["spot_price"].(float64); ok {
+			rec.RealSpot = sp
+		}
+	}
+
 	json.NewEncoder(w).Encode(rec)
 }
 

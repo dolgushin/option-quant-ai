@@ -23,6 +23,12 @@ type StrategyRecommendation struct {
 	MaxProfit      string   `json:"max_profit"`
 	RiskProfile    string   `json:"risk_profile"`
 	ExitRule       string   `json:"exit_rule"`
+	StrategyType   string   `json:"strategy_type"`   // maps to /api/v1/strategy/build
+	RealTheta      float64  `json:"real_theta"`      // live theta, filled by handler
+	RealMaxProfit  float64  `json:"real_max_profit"` // live, filled by handler
+	RealMaxLoss    float64  `json:"real_max_loss"`   // live, filled by handler
+	RealMargin     float64  `json:"real_margin"`     // live GO, filled by handler
+	RealSpot       float64  `json:"real_spot"`       // live spot, filled by handler
 }
 
 type ExitAdvice struct {
@@ -57,10 +63,11 @@ func GenerateStrategyRecommendations(iv, hv, spot float64) []StrategyRecommendat
 			Regime:       string(regime),
 			Suitability:  "High (Ideal for Theta collection in rangebound markets)",
 			TargetLegs:   []string{"Sell OTM Put", "Buy Far OTM Put", "Sell OTM Call", "Buy Far OTM Call"},
-			ExpectedTheta: 1250.0,
+			ExpectedTheta: 0,
 			MaxProfit:    "Net premium received",
 			RiskProfile:  "Defined risk, max loss at wings",
 			ExitRule:     "Take profit at 50% max profit or close 30 DTE before expiration.",
+			StrategyType: "iron_condor",
 		})
 
 		recs = append(recs, StrategyRecommendation{
@@ -68,10 +75,11 @@ func GenerateStrategyRecommendations(iv, hv, spot float64) []StrategyRecommendat
 			Regime:       string(regime),
 			Suitability:  "Medium (ATM premium collection)",
 			TargetLegs:   []string{"Sell ATM Put", "Buy OTM Put", "Sell ATM Call", "Buy OTM Call"},
-			ExpectedTheta: 1800.0,
+			ExpectedTheta: 0,
 			MaxProfit:    "Net premium at ATM strike",
 			RiskProfile:  "Defined risk, high gamma sensitivity near expiration",
 			ExitRule:     "Time stop at 30% DTE left. Take profit at 20% max profit.",
+			StrategyType: "iron_butterfly",
 		})
 	} else {
 		recs = append(recs, StrategyRecommendation{
@@ -79,10 +87,11 @@ func GenerateStrategyRecommendations(iv, hv, spot float64) []StrategyRecommendat
 			Regime:       string(regime),
 			Suitability:  "High (Explosive movement expected)",
 			TargetLegs:   []string{"Buy ATM Straddle / Strangle", "Delta Hedge via Futures"},
-			ExpectedTheta: -450.0,
+			ExpectedTheta: 0,
 			MaxProfit:    "Unlimited on breakout",
 			RiskProfile:  "Theta decay cost, mitigated by gamma scalping",
 			ExitRule:     "Reset delta when price moves by calculated Move Step.",
+			StrategyType: "long_volatility",
 		})
 	}
 
@@ -150,10 +159,11 @@ func EvaluateVerticalSpreads(iv, hv float64, outlook string) StrategyRecommendat
 				Regime:       "High IV / Bullish",
 				Suitability:  "Выгоднее: высокая IV позволяет продать дорогой пут и купить защиту дешевле, собирая временной распад.",
 				TargetLegs:   []string{"Sell OTM Put", "Buy Far OTM Put"},
-				ExpectedTheta: 450.0,
+				ExpectedTheta: 0,
 				MaxProfit:    "Net Premium Collected",
 				RiskProfile:  "Defined risk (Strike Width - Premium)",
 				ExitRule:     "Take profit at 50% max profit. Roll if tested.",
+				StrategyType: "bull_put_spread",
 			}
 		} else {
 			return StrategyRecommendation{
@@ -161,10 +171,11 @@ func EvaluateVerticalSpreads(iv, hv float64, outlook string) StrategyRecommendat
 				Regime:       "Low/Normal IV / Bullish",
 				Suitability:  "Выгоднее: IV низкая, покупка колл-спреда дешевле по премии при ожидании роста.",
 				TargetLegs:   []string{"Buy ATM/OTM Call", "Sell Higher OTM Call"},
-				ExpectedTheta: -120.0,
+				ExpectedTheta: 0,
 				MaxProfit:    "Spread Width - Net Debit",
 				RiskProfile:  "Limited to net debit paid",
 				ExitRule:     "Take profit at 70% max profit.",
+				StrategyType: "bull_call_spread",
 			}
 		}
 	} else { // BEARISH
@@ -174,10 +185,11 @@ func EvaluateVerticalSpreads(iv, hv float64, outlook string) StrategyRecommendat
 				Regime:       "High IV / Bearish",
 				Suitability:  "Выгоднее: высокая IV идеальна для продажи колл-спреда (сбор премии за счет падения или стояния рынка).",
 				TargetLegs:   []string{"Sell OTM Call", "Buy Far OTM Call"},
-				ExpectedTheta: 480.0,
+				ExpectedTheta: 0,
 				MaxProfit:    "Net Premium Collected",
 				RiskProfile:  "Defined risk",
 				ExitRule:     "Take profit at 50% max profit.",
+				StrategyType: "bear_call_spread",
 			}
 		} else {
 			return StrategyRecommendation{
@@ -185,10 +197,11 @@ func EvaluateVerticalSpreads(iv, hv float64, outlook string) StrategyRecommendat
 				Regime:       "Low/Normal IV / Bearish",
 				Suitability:  "Выгоднее: покупка пут-спреда при недорогой волатильности для защиты от падения.",
 				TargetLegs:   []string{"Buy ATM Put", "Sell Lower OTM Put"},
-				ExpectedTheta: -150.0,
+				ExpectedTheta: 0,
 				MaxProfit:    "Spread Width - Net Debit",
 				RiskProfile:  "Limited to net debit paid",
 				ExitRule:     "Take profit at 70% max profit.",
+				StrategyType: "bear_put_spread",
 			}
 		}
 	}
