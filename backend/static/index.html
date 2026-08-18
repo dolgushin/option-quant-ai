@@ -743,22 +743,22 @@
                 curSeries = `${currentAsset}U6`;
             }
 
-            // Spread in points × contract multiplier × lot size = rough P&L for
-            // a basis convergence trade. Both legs are REAL futures contracts.
+            // Spread in points × contract multiplier = rough P&L for
+            // a single basis convergence trade. Both legs are REAL futures contracts.
             const mult = (currentAsset === 'RI' ? 100 : currentAsset === 'CR' ? 1000 : 1000);
             const spreadPts = Math.abs(quarterlyPrice - perpPrice);
-            const spreadPnl = Math.round(spreadPts * mult * 10);
+            const spreadPnl = Math.round(spreadPts * mult);
 
             openStrategyModal(
                 `Basis Arbitrage (${curSeries} vs ${qSeries})`,
                 'Basis Arbitrage',
                 [
-                    { action: 'SELL', symbol: `${qSeries} (Quarterly)`, secid: qSeries, kind: 'FUTURES', qty: 10, price: `${quarterlyPrice.toLocaleString()} ₽` },
-                    { action: 'BUY', symbol: `${curSeries} (Current)`, secid: curSeries, kind: 'FUTURES', qty: 10, price: `${perpPrice.toLocaleString()} ₽` }
+                    { action: 'SELL', symbol: `${qSeries} (Quarterly)`, secid: qSeries, kind: 'FUTURES', qty: 1, price: `${quarterlyPrice.toLocaleString()} ₽` },
+                    { action: 'BUY', symbol: `${curSeries} (Current)`, secid: curSeries, kind: 'FUTURES', qty: 1, price: `${perpPrice.toLocaleString()} ₽` }
                 ],
                 spreadPnl,
                 spreadPnl,
-                Math.round(spreadPts * mult * 10),
+                Math.round(spreadPts * mult),
                 0
             );
         }
@@ -782,23 +782,23 @@
                         const pnlPerContract = Math.round((data.reversal_pnl > data.conversion_pnl ? data.reversal_pnl : data.conversion_pnl) * 100) / 100;
                         const useReversal = data.reversal_pnl >= data.conversion_pnl;
                         const legs = useReversal ? [
-                            { action: 'BUY', symbol: `${callSecid} (Call)`, secid: callSecid, kind: 'OPTION', strike: data.strike, isCall: true, qty: 10, price: `${callPrice.toLocaleString()} ₽` },
-                            { action: 'SELL', symbol: `${putSecid} (Put)`, secid: putSecid, kind: 'OPTION', strike: data.strike, isCall: false, qty: 10, price: `${putPrice.toLocaleString()} ₽` },
-                            { action: 'SELL', symbol: `${seriesCode} Futures`, secid: seriesCode, kind: 'FUTURES', strike: 0, isCall: false, qty: 10, price: `${futurePrice.toLocaleString()} ₽` }
+                            { action: 'BUY', symbol: `${callSecid} (Call)`, secid: callSecid, kind: 'OPTION', strike: data.strike, isCall: true, qty: 1, price: `${callPrice.toLocaleString()} ₽` },
+                            { action: 'SELL', symbol: `${putSecid} (Put)`, secid: putSecid, kind: 'OPTION', strike: data.strike, isCall: false, qty: 1, price: `${putPrice.toLocaleString()} ₽` },
+                            { action: 'SELL', symbol: `${seriesCode} Futures`, secid: seriesCode, kind: 'FUTURES', strike: 0, isCall: false, qty: 1, price: `${futurePrice.toLocaleString()} ₽` }
                         ] : [
-                            { action: 'SELL', symbol: `${callSecid} (Call)`, secid: callSecid, kind: 'OPTION', strike: data.strike, isCall: true, qty: 10, price: `${callPrice.toLocaleString()} ₽` },
-                            { action: 'BUY', symbol: `${putSecid} (Put)`, secid: putSecid, kind: 'OPTION', strike: data.strike, isCall: false, qty: 10, price: `${putPrice.toLocaleString()} ₽` },
-                            { action: 'BUY', symbol: `${seriesCode} Futures`, secid: seriesCode, kind: 'FUTURES', strike: 0, isCall: false, qty: 10, price: `${futurePrice.toLocaleString()} ₽` }
+                            { action: 'SELL', symbol: `${callSecid} (Call)`, secid: callSecid, kind: 'OPTION', strike: data.strike, isCall: true, qty: 1, price: `${callPrice.toLocaleString()} ₽` },
+                            { action: 'BUY', symbol: `${putSecid} (Put)`, secid: putSecid, kind: 'OPTION', strike: data.strike, isCall: false, qty: 1, price: `${putPrice.toLocaleString()} ₽` },
+                            { action: 'BUY', symbol: `${seriesCode} Futures`, secid: seriesCode, kind: 'FUTURES', strike: 0, isCall: false, qty: 1, price: `${futurePrice.toLocaleString()} ₽` }
                         ];
 
                         openStrategyModal(
                             `Put-Call Parity Arbitrage (${currentAsset}) — ${useReversal ? 'Reversal' : 'Conversion'}`,
                             'Conversion / Reversal',
                             legs,
-                            Math.max(0, pnlPerContract * 10),
-                            Math.max(pnlPerContract * 10, 0),
-                            data.total_margin * 10,
-                            Math.max(data.theta_per_contract * 10, 0)
+                            Math.max(0, pnlPerContract),
+                            Math.max(pnlPerContract, 0),
+                            data.total_margin,
+                            Math.max(data.theta_per_contract, 0)
                         );
                     } else {
                         // Fallback to approximate modal if live chain is unavailable.
@@ -806,14 +806,14 @@
                             `Put-Call Parity Arbitrage (${currentAsset})`,
                             'Conversion / Reversal',
                             [
-                                { action: 'SELL', symbol: `${currentAsset}${strike}C (Call)`, qty: 5, price: '≈ 0.5% премии' },
-                                { action: 'BUY', symbol: `${currentAsset}${strike}P (Put)`, qty: 5, price: '≈ 0.5% премии' },
-                                { action: 'BUY', symbol: `${currentAsset} Futures`, qty: 5, price: `${Math.round(spot).toLocaleString()} ₽` }
+                                { action: 'SELL', symbol: `${currentAsset}${strike}C (Call)`, qty: 1, price: '≈ 0.5% премии' },
+                                { action: 'BUY', symbol: `${currentAsset}${strike}P (Put)`, qty: 1, price: '≈ 0.5% премии' },
+                                { action: 'BUY', symbol: `${currentAsset} Futures`, qty: 1, price: `${Math.round(spot).toLocaleString()} ₽` }
                             ],
-                            4000,
-                            8500,
-                            22000,
-                            350
+                            800,
+                            1700,
+                            4400,
+                            70
                         );
                     }
                 })
@@ -822,14 +822,14 @@
                         `Put-Call Parity Arbitrage (${currentAsset})`,
                         'Conversion / Reversal',
                         [
-                            { action: 'SELL', symbol: `${currentAsset}${strike}C (Call)`, qty: 5, price: '≈ 0.5% премии' },
-                            { action: 'BUY', symbol: `${currentAsset}${strike}P (Put)`, qty: 5, price: '≈ 0.5% премии' },
-                            { action: 'BUY', symbol: `${currentAsset} Futures`, qty: 5, price: `${Math.round(spot).toLocaleString()} ₽` }
+                            { action: 'SELL', symbol: `${currentAsset}${strike}C (Call)`, qty: 1, price: '≈ 0.5% премии' },
+                            { action: 'BUY', symbol: `${currentAsset}${strike}P (Put)`, qty: 1, price: '≈ 0.5% премии' },
+                            { action: 'BUY', symbol: `${currentAsset} Futures`, qty: 1, price: `${Math.round(spot).toLocaleString()} ₽` }
                         ],
-                        4000,
-                        8500,
-                        22000,
-                        350
+                        800,
+                        1700,
+                        4400,
+                        70
                     );
                 });
         }
@@ -864,17 +864,17 @@
                                 kind: 'OPTION',
                                 strike: l.strike,
                                 isCall: l.is_call,
-                                qty: 10,
+                                qty: 1,
                                 price: `${Math.round(l.price).toLocaleString()} ₽`
                             }));
                             openStrategyModal(
                                 `${stratName} (${currentAsset}) — ${data.strategy_name}`,
                                 data.strategy_name,
                                 legs,
-                                Math.max(data.max_loss, 0) * 10,
-                                data.unlimited_max_profit ? 'неограничена' : Math.max(data.max_profit, 0) * 10,
-                                data.margin_short_total * 10,
-                                Math.max(data.theta_per_contract * 10, 0)
+                                Math.max(data.max_loss, 0),
+                                data.unlimited_max_profit ? 'неограничена' : Math.max(data.max_profit, 0),
+                                data.margin_short_total,
+                                Math.max(data.theta_per_contract, 0)
                             );
                         } else {
                             alert(`Ошибка построения позиции: ${data.error || 'нет данных'}`);
@@ -896,17 +896,17 @@
                             kind: 'OPTION',
                             strike: l.strike,
                             isCall: l.is_call,
-                            qty: 10,
+                            qty: 1,
                             price: `${Math.round(l.price).toLocaleString()} ₽`
                         }));
                         openStrategyModal(
                             `${stratName} (${currentAsset}) — ${data.strategy_name}`,
                             data.strategy_name,
                             legs,
-                            Math.max(data.max_loss, 0) * 10,
-                            Math.max(data.max_profit, 0) * 10,
-                            data.margin_short_total * 10,
-                            Math.max(data.theta_per_contract * 10, 0)
+                            Math.max(data.max_loss, 0),
+                            Math.max(data.max_profit, 0),
+                            data.margin_short_total,
+                            Math.max(data.theta_per_contract, 0)
                         );
                     } else {
                         // Fallback.
@@ -916,15 +916,15 @@
                             `${stratName} (${currentAsset})`,
                             'Iron Condor',
                             [
-                                { action: 'SELL', symbol: `${currentAsset}${s - step}P (Put)`, qty: 10, price: '≈ 1% премии' },
-                                { action: 'BUY', symbol: `${currentAsset}${s - 2 * step}P (Put)`, qty: 10, price: '≈ 0.4% премии' },
-                                { action: 'SELL', symbol: `${currentAsset}${s + step}C (Call)`, qty: 10, price: '≈ 1% премии' },
-                                { action: 'BUY', symbol: `${currentAsset}${s + 2 * step}C (Call)`, qty: 10, price: '≈ 0.4% премии' }
+                                { action: 'SELL', symbol: `${currentAsset}${s - step}P (Put)`, qty: 1, price: '≈ 1% премии' },
+                                { action: 'BUY', symbol: `${currentAsset}${s - 2 * step}P (Put)`, qty: 1, price: '≈ 0.4% премии' },
+                                { action: 'SELL', symbol: `${currentAsset}${s + step}C (Call)`, qty: 1, price: '≈ 1% премии' },
+                                { action: 'BUY', symbol: `${currentAsset}${s + 2 * step}C (Call)`, qty: 1, price: '≈ 0.4% премии' }
                             ],
-                            12000,
-                            10300,
-                            28000,
-                            1250
+                            1200,
+                            1030,
+                            2800,
+                            125
                         );
                     }
                 })
@@ -935,15 +935,15 @@
                         `${stratName} (${currentAsset})`,
                         'Iron Condor',
                         [
-                            { action: 'SELL', symbol: `${currentAsset}${s - step}P (Put)`, qty: 10, price: '≈ 1% премии' },
-                            { action: 'BUY', symbol: `${currentAsset}${s - 2 * step}P (Put)`, qty: 10, price: '≈ 0.4% премии' },
-                            { action: 'SELL', symbol: `${currentAsset}${s + step}C (Call)`, qty: 10, price: '≈ 1% премии' },
-                            { action: 'BUY', symbol: `${currentAsset}${s + 2 * step}C (Call)`, qty: 10, price: '≈ 0.4% премии' }
+                            { action: 'SELL', symbol: `${currentAsset}${s - step}P (Put)`, qty: 1, price: '≈ 1% премии' },
+                            { action: 'BUY', symbol: `${currentAsset}${s - 2 * step}P (Put)`, qty: 1, price: '≈ 0.4% премии' },
+                            { action: 'SELL', symbol: `${currentAsset}${s + step}C (Call)`, qty: 1, price: '≈ 1% премии' },
+                            { action: 'BUY', symbol: `${currentAsset}${s + 2 * step}C (Call)`, qty: 1, price: '≈ 0.4% премии' }
                         ],
-                        12000,
-                        10300,
-                        28000,
-                        1250
+                        1200,
+                        1030,
+                        2800,
+                        125
                     );
                 });
         }
