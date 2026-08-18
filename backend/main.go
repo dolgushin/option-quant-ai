@@ -2279,6 +2279,10 @@ func optionsRecommendationsHandler(w http.ResponseWriter, r *http.Request) {
 	ivStr := r.URL.Query().Get("iv")
 	hvStr := r.URL.Query().Get("hv")
 	spotStr := r.URL.Query().Get("spot")
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "Si"
+	}
 
 	iv := 35.0
 	if ivStr != "" {
@@ -2288,7 +2292,7 @@ func optionsRecommendationsHandler(w http.ResponseWriter, r *http.Request) {
 	if hvStr != "" {
 		hv, _ = strconv.ParseFloat(hvStr, 64)
 	}
-	spot, _ := getSpotPrice("Si")
+	spot, _ := getSpotPrice(symbol)
 	if spot <= 0 {
 		spot = 83200.0
 	}
@@ -2301,7 +2305,7 @@ func optionsRecommendationsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Enrich each recommendation with live market numbers from buildStrategy.
 	for i := range recs {
-		b := buildStrategy("Si", recs[i].StrategyType)
+		b := buildStrategy(symbol, recs[i].StrategyType)
 		if err, _ := b["error"].(string); err != "" {
 			continue
 		}
@@ -2384,6 +2388,10 @@ func verticalSpreadHandler(w http.ResponseWriter, r *http.Request) {
 	if outlook == "" {
 		outlook = "BULLISH"
 	}
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "Si"
+	}
 
 	iv := 35.0
 	if ivStr != "" {
@@ -2397,7 +2405,7 @@ func verticalSpreadHandler(w http.ResponseWriter, r *http.Request) {
 	rec := quant.EvaluateVerticalSpreads(iv, hv, outlook)
 
 	// Enrich with live market numbers for the chosen spread strategy.
-	if b := buildStrategy("Si", rec.StrategyType); b["error"] == nil {
+	if b := buildStrategy(symbol, rec.StrategyType); b["error"] == nil {
 		if mp, ok := b["max_profit"].(float64); ok {
 			rec.RealMaxProfit = mp
 		}

@@ -1087,7 +1087,7 @@
 
         async function updateTDSS() {
             try {
-                const recsRes = await fetch('/api/v1/options/recommendations?iv=35&hv=28');
+                const recsRes = await fetch(`/api/v1/options/recommendations?iv=35&hv=28&symbol=${currentAsset}`);
                 const recsData = await recsRes.json();
 
                 document.getElementById('market-regime-badge').innerText = `Regime: ${recsData.market_regime}`;
@@ -1120,7 +1120,7 @@
                 });
 
                 try {
-                    const vsRes = await fetch('/api/v1/options/vertical-spread?iv=35&hv=28&outlook=BULLISH');
+                    const vsRes = await fetch(`/api/v1/options/vertical-spread?iv=35&hv=28&outlook=BULLISH&symbol=${currentAsset}`);
                     const vsData = await vsRes.json();
                     const vsLive = vsData.real_max_profit !== undefined && vsData.real_max_profit > 0
                         ? `Прибыль: ${Math.round(vsData.real_max_profit).toLocaleString()} ₽ | Риск: ${Math.round(vsData.real_max_loss).toLocaleString()} ₽ | Theta: ${vsData.real_theta >= 0 ? '+' : ''}${Math.round(vsData.real_theta).toLocaleString()} ₽/день`
