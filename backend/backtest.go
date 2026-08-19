@@ -220,6 +220,194 @@ func currentATMIV(symbol string) float64 {
 	return math.Round(iv*10000) / 10000
 }
 
+// circuitBreaker blocks new entries when risk limits are breached:
+//   - today's realized loss exceeds the daily limit (-20,000 RUB)
+//   - realized drawdown from peak equity exceeds the drawdown limit (-35,000 RUB)
+func circuitBreaker() map[string]interface{} {
+	const dailyLossLimit = -20000.0
+	const drawdownLimit = -35000.0
+	now := time.Now()
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	trades := quant.GetTrades()
+	todayPnL := 0.0
+	run := 0.0
+	peak := 0.0
+	dd := 0.0
+	for _, tr := range trades {
+		if tr.ClosedAt.After(dayStart) {
+			todayPnL += tr.RealizedPnL
+		}
+		run += tr.RealizedPnL
+		if run > peak {
+			peak = run
+		}
+	}
+	if run < peak {
+		dd = run - peak
+	}
+
+	var reasons []string
+	allowed := true
+	if todayPnL < dailyLossLimit {
+		allowed = false
+		reasons = append(reasons, fmt.Sprintf("Дневной убыток %.0f ₽ < лимита %.0f ₽", todayPnL, dailyLossLimit))
+	}
+	if dd < drawdownLimit {
+		allowed = false
+		reasons = append(reasons, fmt.Sprintf("Просадка от пика %.0f ₽ < лимита %.0f ₽", dd, drawdownLimit))
+	}
+	if len(reasons) == 0 {
+		reasons = append(reasons, "Лимиты риска не превышены")
+	}
+	return map[string]interface{}{
+		"allowed":            allowed,
+		"reasons":            reasons,
+		"today_realized_pnl": todayPnL,
+		"drawdown":           dd,
+	}
+}
+
+// tradeGate evaluates the systematic entry rules derived from the backtest
+// against the current market: DTE window, implied volatility level, and
+// realized volatility regime. Returns whether a new entry is allowed plus the
+// reasons (or the violated rules). Used to gate live recommendations.
+func tradeGate(symbol string) map[string]interface{} {
+	gate := map[string]interface{}{
+		"allowed": true,
+		"reasons": []string{"Все правила входа выполнены (DTE 20-60, IV ≥ 25%, HV ≥ 15%)"},
+	}
+
+	// Circuit breaker: block new entries if today's realized loss exceeded the
+	// threshold, or the realized drawdown from the equity peak is too deep.
+	cb := circuitBreaker()
+	if !cb["allowed"].(bool) {
+		reasons := cb["reasons"].([]string)
+		gate["allowed"] = false
+		gate["circuit_breaker"] = true
+		gate["reasons"] = reasons
+		return gate
+	}
+	gate["circuit_breaker"] = false
+
+	expiry := currentSeriesExpiry(symbol)
+	if expiry == nil {
+		gate["allowed"] = false
+		gate["reasons"] = []string{"Нет серии опционов для актива"}
+		return gate
+	}
+	dte := dteInDays(expiry.Format("2006-01-02"), time.Now())
+
+	var reasons []string
+	okDTE := dte >= 20 && dte <= 60
+	if !okDTE {
+		reasons = append(reasons, fmt.Sprintf("DTE %d вне окна 20-60", dte))
+	}
+
+	// Live implied vol of the ATM pair.
+	iv := currentATMIV(symbol)
+	okIV := iv >= 0.25
+	if !okIV {
+		reasons = append(reasons, fmt.Sprintf("IV %.1f%% < 25%%", iv*100))
+	}
+
+	// Realized vol from daily futures closes.
+	series := selectedSeries[symbol]
+	hv := 0.0
+	if series != "" {
+		from := time.Now().AddDate(0, 0, -40).Format("2006-01-02")
+		till := time.Now().Format("2006-01-02")
+		if candles, err := fetchFutureHistory(series, from, till); err == nil && len(candles) >= 21 {
+			hv = realizedVol(candles, len(candles)-1)
+		}
+	}
+	okHV := hv >= 0.15
+	if !okHV {
+		reasons = append(reasons, fmt.Sprintf("Реализ. волат. %.1f%% < 15%%", hv*100))
+	}
+
+	allowed := okDTE && okIV && okHV
+	gate["allowed"] = allowed
+	gate["dte"] = dte
+	gate["iv"] = iv
+	gate["hv"] = math.Round(hv*10000) / 10000
+	if allowed {
+		gate["reasons"] = []string{"Все правила входа выполнены (DTE 20-60, IV ≥ 25%, HV ≥ 15%)"}
+	} else if len(reasons) == 0 {
+		gate["reasons"] = []string{"Нет данных для проверки правил входа"}
+	} else {
+		gate["reasons"] = reasons
+	}
+	return gate
+}
+
+// tradeTrend evaluates a simple trend overlay on the futures daily closes:
+// SMA-20 vs SMA-50 cross direction plus short-term slope. Returns regime
+// (BULLISH / BEARISH / SIDEWAYS), strength, and the raw SMAs.
+func tradeTrend(symbol string) map[string]interface{} {
+	out := map[string]interface{}{
+		"regime":  "SIDEWAYS",
+		"strength": "neutral",
+		"sma20":   0.0,
+		"sma50":   0.0,
+		"close":   0.0,
+		"error":   nil,
+	}
+	series := selectedSeries[symbol]
+	if series == "" {
+		out["error"] = "нет серии фьючерса"
+		return out
+	}
+	from := time.Now().AddDate(0, 0, -80).Format("2006-01-02")
+	till := time.Now().Format("2006-01-02")
+	candles, err := fetchFutureHistory(series, from, till)
+	if err != nil || len(candles) < 51 {
+		out["error"] = "недостаточно данных для тренда"
+		return out
+	}
+
+	sma := func(n int) float64 {
+		if len(candles) < n {
+			return 0
+		}
+		s := 0.0
+		for i := len(candles) - n; i < len(candles); i++ {
+			s += candles[i].Close
+		}
+		return s / float64(n)
+	}
+
+	s20 := sma(20)
+	s50 := sma(50)
+	last := candles[len(candles)-1].Close
+	prev := candles[len(candles)-5].Close
+	slope := 0.0
+	if prev > 0 {
+		slope = (last - prev) / prev
+	}
+
+	regime := "SIDEWAYS"
+	strength := "neutral"
+	if s20 > s50*1.01 {
+		regime = "BULLISH"
+	} else if s20 < s50*0.99 {
+		regime = "BEARISH"
+	}
+	if slope > 0.01 {
+		strength = "rising"
+	} else if slope < -0.01 {
+		strength = "falling"
+	}
+
+	out["regime"] = regime
+	out["strength"] = strength
+	out["sma20"] = math.Round(s20)
+	out["sma50"] = math.Round(s50)
+	out["close"] = last
+	out["slope_5d"] = math.Round(slope*10000) / 10000
+	return out
+}
+
 // realizedVol computes trailing annualized realized volatility from daily
 // closes ending at index `end` (inclusive), using a 20-trading-day window.
 // Returns 0 if not enough data.

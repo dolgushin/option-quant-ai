@@ -1178,11 +1178,102 @@ func positionsHandler(w http.ResponseWriter, r *http.Request) {
 		"stats":     stats,
 	})
 }
-
 func portfolioHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+
 	portfolio := quant.GetPortfolio()
 	json.NewEncoder(w).Encode(portfolio)
+}
+
+// riskHandler aggregates portfolio-level risk across all open positions:
+// net delta/gamma/theta, margin load, realized drawdown and a per-position
+// risk limit report. GET /api/v1/risk
+func riskHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	positions := quant.GetActivePositions()
+	for i := range positions {
+		repricePosition(&positions[i])
+		quant.SavePosition(positions[i])
+	}
+
+	netDelta := 0.0
+	netGamma := 0.0
+	netTheta := 0.0
+	totalMargin := 0.0
+	totalValue := 0.0
+
+	for i := range positions {
+		p := &positions[i]
+		spot, _ := getSpotPrice(p.Symbol)
+		mult := contractMultiplier(p.Symbol)
+		rRate := 0.16
+		days := dteInDays(p.Expiry, time.Now())
+		if days <= 0 {
+			days = 30
+		}
+		t := float64(days) / 365.0
+
+		for _, leg := range p.Legs {
+			dir := 1.0
+			if leg.Side == "SELL" {
+				dir = -1.0
+			}
+			qty := float64(leg.Quantity)
+			if leg.Kind == "FUTURES" {
+				netDelta += dir * 1.0 * qty
+				totalValue += dir * leg.CurrentPrice * mult * qty
+				continue
+			}
+			iv := quant.ImpliedVolatility(leg.IsCall, leg.CurrentPrice, spot, leg.Strike, t, rRate)
+			if iv <= 0 {
+				iv = 0.30
+			}
+			g := quant.CalculateBlackScholes(leg.IsCall, spot, leg.Strike, t, rRate, iv)
+			netDelta += dir * g.Delta * qty
+			netGamma += dir * g.Gamma * qty
+			netTheta += dir * g.Theta * mult * qty
+			totalValue += dir * leg.CurrentPrice * mult * qty
+		}
+		totalMargin += p.Margin
+	}
+
+	portfolio := quant.GetPortfolio()
+	stats := quant.ComputeStats()
+	marginLoad := 0.0
+	if portfolio.InitialCapital > 0 {
+		marginLoad = portfolio.LockedMargin / portfolio.InitialCapital * 100
+	}
+
+	// Realized drawdown from trade history (peak realized equity vs current).
+	realized := stats.TotalRealizedPnL
+	run := 0.0
+	peak := 0.0
+	for _, tr := range quant.GetTrades() {
+		run += tr.RealizedPnL
+		if run > peak {
+			peak = run
+		}
+	}
+	dd := peak - realized
+	if dd < 0 {
+		dd = 0
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"net_delta":       math.Round(netDelta*100) / 100,
+		"net_gamma":       math.Round(netGamma*100) / 100,
+		"net_theta":       math.Round(netTheta*100) / 100,
+		"margin_load_pct": math.Round(marginLoad*100) / 100,
+		"locked_margin":   portfolio.LockedMargin,
+		"initial_capital": portfolio.InitialCapital,
+		"unrealized_pnl":  portfolio.UnrealizedPnL,
+		"realized_pnl":    realized,
+		"drawdown_realized": math.Round(dd*100) / 100,
+		"positions_count": len(positions),
+		"total_exposure":  math.Round(totalValue*100) / 100,
+		"stats":           stats,
+	})
 }
 
 func capitalHandler(w http.ResponseWriter, r *http.Request) {
@@ -1369,6 +1460,126 @@ func closePositionHandler(w http.ResponseWriter, r *http.Request) {
 		"success":   true,
 		"message":   "Position closed and recorded in trade history",
 		"trade":     trade,
+		"portfolio": portfolio,
+		"stats":     stats,
+	})
+}
+
+// deltaHedgeHandler hedges the net delta of an open position with futures.
+// POST /api/v1/positions/hedge {"id":"...", "live":true}
+// It places a real Alor market order when "live" is true and Alor is wired,
+// otherwise it simulates the hedge and records a FUTURES leg on the position.
+func deltaHedgeHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		ID   string `json:"id"`
+		Live bool   `json:"live"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	positions := quant.GetActivePositions()
+	var pos *quant.Position
+	for i := range positions {
+		if positions[i].ID == req.ID {
+			pos = &positions[i]
+			break
+		}
+	}
+	if pos == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "position not found"})
+		return
+	}
+
+	repricePosition(pos)
+
+	// Net delta after repricing; futures hedge offsets it to ~0.
+	netDelta := pos.Delta
+	hedgeQty := int(math.Round(-netDelta))
+	if hedgeQty == 0 {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "Позиция уже дельта-нейтральна (net delta ≈ 0)",
+			"delta":   netDelta,
+			"hedge":   0,
+		})
+		return
+	}
+	side := "buy"
+	if hedgeQty < 0 {
+		side = "sell"
+		hedgeQty = -hedgeQty
+	}
+	sideUp := "BUY"
+	if side == "sell" {
+		sideUp = "SELL"
+	}
+
+	futureSecid := selectedSeries[pos.Symbol]
+	if futureSecid == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "no futures series for " + pos.Symbol})
+		return
+	}
+
+	// Place a real order when requested and Alor is configured.
+	orderNote := "бумажный хедж (Alor не подключён)"
+	if req.Live && alorExec != nil {
+		resp, err := alorExec.DeltaHedge(futureSecid, netDelta)
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "Alor hedge failed: " + err.Error(),
+			})
+			return
+		}
+		if resp != nil && resp.Message != "" {
+			orderNote = resp.Message
+		} else {
+			orderNote = "ордер отправлен в Alor"
+		}
+	}
+
+	// Record the hedge leg on the position (paper tracking in both cases).
+	spot, _ := getSpotPrice(pos.Symbol)
+	if spot <= 0 {
+		spot = pos.CurrentValue
+	}
+	mult := contractMultiplier(pos.Symbol)
+	margin := moexFutureInitialMargin(futureSecid)
+	if margin <= 0 {
+		margin = spot * mult * 0.15
+	}
+
+	hedgeLeg := quant.PositionLeg{
+		SecID:        futureSecid,
+		Symbol:       pos.Symbol,
+		Kind:         "FUTURES",
+		Side:         sideUp,
+		Quantity:     hedgeQty,
+		EntryPrice:   spot,
+		CurrentPrice: spot,
+	}
+	pos.Legs = append(pos.Legs, hedgeLeg)
+	pos.Margin += margin * float64(hedgeQty)
+	repricePosition(pos)
+	quant.SavePosition(*pos)
+
+	portfolio := quant.GetPortfolio()
+	stats := quant.ComputeStats()
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":   true,
+		"message":   fmt.Sprintf("Хедж: %s %d контрактов %s (%s)", sideUp, hedgeQty, futureSecid, orderNote),
+		"side":      sideUp,
+		"hedge_qty": hedgeQty,
+		"delta":     pos.Delta,
+		"position":  pos,
 		"portfolio": portfolio,
 		"stats":     stats,
 	})
@@ -2332,7 +2543,18 @@ func optionsRecommendationsHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"market_regime":   string(regime),
 		"recommendations": recs,
+		"trade_gate":      tradeGate(symbol),
+		"trend":           tradeTrend(symbol),
 	})
+}
+
+func optionsTrendHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "Si"
+	}
+	json.NewEncoder(w).Encode(tradeTrend(symbol))
 }
 
 func optionsExitAdviceHandler(w http.ResponseWriter, r *http.Request) {
@@ -2423,7 +2645,10 @@ func verticalSpreadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	json.NewEncoder(w).Encode(rec)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"recommendation": rec,
+		"trade_gate":     tradeGate(symbol),
+	})
 }
 
 func rollingAdviceHandler(w http.ResponseWriter, r *http.Request) {
@@ -2498,13 +2723,16 @@ func main() {
 	http.HandleFunc("/api/v1/positions", positionsHandler)
 	http.HandleFunc("/api/v1/positions/open", openPositionHandler)
 	http.HandleFunc("/api/v1/positions/close", closePositionHandler)
+	http.HandleFunc("/api/v1/positions/hedge", deltaHedgeHandler)
 	http.HandleFunc("/api/v1/position/profile", positionProfileHandler)
 	http.HandleFunc("/api/v1/trades", tradesHandler)
 	http.HandleFunc("/api/v1/portfolio", portfolioHandler)
+	http.HandleFunc("/api/v1/risk", riskHandler)
 	http.HandleFunc("/api/v1/capital", capitalHandler)
 	http.HandleFunc("/api/v1/copilot/ask", copilotHandler)
 	http.HandleFunc("/api/v1/options/exit-advice", optionsExitAdviceHandler)
 	http.HandleFunc("/api/v1/options/recommendations", optionsRecommendationsHandler)
+	http.HandleFunc("/api/v1/options/trend", optionsTrendHandler)
 	http.HandleFunc("/api/v1/options/gamma-step", gammaScalpingStepHandler)
 	http.HandleFunc("/api/v1/options/vertical-spread", verticalSpreadHandler)
 	http.HandleFunc("/api/v1/options/rolling-advice", rollingAdviceHandler)

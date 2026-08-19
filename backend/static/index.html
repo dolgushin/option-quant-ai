@@ -338,6 +338,30 @@
                 <h2 class="text-lg font-semibold text-slate-200">Active Portfolio & Executed Positions (Alor FORTS)</h2>
                 <span class="px-3 py-1 text-xs font-bold rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono">Live Tracking</span>
             </div>
+
+            <!-- Portfolio Risk Dashboard -->
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-3 font-mono text-center">
+                <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+                    <span class="text-xs text-slate-500 block">NET DELTA</span>
+                    <span id="risk-delta" class="text-lg font-bold text-indigo-400">0</span>
+                </div>
+                <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+                    <span class="text-xs text-slate-500 block">NET GAMMA</span>
+                    <span id="risk-gamma" class="text-lg font-bold text-slate-200">0</span>
+                </div>
+                <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+                    <span class="text-xs text-slate-500 block">NET THETA / ДЕНЬ</span>
+                    <span id="risk-theta" class="text-lg font-bold text-emerald-400">₽0</span>
+                </div>
+                <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+                    <span class="text-xs text-slate-500 block">ЗАГРУЗКА ГО</span>
+                    <span id="risk-margin" class="text-lg font-bold text-amber-400">0%</span>
+                </div>
+                <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+                    <span class="text-xs text-slate-500 block">DRAWDOWN (РЕАЛИЗ.)</span>
+                    <span id="risk-dd" class="text-lg font-bold text-rose-400">₽0</span>
+                </div>
+            </div>
             
             <div class="overflow-x-auto font-mono">
                 <table class="w-full text-left text-xs text-slate-300">
@@ -1311,7 +1335,8 @@
 
                 try {
                     const vsRes = await fetch(`/api/v1/options/vertical-spread?iv=35&hv=28&outlook=BULLISH&symbol=${currentAsset}`);
-                    const vsData = await vsRes.json();
+                    const vsWrap = await vsRes.json();
+                    const vsData = vsWrap.recommendation || vsWrap;
                     const vsLive = vsData.real_max_profit !== undefined && vsData.real_max_profit > 0
                         ? `Прибыль: ${Math.round(vsData.real_max_profit).toLocaleString()} ₽ | Риск: ${Math.round(vsData.real_max_loss).toLocaleString()} ₽ | Theta: ${vsData.real_theta >= 0 ? '+' : ''}${Math.round(vsData.real_theta).toLocaleString()} ₽/день`
                         : `Max Profit: ${vsData.max_profit}`;
@@ -1324,6 +1349,32 @@
                         <div class="text-[10px] text-slate-400">${vsLive}</div>
                     </div>`;
                 } catch (e) {}
+
+                // Trade gate banner: backtest-derived entry rules on live market.
+                const gate = (recsData.trade_gate || {});
+                const gateOk = gate.allowed !== false;
+                const gateReasons = (gate.reasons || []).join(' · ');
+                html = `<div class="p-2.5 ${gateOk ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-rose-500/10 border-rose-500/30'} rounded border space-y-1">
+                    <div class="flex justify-between items-center">
+                        <span class="font-bold ${gateOk ? 'text-emerald-400' : 'text-rose-400'}">🛡 Правила входа (из бэктеста)</span>
+                        <span class="text-[10px] font-mono ${gateOk ? 'text-emerald-300' : 'text-rose-300'}">${gateOk ? 'РАЗРЕШЕНО' : 'ЗАПРЕЩЕНО'}</span>
+                    </div>
+                    <div class="text-[10px] text-slate-300">${gateReasons}</div>
+                </div>` + html;
+
+                // Trend overlay: SMA-20 vs SMA-50 regime banner.
+                const trend = (recsData.trend || {});
+                if (trend.regime) {
+                    const trendColor = trend.regime === 'BULLISH' ? 'text-emerald-400' : (trend.regime === 'BEARISH' ? 'text-rose-400' : 'text-slate-300');
+                    const trendBg = trend.regime === 'BULLISH' ? 'bg-emerald-500/10 border-emerald-500/30' : (trend.regime === 'BEARISH' ? 'bg-rose-500/10 border-rose-500/30' : 'bg-slate-800/40 border-slate-700');
+                    html = `<div class="p-2.5 ${trendBg} rounded border space-y-1">
+                        <div class="flex justify-between items-center">
+                            <span class="font-bold ${trendColor}">📈 Тренд (SMA20 vs SMA50)</span>
+                            <span class="text-[10px] font-mono ${trendColor}">${trend.regime} · ${trend.strength}</span>
+                        </div>
+                        <div class="text-[10px] text-slate-300">SMA20: ${Math.round(trend.sma20).toLocaleString()} · SMA50: ${Math.round(trend.sma50).toLocaleString()} · Close: ${Math.round(trend.close).toLocaleString()} · 5д: ${trend.slope_5d > 0 ? '+' : ''}${(trend.slope_5d*100).toFixed(2)}%</div>
+                    </div>` + html;
+                }
 
                 document.getElementById('strategy-cards').innerHTML = html;
 
@@ -1381,6 +1432,7 @@
                         <td class="p-3 text-[10px]">ГО: ₽${Math.round(p.margin).toLocaleString()}</td>
                         <td class="p-3 text-right whitespace-nowrap">
                             <button onclick="openPositionProfile('${p.id}')" class="px-2 py-1 bg-indigo-600/80 hover:bg-indigo-500 text-white rounded transition text-[10px] mr-1">Profile</button>
+                            <button onclick="hedgePosition('${p.id}')" title="Хеджировать дельту фьючерсом" class="px-2 py-1 bg-amber-600/80 hover:bg-amber-500 text-white rounded transition text-[10px] mr-1">Hedge</button>
                             <button id="close-${p.id}" onclick="closePosition('${p.id}')" class="px-2 py-1 bg-rose-600/80 hover:bg-rose-500 text-white rounded transition text-[10px]">Close</button>
                         </td>
                     </tr>`;
@@ -1388,6 +1440,22 @@
                 tbody.innerHTML = html;
             } catch (e) {
                 console.error("Failed to load positions", e);
+            }
+        }
+
+        async function updateRisk() {
+            try {
+                const res = await fetch('/api/v1/risk');
+                const r = await res.json();
+                const deltaColor = Math.abs(r.net_delta || 0) > 1 ? 'text-rose-400' : 'text-emerald-400';
+                document.getElementById('risk-delta').innerText = (r.net_delta || 0).toFixed(2);
+                document.getElementById('risk-delta').className = `text-lg font-bold ${deltaColor}`;
+                document.getElementById('risk-gamma').innerText = (r.net_gamma || 0).toFixed(4);
+                document.getElementById('risk-theta').innerText = `₽${Math.round(r.net_theta || 0).toLocaleString()}`;
+                document.getElementById('risk-margin').innerText = `${(r.margin_load_pct || 0).toFixed(1)}%`;
+                document.getElementById('risk-dd').innerText = `₽${Math.round(r.drawdown_realized || 0).toLocaleString()}`;
+            } catch (e) {
+                console.error("Failed to load risk", e);
             }
         }
 
@@ -1519,6 +1587,27 @@
 
         let pendingCloseId = null;
 
+        async function hedgePosition(id) {
+            const live = confirm('Отправить реальный рыночный ордер в Alor? (OK = живой ордер, Отмена = бумажный хедж)');
+            try {
+                const res = await fetch('/api/v1/positions/hedge', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: id, live: live })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert(`✅ ${data.message}\nNet delta после хеджа: ${data.delta}`);
+                } else {
+                    alert(`Ошибка хеджа: ${data.error || 'unknown'}`);
+                }
+                updatePositions();
+                updatePortfolio();
+            } catch (e) {
+                alert('Ошибка хеджирования');
+            }
+        }
+
         async function closePosition(id) {
             if (pendingCloseId !== id) {
                 pendingCloseId = id;
@@ -1627,6 +1716,7 @@
                 await updateTDSS();
                 await updatePositions();
                 await updatePortfolio();
+                await updateRisk();
                 await updateTrades();
 
                 updateSkewChart();
@@ -1804,6 +1894,7 @@
             updateDashboard();
             updatePositions();
             updatePortfolio();
+            updateRisk();
             updateTrades();
             updateTokenStatus();
 
