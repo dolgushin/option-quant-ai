@@ -97,7 +97,8 @@ type backtestTrade struct {
 	ExitSpot  float64 `json:"exit_spot"`
 	NetCredit float64 `json:"net_credit"` // per contract (negative = debit paid)
 	MaxRisk   float64 `json:"max_risk"`   // per contract
-	PnL       float64 `json:"pnl"`        // per contract realized P&L
+	Comm      float64 `json:"comm"`       // round-trip commissions per contract
+	PnL       float64 `json:"pnl"`        // per contract realized P&L (net of comm)
 	PnLPct    float64 `json:"pnl_pct"`    // PnL / max risk %
 	Win       bool    `json:"win"`
 	ExitType  string  `json:"exit_type"` // "hold" or "stop_loss" or "expiry"
@@ -105,25 +106,28 @@ type backtestTrade struct {
 
 // backtestResult aggregates all simulated trades.
 type backtestResult struct {
-	Symbol        string          `json:"symbol"`
-	Series        string          `json:"series"`
-	Strategy      string          `json:"strategy"`
-	StrategyName  string          `json:"strategy_name"`
-	Days          int             `json:"days"`
-	HoldDays      int             `json:"hold_days"`
-	IVUsed        float64         `json:"iv_used"`
-	Trades        int             `json:"total_trades"`
-	Wins          int             `json:"wins"`
-	Losses        int             `json:"losses"`
-	WinRate       float64         `json:"win_rate"`
-	AvgWin        float64         `json:"avg_win"`
-	AvgLoss       float64         `json:"avg_loss"`
-	ProfitFactor  float64         `json:"profit_factor"`
-	TotalPnL      float64         `json:"total_pnl"`
-	MaxDrawdown   float64         `json:"max_drawdown"`
-	EquityCurve   []equityPoint   `json:"equity_curve"`
-	TradesDetail  []backtestTrade `json:"trades"`
-	Note          string          `json:"note"`
+	Symbol          string          `json:"symbol"`
+	Series          string          `json:"series"`
+	Strategy        string          `json:"strategy"`
+	StrategyName    string          `json:"strategy_name"`
+	Days            int             `json:"days"`
+	HoldDays        int             `json:"hold_days"`
+	IVUsed          float64         `json:"iv_used"`
+	MinHV           float64         `json:"min_hv"`
+	CommPerContract float64         `json:"comm_per_contract"`
+	CommissionsTotal float64        `json:"commissions_total"`
+	Trades          int             `json:"total_trades"`
+	Wins            int             `json:"wins"`
+	Losses          int             `json:"losses"`
+	WinRate         float64         `json:"win_rate"`
+	AvgWin          float64         `json:"avg_win"`
+	AvgLoss         float64         `json:"avg_loss"`
+	ProfitFactor    float64         `json:"profit_factor"`
+	TotalPnL        float64         `json:"total_pnl"`
+	MaxDrawdown     float64         `json:"max_drawdown"`
+	EquityCurve     []equityPoint   `json:"equity_curve"`
+	TradesDetail    []backtestTrade `json:"trades"`
+	Note            string          `json:"note"`
 }
 
 type equityPoint struct {
@@ -216,6 +220,35 @@ func currentATMIV(symbol string) float64 {
 	return math.Round(iv*10000) / 10000
 }
 
+// realizedVol computes trailing annualized realized volatility from daily
+// closes ending at index `end` (inclusive), using a 20-trading-day window.
+// Returns 0 if not enough data.
+func realizedVol(candles []historicalCandle, end int) float64 {
+	const n = 20
+	if end+1 < n {
+		return 0
+	}
+	sum := 0.0
+	var logs []float64
+	for i := end - n + 1; i <= end; i++ {
+		if candles[i].Close <= 0 || candles[i-1].Close <= 0 {
+			return 0
+		}
+		logs = append(logs, math.Log(candles[i].Close/candles[i-1].Close))
+	}
+	for _, l := range logs {
+		sum += l
+	}
+	mean := sum / float64(len(logs))
+	v := 0.0
+	for _, l := range logs {
+		d := l - mean
+		v += d * d
+	}
+	v /= float64(len(logs) - 1)
+	return math.Sqrt(v) * math.Sqrt(252)
+}
+
 // runStrategyBacktest simulates a strategy on historical daily closes of the
 // current futures series. Each day in the window is a potential entry; the
 // trade is held HoldDays calendar days (or until series expiry). Premiums are
@@ -226,7 +259,10 @@ func currentATMIV(symbol string) float64 {
 //   - dteMin/dteMax: only enter when days-to-expiry is within this window.
 //   - stopLossPct: exit early when P&L falls below -stopLossPct% of max risk.
 //   - takeProfitPct: exit early when P&L reaches +takeProfitPct% of max risk.
-func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64, dteMin, dteMax int, stopLossPct, takeProfitPct float64) (*backtestResult, error) {
+//   - commPerContract: round-trip commission per contract (₽) deducted from P&L.
+//   - minHV: skip entries when trailing 20-day realized volatility < minHV
+//     (annualized), i.e. don't sell premium into a dead-vol regime.
+func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64, dteMin, dteMax int, stopLossPct, takeProfitPct float64, commPerContract, minHV float64) (*backtestResult, error) {
 	seriesMu.Lock()
 	seriesCode := selectedSeries[symbol]
 	seriesMu.Unlock()
@@ -301,7 +337,9 @@ func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64
 	result.Days = days
 	result.HoldDays = holdDays
 	result.IVUsed = math.Round(iv*10000) / 10000
-	result.Note = "Модельные премии: Black-Scholes (r=16%), спот = историческое закрытие фьючерса, страйки = шаг текущей цепочки вокруг исторического ATM, IV = заданная/текущая рыночная. Вход только при DTE в окне, выход = стоп/тейк или удержание hold дней."
+	result.MinHV = minHV
+	result.CommPerContract = commPerContract
+	result.Note = fmt.Sprintf("Модельные премии: Black-Scholes (r=16%%), спот = историческое закрытие фьючерса, страйки = шаг текущей цепочки вокруг исторического ATM, IV = заданная/текущая рыночная. Вход только при DTE в окне, выход = стоп/тейк или удержание hold дней. Комиссия: %.1f ₽/контракт в оба конца, %d ног. %s", commPerContract, len(specs), func() string { if minHV > 0 { return fmt.Sprintf("Фильтр входа: реализованная волатильность ≥ %.1f%%.", minHV*100) }; return "Фильтр входа по волатильности выключен." }())
 
 	var equity []float64
 	equityTotal := 0.0
@@ -340,6 +378,15 @@ func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64
 		dte := int(expiryTime.Sub(entry.Date).Hours() / 24)
 		if dte <= 0 || dte < dteMin || dte > dteMax {
 			continue
+		}
+		// Vol regime filter: skip if trailing realized vol is too low to
+		// justify selling premium (for credit strategies) or to profitably
+		// hold long-vol (debit strategies) within the hold window.
+		if minHV > 0 {
+			hv := realizedVol(candles, i)
+			if hv < minHV {
+				continue
+			}
 		}
 		tEntry := float64(dte) / 365.0
 
@@ -427,7 +474,11 @@ func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64
 		}
 		exitVal, _ := valueAtEntry(exit.Close, tExit)
 
-		pnl := exitVal - entryVal
+		// Round-trip commission: each leg traded once to open and once to close.
+		comm := commPerContract * float64(len(specs)) * 2
+		result.CommissionsTotal += comm
+
+		pnl := (exitVal - entryVal) - comm
 		pnlPct := 0.0
 		if maxRisk > 0 {
 			pnlPct = pnl / maxRisk * 100
@@ -452,6 +503,7 @@ func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64
 			ExitSpot:  math.Round(exit.Close*100) / 100,
 			NetCredit: math.Round(netCredit*100) / 100,
 			MaxRisk:   math.Round(maxRisk*100) / 100,
+			Comm:      math.Round(comm*100) / 100,
 			PnL:       math.Round(pnl*100) / 100,
 			PnLPct:    math.Round(pnlPct*100) / 100,
 			Win:       win,
@@ -545,6 +597,18 @@ func backtestHandler(w http.ResponseWriter, r *http.Request) {
 			takeProfitPct = f
 		}
 	}
+	commPerContract := 2.0 // MOEX FORTS ~1₽/contract exchange + ~1₽ broker
+	if v := r.URL.Query().Get("comm"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+			commPerContract = f
+		}
+	}
+	minHV := 0.0
+	if v := r.URL.Query().Get("minhv"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			minHV = f
+		}
+	}
 	iv := 0.0
 	if v := r.URL.Query().Get("iv"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
@@ -556,7 +620,7 @@ func backtestHandler(w http.ResponseWriter, r *http.Request) {
 		holdDays = days / 2
 	}
 
-	res, err := runStrategyBacktest(symbol, strategy, days, holdDays, iv, dteMin, dteMax, stopLossPct, takeProfitPct)
+	res, err := runStrategyBacktest(symbol, strategy, days, holdDays, iv, dteMin, dteMax, stopLossPct, takeProfitPct, commPerContract, minHV)
 	if err != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
 		return

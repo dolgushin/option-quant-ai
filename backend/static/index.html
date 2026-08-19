@@ -258,6 +258,14 @@
                     <label class="text-xs text-slate-400 block mb-1">Тейк-профит, %</label>
                     <input id="bt-tp" type="number" step="5" min="0" max="95" value="0" placeholder="нет" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-20 focus:outline-none focus:border-amber-500" title="Зафиксировать при прибыли ≥ N% от макс. риска">
                 </div>
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">Комиссия ₽/контракт</label>
+                    <input id="bt-comm" type="number" step="0.5" min="0" max="50" value="2" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-24 focus:outline-none focus:border-amber-500" title="Биржевая + брокерская, в оба конца (MOEX FORTS ~1₽/контракт)">
+                </div>
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">Мин. реализ. волат., %</label>
+                    <input id="bt-minhv" type="number" step="5" min="0" max="200" value="0" placeholder="нет" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-20 focus:outline-none focus:border-amber-500" title="Входить только если реализованная волатильность ≥ N% годовых (фильтр дешёвой волатильности)">
+                </div>
                 <button onclick="runBacktest()" class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-md transition">▶ Запустить бэктест</button>
             </div>
 
@@ -294,6 +302,14 @@
                     <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
                         <span class="text-xs text-slate-500 block">IV ИСПОЛЬЗОВАНО</span>
                         <span id="bt-stat-iv" class="text-lg font-bold text-slate-200">—</span>
+                    </div>
+                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+                        <span class="text-xs text-slate-500 block">КОМИССИИ ВСЕГО</span>
+                        <span id="bt-stat-comm" class="text-lg font-bold text-slate-200">₽0</span>
+                    </div>
+                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+                        <span class="text-xs text-slate-500 block">ВХОД: РЕАЛИЗ. ВОЛАТ.</span>
+                        <span id="bt-stat-hv" class="text-lg font-bold text-slate-200">—</span>
                     </div>
                 </div>
 
@@ -954,8 +970,10 @@
             const dteMax = parseInt(document.getElementById('bt-dtemax').value) || 9999;
             const stop = parseFloat(document.getElementById('bt-stop').value) || 0;
             const tp = parseFloat(document.getElementById('bt-tp').value) || 0;
+            const comm = parseFloat(document.getElementById('bt-comm').value);
+            const minhv = parseFloat(document.getElementById('bt-minhv').value) || 0;
             const ivRaw = document.getElementById('bt-iv').value;
-            let url = `/api/v1/backtest?strategy=${strategy}&symbol=${currentAsset}&days=${days}&hold=${hold}&dtemin=${dteMin}&dtemax=${dteMax}&stop=${stop}&tp=${tp}`;
+            let url = `/api/v1/backtest?strategy=${strategy}&symbol=${currentAsset}&days=${days}&hold=${hold}&dtemin=${dteMin}&dtemax=${dteMax}&stop=${stop}&tp=${tp}&comm=${comm || 0}&minhv=${minhv}`;
             if (ivRaw) url += `&iv=${parseFloat(ivRaw)}`;
 
             document.getElementById('backtest-loading').classList.remove('hidden');
@@ -979,6 +997,8 @@
                 document.getElementById('bt-stat-avgwin').innerText = `₽${Math.round(data.avg_win || 0).toLocaleString()}`;
                 document.getElementById('bt-stat-avgloss').innerText = `₽${Math.round(data.avg_loss || 0).toLocaleString()}`;
                 document.getElementById('bt-stat-iv').innerText = `${(data.iv_used * 100).toFixed(1)}%`;
+                document.getElementById('bt-stat-comm').innerText = `₽${Math.round(data.commissions_total || 0).toLocaleString()}`;
+                document.getElementById('bt-stat-hv').innerText = data.min_hv > 0 ? `≥ ${(data.min_hv * 100).toFixed(0)}%` : 'выкл';
                 document.getElementById('backtest-note').innerText = `${data.note || ''} Серия: ${data.series}, стратегия: ${data.strategy_name}`;
 
                 drawBacktestChart(data.equity_curve || []);
