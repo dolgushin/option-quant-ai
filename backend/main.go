@@ -2557,6 +2557,16 @@ func optionsTrendHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(tradeTrend(symbol))
 }
 
+func optionsIVRankHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "Si"
+	}
+	current := currentATMIVRaw(symbol)
+	json.NewEncoder(w).Encode(ivRankStats(symbol, current))
+}
+
 func optionsExitAdviceHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	dteStr := r.URL.Query().Get("dte")
@@ -2733,6 +2743,7 @@ func main() {
 	http.HandleFunc("/api/v1/options/exit-advice", optionsExitAdviceHandler)
 	http.HandleFunc("/api/v1/options/recommendations", optionsRecommendationsHandler)
 	http.HandleFunc("/api/v1/options/trend", optionsTrendHandler)
+	http.HandleFunc("/api/v1/options/iv-rank", optionsIVRankHandler)
 	http.HandleFunc("/api/v1/options/gamma-step", gammaScalpingStepHandler)
 	http.HandleFunc("/api/v1/options/vertical-spread", verticalSpreadHandler)
 	http.HandleFunc("/api/v1/options/rolling-advice", rollingAdviceHandler)

@@ -1360,6 +1360,7 @@
                         <span class="text-[10px] font-mono ${gateOk ? 'text-emerald-300' : 'text-rose-300'}">${gateOk ? 'РАЗРЕШЕНО' : 'ЗАПРЕЩЕНО'}</span>
                     </div>
                     <div class="text-[10px] text-slate-300">${gateReasons}</div>
+                    ${gate.iv_rank != null ? `<div class="text-[10px] font-mono text-slate-400">IV Rank: ${gate.iv_rank}% · Percentile: ${gate.iv_percentile}% · IV: ${(gate.iv*100).toFixed(1)}% · История: ${gate.iv_history_count} дней</div>` : ''}
                 </div>` + html;
 
                 // Trend overlay: SMA-20 vs SMA-50 regime banner.

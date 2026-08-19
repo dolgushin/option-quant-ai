@@ -148,6 +148,17 @@ func estimateOptionPrice(isCall bool, spot, strike, t, iv float64) float64 {
 // currentATMIV estimates the current market implied volatility of an ATM option
 // for the given symbol using its live chain and spot. Returns 0 if unavailable.
 func currentATMIV(symbol string) float64 {
+	return currentATMIVImpl(symbol, true)
+}
+
+// currentATMIVRaw returns the unclamped ATM IV (raw market reading) used for
+// IV Rank / Percentile, where the 0.20 clamp of currentATMIV would distort the
+// distribution comparison.
+func currentATMIVRaw(symbol string) float64 {
+	return currentATMIVImpl(symbol, false)
+}
+
+func currentATMIVImpl(symbol string, clamp bool) float64 {
 	spot, err := getSpotPrice(symbol)
 	if err != nil || spot <= 0 {
 		return 0
@@ -211,11 +222,13 @@ func currentATMIV(symbol string) float64 {
 	iv := ivSum / float64(n)
 	// MOEX mid-quotes are often stale after a spot move (put-call parity can be
 	// badly broken), so clamp to a sane market range for FORTS index/futures.
-	if iv < 0.20 {
-		iv = 0.20
-	}
-	if iv > 0.80 {
-		iv = 0.80
+	if clamp {
+		if iv < 0.20 {
+			iv = 0.20
+		}
+		if iv > 0.80 {
+			iv = 0.80
+		}
 	}
 	return math.Round(iv*10000) / 10000
 }
@@ -275,7 +288,7 @@ func circuitBreaker() map[string]interface{} {
 func tradeGate(symbol string) map[string]interface{} {
 	gate := map[string]interface{}{
 		"allowed": true,
-		"reasons": []string{"Все правила входа выполнены (DTE 20-60, IV ≥ 25%, HV ≥ 15%)"},
+		"reasons": []string{"Все правила входа выполнены (DTE 20-60, IV ≥ 25%, IV Rank ≥ 30%, HV ≥ 15%)"},
 	}
 
 	// Circuit breaker: block new entries if today's realized loss exceeded the
@@ -311,6 +324,18 @@ func tradeGate(symbol string) map[string]interface{} {
 		reasons = append(reasons, fmt.Sprintf("IV %.1f%% < 25%%", iv*100))
 	}
 
+	// IV Rank / Percentile from trailing-year sample history. Uses the raw
+	// (unclamped) ATM IV so the rank is comparable with the sampled history.
+	rankStats := ivRankStats(symbol, currentATMIVRaw(symbol))
+	okIVRank := true
+	if rankStats["available"] == true {
+		ivRank, _ := rankStats["iv_rank"].(float64)
+		okIVRank = ivRank >= 30
+		if !okIVRank {
+			reasons = append(reasons, fmt.Sprintf("IV Rank %.0f%% < 30%%", ivRank))
+		}
+	}
+
 	// Realized vol from daily futures closes.
 	series := selectedSeries[symbol]
 	hv := 0.0
@@ -326,13 +351,16 @@ func tradeGate(symbol string) map[string]interface{} {
 		reasons = append(reasons, fmt.Sprintf("Реализ. волат. %.1f%% < 15%%", hv*100))
 	}
 
-	allowed := okDTE && okIV && okHV
+	allowed := okDTE && okIV && okIVRank && okHV
 	gate["allowed"] = allowed
 	gate["dte"] = dte
 	gate["iv"] = iv
 	gate["hv"] = math.Round(hv*10000) / 10000
+	gate["iv_rank"] = rankStats["iv_rank"]
+	gate["iv_percentile"] = rankStats["iv_percentile"]
+	gate["iv_history_count"] = rankStats["count"]
 	if allowed {
-		gate["reasons"] = []string{"Все правила входа выполнены (DTE 20-60, IV ≥ 25%, HV ≥ 15%)"}
+		gate["reasons"] = []string{"Все правила входа выполнены (DTE 20-60, IV ≥ 25%, IV Rank ≥ 30%, HV ≥ 15%)"}
 	} else if len(reasons) == 0 {
 		gate["reasons"] = []string{"Нет данных для проверки правил входа"}
 	} else {
