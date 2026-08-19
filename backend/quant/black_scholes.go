@@ -64,33 +64,36 @@ func CalculateBlackScholes(isCall bool, S, K, T, r, sigma float64) OptionGreeks 
 }
 
 // ImpliedVolatility inverts the Black-Scholes price to recover the volatility
-// that makes the model match the observed market price (Newton-Raphson).
+// that makes the model match the observed market price. Bisection is used since
+// the model price is monotonic in sigma (no risk of Newton overshoot).
 func ImpliedVolatility(isCall bool, marketPrice, S, K, T, r float64) float64 {
 	if T <= 0 || marketPrice <= 0 {
 		return 0
 	}
 
-	// Reasonable starting guess: at-the-money approximation.
-	sigma := 0.30
+	lo := 0.0001
+	hi := 5.0
+	priceLo := CalculateBlackScholes(isCall, S, K, T, r, lo).Price
+	priceHi := CalculateBlackScholes(isCall, S, K, T, r, hi).Price
+
+	if marketPrice <= priceLo {
+		return lo
+	}
+	if marketPrice >= priceHi {
+		return hi
+	}
+
 	for i := 0; i < 100; i++ {
-		g := CalculateBlackScholes(isCall, S, K, T, r, sigma)
-		diff := g.Price - marketPrice
-		if math.Abs(diff) < 0.0001 {
-			break
+		mid := (lo + hi) / 2.0
+		p := CalculateBlackScholes(isCall, S, K, T, r, mid).Price
+		if math.Abs(p-marketPrice) < 0.0001 {
+			return math.Round(mid*10000) / 10000
 		}
-		// vega = dPrice/dSigma (per 1% move: /100), so scale accordingly.
-		vega := g.Vega * 100.0
-		if vega < 1e-9 {
-			break
-		}
-		step := diff / vega
-		sigma -= step
-		if sigma < 0.0001 {
-			sigma = 0.0001
-		}
-		if sigma > 5.0 {
-			sigma = 5.0
+		if p < marketPrice {
+			lo = mid
+		} else {
+			hi = mid
 		}
 	}
-	return math.Round(sigma*10000) / 10000
+	return math.Round(((lo+hi)/2.0)*10000) / 10000
 }

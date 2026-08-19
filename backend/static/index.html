@@ -209,6 +209,102 @@
             </div>
         </div>
 
+        <!-- Historical Strategy Backtest -->
+        <div class="bg-slate-800/80 p-6 rounded-xl border border-slate-700 space-y-4">
+            <div class="flex justify-between items-center border-b border-slate-700 pb-3">
+                <h2 class="text-lg font-semibold text-slate-200">Historical Strategy Backtest</h2>
+                <span class="px-3 py-1 text-xs font-bold rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono">BS Model</span>
+            </div>
+
+            <div class="flex flex-wrap items-end gap-3 font-mono">
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">Стратегия</label>
+                    <select id="bt-strategy" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm focus:outline-none focus:border-amber-500">
+                        <option value="iron_condor">Iron Condor</option>
+                        <option value="iron_butterfly">Iron Butterfly</option>
+                        <option value="bull_put_spread">Bull Put Spread</option>
+                        <option value="bear_call_spread">Bear Call Spread</option>
+                        <option value="bull_call_spread">Bull Call Spread</option>
+                        <option value="bear_put_spread">Bear Put Spread</option>
+                        <option value="long_strangle">Long Strangle</option>
+                        <option value="long_straddle">Long Straddle</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">Дней истории</label>
+                    <input id="bt-days" type="number" min="30" max="365" value="60" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-24 focus:outline-none focus:border-amber-500">
+                </div>
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">Держим дней</label>
+                    <input id="bt-hold" type="number" min="1" max="60" value="14" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-24 focus:outline-none focus:border-amber-500">
+                </div>
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">IV (пусто = рыночная)</label>
+                    <input id="bt-iv" type="number" step="0.01" min="0.01" max="3" placeholder="авто" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-28 focus:outline-none focus:border-amber-500">
+                </div>
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">DTE мин/макс</label>
+                    <div class="flex items-center gap-1">
+                        <input id="bt-dtemin" type="number" min="0" max="365" value="20" class="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm w-14 focus:outline-none focus:border-amber-500" title="Не входить раньше этого числа дней до экспирации">
+                        <span class="text-slate-500 text-xs">—</span>
+                        <input id="bt-dtemax" type="number" min="1" max="365" value="60" class="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm w-14 focus:outline-none focus:border-amber-500" title="Не входить позже этого числа дней до экспирации">
+                    </div>
+                </div>
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">Стоп-лосс, %</label>
+                    <input id="bt-stop" type="number" step="5" min="0" max="95" value="0" placeholder="нет" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-20 focus:outline-none focus:border-amber-500" title="Закрыть при убытке ≥ N% от макс. риска">
+                </div>
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">Тейк-профит, %</label>
+                    <input id="bt-tp" type="number" step="5" min="0" max="95" value="0" placeholder="нет" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-20 focus:outline-none focus:border-amber-500" title="Зафиксировать при прибыли ≥ N% от макс. риска">
+                </div>
+                <button onclick="runBacktest()" class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-md transition">▶ Запустить бэктест</button>
+            </div>
+
+            <div id="backtest-result" class="hidden font-mono">
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+                        <span class="text-xs text-slate-500 block">СДЕЛОК</span>
+                        <span id="bt-stat-trades" class="text-lg font-bold text-white">0</span>
+                    </div>
+                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+                        <span class="text-xs text-slate-500 block">WIN RATE</span>
+                        <span id="bt-stat-winrate" class="text-lg font-bold text-emerald-400">0%</span>
+                    </div>
+                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+                        <span class="text-xs text-slate-500 block">СУММ. P&L</span>
+                        <span id="bt-stat-pnl" class="text-lg font-bold text-indigo-400">₽0</span>
+                    </div>
+                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+                        <span class="text-xs text-slate-500 block">MAX DRAWDOWN</span>
+                        <span id="bt-stat-dd" class="text-lg font-bold text-rose-400">₽0</span>
+                    </div>
+                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+                        <span class="text-xs text-slate-500 block">PROFIT FACTOR</span>
+                        <span id="bt-stat-pf" class="text-lg font-bold text-amber-400">—</span>
+                    </div>
+                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+                        <span class="text-xs text-slate-500 block">СРЕДНИЙ ВЫИГРЫШ</span>
+                        <span id="bt-stat-avgwin" class="text-lg font-bold text-emerald-400">₽0</span>
+                    </div>
+                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+                        <span class="text-xs text-slate-500 block">СРЕДНИЙ УБЫТОК</span>
+                        <span id="bt-stat-avgloss" class="text-lg font-bold text-rose-400">₽0</span>
+                    </div>
+                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+                        <span class="text-xs text-slate-500 block">IV ИСПОЛЬЗОВАНО</span>
+                        <span id="bt-stat-iv" class="text-lg font-bold text-slate-200">—</span>
+                    </div>
+                </div>
+
+                <div class="relative h-56 w-full mt-3">
+                    <canvas id="backtestChart"></canvas>
+                </div>
+                <p id="backtest-note" class="text-[10px] text-slate-500 mt-2 font-mono"></p>
+            </div>
+            <div id="backtest-loading" class="hidden text-xs text-amber-400 font-mono">Загружаю историю и считаю модель...</div>
+        </div>
+
         <!-- 4. Volatility Skew Chart -->
         <div class="bg-slate-800/60 p-6 rounded-xl border border-slate-700/50">
             <div class="flex justify-between items-center mb-4">
@@ -846,6 +942,80 @@
             if (n.includes('straddle')) return 'long_straddle';
             if (n.includes('gamma') || n.includes('scalping')) return 'long_strangle';
             return 'iron_condor';
+        }
+
+        let backtestChartInstance = null;
+
+        async function runBacktest() {
+            const strategy = document.getElementById('bt-strategy').value;
+            const days = parseInt(document.getElementById('bt-days').value) || 60;
+            const hold = parseInt(document.getElementById('bt-hold').value) || 14;
+            const dteMin = parseInt(document.getElementById('bt-dtemin').value) || 0;
+            const dteMax = parseInt(document.getElementById('bt-dtemax').value) || 9999;
+            const stop = parseFloat(document.getElementById('bt-stop').value) || 0;
+            const tp = parseFloat(document.getElementById('bt-tp').value) || 0;
+            const ivRaw = document.getElementById('bt-iv').value;
+            let url = `/api/v1/backtest?strategy=${strategy}&symbol=${currentAsset}&days=${days}&hold=${hold}&dtemin=${dteMin}&dtemax=${dteMax}&stop=${stop}&tp=${tp}`;
+            if (ivRaw) url += `&iv=${parseFloat(ivRaw)}`;
+
+            document.getElementById('backtest-loading').classList.remove('hidden');
+            document.getElementById('backtest-result').classList.add('hidden');
+
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                if (data.error) {
+                    document.getElementById('backtest-loading').innerText = `❌ ${data.error}`;
+                    return;
+                }
+                document.getElementById('backtest-loading').classList.add('hidden');
+                document.getElementById('backtest-result').classList.remove('hidden');
+
+                document.getElementById('bt-stat-trades').innerText = data.total_trades;
+                document.getElementById('bt-stat-winrate').innerText = `${(data.win_rate || 0).toFixed(1)}%`;
+                document.getElementById('bt-stat-pnl').innerText = `₽${Math.round(data.total_pnl).toLocaleString()}`;
+                document.getElementById('bt-stat-dd').innerText = `₽${Math.round(data.max_drawdown).toLocaleString()}`;
+                document.getElementById('bt-stat-pf').innerText = data.profit_factor > 1000 ? '∞' : (data.profit_factor || 0).toFixed(2);
+                document.getElementById('bt-stat-avgwin').innerText = `₽${Math.round(data.avg_win || 0).toLocaleString()}`;
+                document.getElementById('bt-stat-avgloss').innerText = `₽${Math.round(data.avg_loss || 0).toLocaleString()}`;
+                document.getElementById('bt-stat-iv').innerText = `${(data.iv_used * 100).toFixed(1)}%`;
+                document.getElementById('backtest-note').innerText = `${data.note || ''} Серия: ${data.series}, стратегия: ${data.strategy_name}`;
+
+                drawBacktestChart(data.equity_curve || []);
+            } catch (e) {
+                document.getElementById('backtest-loading').innerText = `❌ Ошибка: ${e.message}`;
+            }
+        }
+
+        function drawBacktestChart(curve) {
+            const ctx = document.getElementById('backtestChart').getContext('2d');
+            if (backtestChartInstance) backtestChartInstance.destroy();
+            if (!curve.length) return;
+            backtestChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: curve.map(p => p.date),
+                    datasets: [{
+                        label: 'Накопленный P&L (1 контракт)',
+                        data: curve.map(p => p.equity),
+                        borderColor: '#f59e0b',
+                        backgroundColor: 'rgba(245,158,11,0.08)',
+                        fill: true,
+                        tension: 0.2,
+                        pointRadius: 0,
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { labels: { color: '#cbd5e1', font: { family: 'monospace' } } } },
+                    scales: {
+                        x: { ticks: { color: '#64748b', maxTicksLimit: 8, font: { family: 'monospace', size: 9 } }, grid: { color: '#1e293b' } },
+                        y: { ticks: { color: '#cbd5e1', font: { family: 'monospace' } }, grid: { color: '#1e293b' } }
+                    }
+                }
+            });
         }
 
         function openTdssStrategyModal(stratName) {
