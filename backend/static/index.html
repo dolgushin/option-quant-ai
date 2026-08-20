@@ -363,6 +363,30 @@
                 </div>
             </div>
             
+            <!-- PnL Attribution (греки) -->
+            <div class="overflow-x-auto font-mono">
+                <div class="flex justify-between items-center mb-1">
+                    <span class="text-xs font-bold text-slate-400 uppercase">PnL Attribution — разложение на греки</span>
+                    <span id="pnl-att-window" class="text-[10px] text-slate-500"></span>
+                </div>
+                <table class="w-full text-left text-xs text-slate-300">
+                    <thead class="bg-slate-900/80 text-slate-400 uppercase border-b border-slate-700">
+                        <tr>
+                            <th class="p-2">Позиция</th>
+                            <th class="p-2">Факт ₽</th>
+                            <th class="p-2">Δ (движение спота)</th>
+                            <th class="p-2">Γ (выпуклость)</th>
+                            <th class="p-2">Θ (время)</th>
+                            <th class="p-2">ν (волатильность)</th>
+                            <th class="p-2">Остаток</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pnl-att-body">
+                        <tr><td colspan="7" class="p-3 text-center text-slate-500">Загрузка...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            
             <div class="overflow-x-auto font-mono">
                 <table class="w-full text-left text-xs text-slate-300">
                     <thead class="bg-slate-900/80 text-slate-400 uppercase border-b border-slate-700">
@@ -1444,6 +1468,47 @@
             }
         }
 
+        async function updatePnlAttribution() {
+            try {
+                const res = await fetch('/api/v1/positions/pnl-attribution');
+                const a = await res.json();
+                const body = document.getElementById('pnl-att-body');
+                document.getElementById('pnl-att-window').innerText =
+                    (a.baseline ? 'Базлайн сегодня (первые данные за день)' : `Окно: ${a.window_start} → ${a.date}`);
+                const fmt = v => (v >= 0 ? '+' : '') + Math.round(v).toLocaleString('ru-RU');
+                const col = v => v >= 0 ? 'text-emerald-400' : 'text-rose-400';
+
+                if (!a.positions || a.positions.length === 0) {
+                    body.innerHTML = `<tr><td colspan="7" class="p-3 text-center text-slate-500">Нет активных позиций для атрибуции.</td></tr>`;
+                    return;
+                }
+                let html = '';
+                a.positions.forEach(p => {
+                    html += `<tr class="border-b border-slate-800/60">
+                        <td class="p-2 text-white">${p.strategy} <span class="text-[10px] text-slate-500">${p.symbol} · ${p.id}</span></td>
+                        <td class="p-2 font-bold ${col(p.actual)}">${fmt(p.actual)}</td>
+                        <td class="p-2 ${col(p.delta)}">${fmt(p.delta)}</td>
+                        <td class="p-2 ${col(p.gamma)}">${fmt(p.gamma)}</td>
+                        <td class="p-2 ${col(p.theta)}">${fmt(p.theta)}</td>
+                        <td class="p-2 ${col(p.vega)}">${fmt(p.vega)}</td>
+                        <td class="p-2 ${col(p.residual)}">${fmt(p.residual)}</td>
+                    </tr>`;
+                });
+                html += `<tr class="bg-slate-900/70 font-bold text-white">
+                    <td class="p-2">ИТОГО</td>
+                    <td class="p-2 ${col(a.actual)}">${fmt(a.actual)}</td>
+                    <td class="p-2 ${col(a.delta)}">${fmt(a.delta)}</td>
+                    <td class="p-2 ${col(a.gamma)}">${fmt(a.gamma)}</td>
+                    <td class="p-2 ${col(a.theta)}">${fmt(a.theta)}</td>
+                    <td class="p-2 ${col(a.vega)}">${fmt(a.vega)}</td>
+                    <td class="p-2 ${col(a.residual)}">${fmt(a.residual)}</td>
+                </tr>`;
+                body.innerHTML = html;
+            } catch (e) {
+                console.error("PnL attribution failed", e);
+            }
+        }
+
         async function updateRisk() {
             try {
                 const res = await fetch('/api/v1/risk');
@@ -1719,6 +1784,7 @@
                 await updatePortfolio();
                 await updateRisk();
                 await updateTrades();
+                await updatePnlAttribution();
 
                 updateSkewChart();
             } catch (e) {
