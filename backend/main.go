@@ -2764,6 +2764,10 @@ func main() {
 		log.Fatalf("Failed to initialize secure store: %v", err)
 	}
 	initAlorClients()
+	initTelegram()
+
+	// Background Telegram notifier (stop channel unused for lifetime app).
+	go telegramNotifier(make(chan struct{}))
 
 	// Load persisted portfolio (positions, trades, capital) from disk.
 	quant.SetDataFile(filepath.Join(dataDir, "portfolio.json"))
@@ -2796,8 +2800,9 @@ func main() {
 	http.HandleFunc("/api/v1/series", seriesInfoHandler)
 	http.HandleFunc("/api/v1/series/set", setSeriesHandler)
 
-	// Settings (encrypted Alor token)
+	// Settings (encrypted Alor token / Telegram)
 	http.HandleFunc("/api/v1/settings/token", settingsTokenHandler)
+	http.HandleFunc("/api/v1/settings/telegram", settingsTelegramHandler)
 
 	// Positions & Portfolio Handlers
 	http.HandleFunc("/api/v1/positions", positionsHandler)

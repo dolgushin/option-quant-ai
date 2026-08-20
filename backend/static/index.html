@@ -698,6 +698,27 @@
                 </div>
             </div>
 
+            <div class="pt-4 border-t border-slate-700">
+                <h4 class="text-sm font-bold text-sky-400 mb-1">📨 Telegram-уведомления</h4>
+                <p class="text-[10px] text-slate-400 mb-3 font-mono">Алерты о критичной экспирации, пин-риске и смене режима рынка</p>
+                <div id="settings-telegram-status" class="px-3 py-2 bg-slate-900 rounded-lg border border-slate-700 text-xs text-slate-300 font-mono mb-3">Проверка...</div>
+                <div class="space-y-3">
+                    <div>
+                        <span class="text-xs text-slate-400 block font-mono">BOT TOKEN (от @BotFather)</span>
+                        <input id="input-tg-token" type="password" placeholder="123456:ABC-DEF..." class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-sky-500">
+                    </div>
+                    <div>
+                        <span class="text-xs text-slate-400 block font-mono">CHAT ID (ваш Telegram ID)</span>
+                        <input id="input-tg-chat" type="text" placeholder="Например: 123456789" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-sky-500">
+                    </div>
+                </div>
+                <p id="settings-tg-result" class="text-xs font-mono mt-2 hidden"></p>
+                <div class="pt-3 flex gap-3">
+                    <button onclick="saveTelegramSettings(true)" class="flex-1 py-2.5 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl transition">📨 Сохранить и отправить тест</button>
+                    <button onclick="saveTelegramSettings(false)" class="px-4 py-2.5 bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold rounded-xl transition">Сохранить</button>
+                </div>
+            </div>
+
             <p id="settings-save-result" class="text-xs font-mono hidden"></p>
 
             <div class="pt-4 border-t border-slate-700 flex gap-3">
@@ -2246,6 +2267,7 @@
         async function openTokenSettings() {
             document.getElementById('settings-modal').classList.remove('hidden');
             updateTokenStatus();
+            updateTelegramStatus();
         }
 
         function closeTokenSettings() {
@@ -2305,6 +2327,58 @@
             } catch (e) {
                 btn.className = 'px-3 py-2 bg-rose-500/10 rounded-lg border border-rose-500/30 text-xs text-rose-400 font-mono';
                 btn.innerText = '❌ Не удалось связаться с сервером';
+            }
+        }
+
+        async function updateTelegramStatus() {
+            try {
+                const res = await fetch('/api/v1/settings/telegram');
+                const data = await res.json();
+                const el = document.getElementById('settings-telegram-status');
+                if (data.configured) {
+                    el.className = 'px-3 py-2 bg-emerald-500/10 rounded-lg border border-emerald-500/30 text-xs text-emerald-400 font-mono';
+                    el.innerText = `✓ Бот настроен, chat: ${data.chat_id || '...'}`;
+                } else {
+                    el.className = 'px-3 py-2 bg-amber-500/10 rounded-lg border border-amber-500/30 text-xs text-amber-400 font-mono';
+                    el.innerText = '⚠ Telegram не настроен. Создайте бота у @BotFather и укажите chat id.';
+                }
+            } catch (e) {
+                console.error("Failed to load telegram status", e);
+            }
+        }
+
+        async function saveTelegramSettings(sendTest) {
+            const botToken = document.getElementById('input-tg-token').value.trim();
+            const chatId = document.getElementById('input-tg-chat').value.trim();
+            if (!botToken || !chatId) {
+                alert("Введите bot token и chat id");
+                return;
+            }
+            const el = document.getElementById('settings-tg-result');
+            el.className = 'text-xs font-mono text-slate-400';
+            el.innerText = sendTest ? '⏳ Сохраняем и отправляем тест...' : '⏳ Сохраняем...';
+            el.classList.remove('hidden');
+            try {
+                const res = await fetch('/api/v1/settings/telegram', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bot_token: botToken, chat_id: chatId, test: sendTest })
+                });
+                const data = await res.json();
+                if (data.status === 'saved_and_test_sent') {
+                    el.className = 'px-3 py-2 bg-emerald-500/10 rounded-lg border border-emerald-500/30 text-xs text-emerald-400 font-mono';
+                    el.innerText = '✅ Настроено, тестовое сообщение отправлено.';
+                } else if (data.status === 'saved') {
+                    el.className = 'px-3 py-2 bg-emerald-500/10 rounded-lg border border-emerald-500/30 text-xs text-emerald-400 font-mono';
+                    el.innerText = '✅ Настройки сохранены.';
+                } else {
+                    el.className = 'px-3 py-2 bg-rose-500/10 rounded-lg border border-rose-500/30 text-xs text-rose-400 font-mono';
+                    el.innerText = `❌ ${data.error || res.status}`;
+                }
+                updateTelegramStatus();
+            } catch (e) {
+                el.className = 'px-3 py-2 bg-rose-500/10 rounded-lg border border-rose-500/30 text-xs text-rose-400 font-mono';
+                el.innerText = '❌ Не удалось связаться с сервером';
             }
         }
 

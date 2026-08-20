@@ -9,12 +9,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
 	keyFile      = "secret.key"
 	tokenFile    = "alor_token.enc"
 	portfolioFile = "alor_portfolio.enc"
+	telegramFile  = "telegram.enc"
 )
 
 // Store encrypts sensitive credentials (Alor refresh token) on disk.
@@ -141,4 +143,48 @@ func (s *Store) LoadPortfolio() (string, error) {
 		return "", err
 	}
 	return s.decrypt(string(data))
+}
+
+// TelegramSettings are the encrypted Telegram bot credentials.
+type TelegramSettings struct {
+	BotToken  string
+	ChatID    string
+}
+
+// SaveTelegram persists the Telegram bot token and chat id.
+func (s *Store) SaveTelegram(token, chatID string) error {
+	payload := token + "\n" + chatID
+	enc, err := s.encrypt(payload)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(s.dataDir, telegramFile), []byte(enc), 0600)
+}
+
+// LoadTelegram returns the saved Telegram settings (empty if none).
+func (s *Store) LoadTelegram() (TelegramSettings, error) {
+	var out TelegramSettings
+	data, err := os.ReadFile(filepath.Join(s.dataDir, telegramFile))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		return out, err
+	}
+	plain, err := s.decrypt(string(data))
+	if err != nil {
+		return out, err
+	}
+	parts := strings.SplitN(plain, "\n", 2)
+	out.BotToken = parts[0]
+	if len(parts) > 1 {
+		out.ChatID = parts[1]
+	}
+	return out, nil
+}
+
+// HasTelegram reports whether a bot token is configured.
+func (s *Store) HasTelegram() bool {
+	t, err := s.LoadTelegram()
+	return err == nil && t.BotToken != ""
 }
