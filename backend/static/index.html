@@ -475,6 +475,29 @@
                 </table>
                 <div id="stress-worst" class="mt-1 text-[10px] text-slate-400"></div>
             </div>
+
+            <!-- Expiry / Roll / Pin Risk -->
+            <div class="overflow-x-auto font-mono">
+                <div class="flex justify-between items-center mb-1">
+                    <span class="text-xs font-bold text-slate-400 uppercase">Экспирация / Ролл / Пин-риск</span>
+                    <span id="expiry-summary" class="text-[10px] text-slate-500"></span>
+                </div>
+                <table class="w-full text-left text-xs text-slate-300">
+                    <thead class="bg-slate-900/80 text-slate-400 uppercase border-b border-slate-700">
+                        <tr>
+                            <th class="p-2">Позиция</th>
+                            <th class="p-2">DTE</th>
+                            <th class="p-2">Статус</th>
+                            <th class="p-2">Exit-advice</th>
+                            <th class="p-2">Ролл</th>
+                            <th class="p-2">Пин-риск (проданные)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="expiry-body">
+                        <tr><td colspan="6" class="p-3 text-center text-slate-500">Загрузка...</td></tr>
+                    </tbody>
+                </table>
+            </div>
             
             <div class="overflow-x-auto font-mono">
                 <table class="w-full text-left text-xs text-slate-300">
@@ -1658,6 +1681,55 @@
             }
         }
 
+        async function updateExpiryRisk() {
+            try {
+                const res = await fetch('/api/v1/positions/expiry-risk');
+                const d = await res.json();
+                const s = d.summary || {};
+                document.getElementById('expiry-summary').innerText =
+                    `${s.total} позиций | DTE ${s.min_dte}–${s.max_dte} | 🔴 критично: ${s.critical} | 🟡 предупр.: ${s.warning} | ролл сейчас: ${s.roll_now}`;
+
+                if (!d.positions || !d.positions.length) {
+                    document.getElementById('expiry-body').innerHTML =
+                        '<tr><td colspan="6" class="p-3 text-center text-slate-500">Нет активных позиций</td></tr>';
+                    return;
+                }
+
+                let html = '';
+                d.positions.forEach(p => {
+                    const statusColor = p.overall === 'CRITICAL' ? 'text-rose-400' : p.overall === 'WARNING' ? 'text-amber-400' : 'text-emerald-400';
+                    const exitColor = p.exit_advice.severity === 'CRITICAL' ? 'text-rose-400' : p.exit_advice.severity === 'WARNING' ? 'text-amber-400' : 'text-slate-300';
+
+                    let pinTxt = '—';
+                    if (p.pin_risk && p.pin_risk.length) {
+                        pinTxt = p.pin_risk.map(l => {
+                            const c = l.level === 'HIGH' ? 'text-rose-400 font-bold' : l.level === 'MEDIUM' ? 'text-amber-400' : 'text-emerald-400';
+                            return `<span class="${c}">${l.secid} ${l.probability}% (${l.level})</span>`;
+                        }).join('<br>');
+                    }
+
+                    let rollTxt = '—';
+                    if (p.roll_advice && p.roll_advice.action === 'ROLL_TO_NEXT') {
+                        rollTxt = `<span class="text-amber-400 font-bold">→ ${p.roll_advice.next_series} (${p.roll_advice.next_expiry}, ${p.roll_advice.next_dte} дн.)</span>`;
+                    }
+
+                    const msgs = (p.messages || []).map(m => `<div class="text-amber-400/90">⚠ ${m}</div>`).join('');
+
+                    html += `<tr class="border-b border-slate-800/60">
+                        <td class="p-2">${p.strategy}<br><span class="text-slate-500 text-[10px]">${p.id}</span></td>
+                        <td class="p-2 font-bold ${p.dte <= 10 ? 'text-rose-400' : p.dte <= 20 ? 'text-amber-400' : 'text-slate-300'}">${p.dte} дн.</td>
+                        <td class="p-2 font-bold ${statusColor}">${p.overall}</td>
+                        <td class="p-2 ${exitColor}">${p.exit_advice.message || p.exit_advice.action}</td>
+                        <td class="p-2">${rollTxt}</td>
+                        <td class="p-2">${pinTxt}</td>
+                    </tr>${msgs ? `<tr class="border-b border-slate-800/60"><td colspan="6" class="p-1 pl-2">${msgs}</td></tr>` : ''}`;
+                });
+                document.getElementById('expiry-body').innerHTML = html;
+            } catch (e) {
+                console.error("Expiry/roll analysis failed", e);
+            }
+        }
+
         let lastSizing = null;
 
         async function runSizing() {
@@ -1978,6 +2050,7 @@
                 await updateTrades();
                 await updatePnlAttribution();
                 await updateStressTest();
+                await updateExpiryRisk();
 
                 updateSkewChart();
             } catch (e) {
