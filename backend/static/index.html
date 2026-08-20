@@ -386,6 +386,21 @@
                     </tbody>
                 </table>
             </div>
+
+            <!-- Stress Test Matrix -->
+            <div class="overflow-x-auto font-mono">
+                <div class="flex justify-between items-center mb-1">
+                    <span class="text-xs font-bold text-slate-400 uppercase">Stress-тест — PnL по сценариям «спот × IV»</span>
+                    <span class="text-[10px] text-slate-500">Базовое значение: <span id="stress-current-value">—</span></span>
+                </div>
+                <table class="w-full text-left text-xs text-slate-300">
+                    <thead class="bg-slate-900/80 text-slate-400 uppercase border-b border-slate-700">
+                        <tr id="stress-header"></tr>
+                    </thead>
+                    <tbody id="stress-body"></tbody>
+                </table>
+                <div id="stress-worst" class="mt-1 text-[10px] text-slate-400"></div>
+            </div>
             
             <div class="overflow-x-auto font-mono">
                 <table class="w-full text-left text-xs text-slate-300">
@@ -1509,6 +1524,61 @@
             }
         }
 
+        async function updateStressTest() {
+            try {
+                const res = await fetch('/api/v1/risk/stress');
+                const s = await res.json();
+                if (!s.matrix || s.matrix.length === 0) {
+                    return;
+                }
+                document.getElementById('stress-current-value').innerText = `₽${Math.round(s.current_value).toLocaleString('ru-RU')}`;
+
+                // Header row: empty corner + IV shocks.
+                let header = '<th class="p-2 text-slate-500">Спот \\ IV</th>';
+                s.iv_shocks.forEach(is => {
+                    const v = Math.round(is * 100);
+                    header += `<th class="p-2 ${v < 0 ? 'text-sky-400' : v > 0 ? 'text-orange-400' : 'text-slate-400'}">IV ${v > 0 ? '+' : ''}${v}%</th>`;
+                });
+                document.getElementById('stress-header').innerHTML = header;
+
+                // Body: one row per spot shock.
+                let body = '';
+                s.spot_shocks.forEach(ss => {
+                    const sv = Math.round(ss * 100);
+                    body += `<tr><td class="p-2 font-bold ${sv < 0 ? 'text-rose-400' : sv > 0 ? 'text-emerald-400' : 'text-slate-400'}">Спот ${sv > 0 ? '+' : ''}${sv}%</td>`;
+                    s.iv_shocks.forEach(is => {
+                        const cell = s.matrix.find(m => m.spot_shock === ss && m.iv_shock === is);
+                        if (!cell) { body += '<td class="p-2 text-slate-600">—</td>'; return; }
+                        const val = Math.round(cell.pnl);
+                        const isWorst = s.worst && cell.spot_shock === s.worst.spot_shock && cell.iv_shock === s.worst.iv_shock;
+                        const isBest = s.best && cell.spot_shock === s.best.spot_shock && cell.iv_shock === s.best.iv_shock;
+                        const color = val < 0 ? 'text-rose-400' : val > 0 ? 'text-emerald-400' : 'text-slate-400';
+                        let cls = `p-2 ${color}`;
+                        if (isWorst) cls += ' bg-rose-500/20 ring-1 ring-rose-500 font-bold';
+                        if (isBest) cls += ' bg-emerald-500/20 ring-1 ring-emerald-500 font-bold';
+                        const txt = val.toLocaleString('ru-RU');
+                        body += `<td class="${cls}">${val > 0 ? '+' : ''}${txt}</td>`;
+                    });
+                    body += '</tr>';
+                });
+                document.getElementById('stress-body').innerHTML = body;
+
+                const worst = s.worst;
+                const best = s.best;
+                let worstTxt = '';
+                if (worst && worst.pnl !== Infinity) {
+                    const posLines = (s.positions || []).map(p =>
+                        `  ${p.strategy} (${p.symbol}): ${p.pnl >= 0 ? '+' : ''}${Math.round(p.pnl).toLocaleString('ru-RU')}₽ (${p.pnl_percent}%)`).join('<br>');
+                    worstTxt = `<span class="text-rose-400 font-bold">Худший сценарий:</span> спот ${Math.round(worst.spot_shock*100)}%, IV ${Math.round(worst.iv_shock*100)}% → ${worst.pnl >= 0 ? '+' : ''}${Math.round(worst.pnl).toLocaleString('ru-RU')}₽ (${worst.pnl_percent}%)` +
+                        (posLines ? `<br>По позициям:<br>${posLines}` : '') +
+                        `<br><span class="text-emerald-400 font-bold">Лучший:</span> спот ${Math.round(best.spot_shock*100)}%, IV ${Math.round(best.iv_shock*100)}% → ${Math.round(best.pnl).toLocaleString('ru-RU')}₽`;
+                }
+                document.getElementById('stress-worst').innerHTML = worstTxt;
+            } catch (e) {
+                console.error("Stress test failed", e);
+            }
+        }
+
         async function updateRisk() {
             try {
                 const res = await fetch('/api/v1/risk');
@@ -1785,6 +1855,7 @@
                 await updateRisk();
                 await updateTrades();
                 await updatePnlAttribution();
+                await updateStressTest();
 
                 updateSkewChart();
             } catch (e) {
