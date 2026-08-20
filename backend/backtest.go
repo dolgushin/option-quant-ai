@@ -98,8 +98,10 @@ type backtestTrade struct {
 	NetCredit float64 `json:"net_credit"` // per contract (negative = debit paid)
 	MaxRisk   float64 `json:"max_risk"`   // per contract
 	Comm      float64 `json:"comm"`       // round-trip commissions per contract
-	PnL       float64 `json:"pnl"`        // per contract realized P&L (net of comm)
-	PnLPct    float64 `json:"pnl_pct"`    // PnL / max risk %
+	Contracts int     `json:"contracts"`  // vol-scaled size (1 when volscale off)
+	EntryHV   float64 `json:"entry_hv"`   // realized vol at entry (annualized)
+	PnL       float64 `json:"pnl"`        // realized P&L scaled by contracts (net of comm)
+	PnLPct    float64 `json:"pnl_pct"`    // PnL / (max risk × contracts) %
 	Win       bool    `json:"win"`
 	ExitType  string  `json:"exit_type"` // "hold" or "stop_loss" or "expiry"
 }
@@ -115,6 +117,11 @@ type backtestResult struct {
 	IVUsed          float64         `json:"iv_used"`
 	MinHV           float64         `json:"min_hv"`
 	CommPerContract float64         `json:"comm_per_contract"`
+	SlippageBps     float64         `json:"slippage_bps"`
+	VolScale        bool            `json:"vol_scale"`
+	TargetHV        float64         `json:"target_hv"`
+	RiskBudget      float64         `json:"risk_budget"`
+	AvgContracts    float64         `json:"avg_contracts"`
 	CommissionsTotal float64        `json:"commissions_total"`
 	Trades          int             `json:"total_trades"`
 	Wins            int             `json:"wins"`
@@ -478,7 +485,12 @@ func realizedVol(candles []historicalCandle, end int) float64 {
 //   - commPerContract: round-trip commission per contract (₽) deducted from P&L.
 //   - minHV: skip entries when trailing 20-day realized volatility < minHV
 //     (annualized), i.e. don't sell premium into a dead-vol regime.
-func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64, dteMin, dteMax int, stopLossPct, takeProfitPct float64, commPerContract, minHV float64) (*backtestResult, error) {
+//   - slippageBps: round-trip execution cost per leg in basis points (0.01%),
+//     applied to both the open and close premium (buy at ask, sell at bid).
+//   - volScale: when true, scale position size so each trade risks roughly
+//     riskBudget₽: contracts = riskBudget / (maxRisk₽ × hv/targetHV).
+//   - targetHV: volatility level at which the position is sized 1:1.
+func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64, dteMin, dteMax int, stopLossPct, takeProfitPct float64, commPerContract, minHV, slippageBps float64, volScale bool, targetHV, riskBudget float64) (*backtestResult, error) {
 	seriesMu.Lock()
 	seriesCode := selectedSeries[symbol]
 	seriesMu.Unlock()
@@ -555,12 +567,19 @@ func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64
 	result.IVUsed = math.Round(iv*10000) / 10000
 	result.MinHV = minHV
 	result.CommPerContract = commPerContract
-	result.Note = fmt.Sprintf("Модельные премии: Black-Scholes (r=16%%), спот = историческое закрытие фьючерса, страйки = шаг текущей цепочки вокруг исторического ATM, IV = заданная/текущая рыночная. Вход только при DTE в окне, выход = стоп/тейк или удержание hold дней. Комиссия: %.1f ₽/контракт в оба конца, %d ног. %s", commPerContract, len(specs), func() string { if minHV > 0 { return fmt.Sprintf("Фильтр входа: реализованная волатильность ≥ %.1f%%.", minHV*100) }; return "Фильтр входа по волатильности выключен." }())
+	result.SlippageBps = slippageBps
+	result.VolScale = volScale
+	result.TargetHV = targetHV
+	result.RiskBudget = riskBudget
+	result.Note = fmt.Sprintf("Модельные премии: Black-Scholes (r=16%%), спот = историческое закрытие фьючерса, страйки = шаг текущей цепочки вокруг исторического ATM, IV = заданная/текущая рыночная. Вход только при DTE в окне, выход = стоп/тейк или удержание hold дней. Комиссия: %.1f ₽/контракт в оба конца, %d ног. Скольжение: %.1f б.п. на ногу (вход+выход). %s%s", commPerContract, len(specs), slippageBps, func() string { if minHV > 0 { return fmt.Sprintf("Фильтр входа: реализованная волатильность ≥ %.1f%%.", minHV*100) }; return "Фильтр входа по волатильности выключен." }(), func() string { if volScale { return fmt.Sprintf(" Vol-scaling: размер по риск-бюджету %.0f ₽ при целевой HV %.0f%%.", riskBudget, targetHV*100) }; return "" }())
 
 	var equity []float64
 	equityTotal := 0.0
 	peak := 0.0
 	maxDD := 0.0
+	mult := contractMultiplier(symbol)
+	contractSum := 0
+	tradeCount := 0
 
 	for i := 0; i < len(candles)-1; i++ {
 		entry := candles[i]
@@ -571,7 +590,9 @@ func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64
 		for k, sp := range specs {
 			grid[k] = atm + float64(sp.offset)*step
 		}
-		valueAtEntry := func(spot, t float64) (float64, float64) {
+		// slipSign: +1 when opening (pay ask on buys, receive bid on sells),
+		// -1 when closing (pay ask to cover sells, receive bid on buys).
+		valueAtEntry := func(spot, t float64, slipSign float64) (float64, float64) {
 			val := 0.0
 			credit := 0.0
 			for k, sp := range specs {
@@ -580,6 +601,13 @@ func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64
 					return 0, 0
 				}
 				p := estimateOptionPrice(sp.isCall, spot, strike, t, iv)
+				if slippageBps > 0 {
+					if sp.isShort {
+						p *= (1 - slipSign*slippageBps/10000)
+					} else {
+						p *= (1 + slipSign*slippageBps/10000)
+					}
+				}
 				if sp.isShort {
 					val -= p
 					credit += p
@@ -626,7 +654,7 @@ func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64
 			wing = 1
 		}
 
-		entryVal, _ := valueAtEntry(entry.Close, tEntry)
+		entryVal, _ := valueAtEntry(entry.Close, tEntry, 1.0)
 		netCredit := entryVal // for credit strategies this is the initial credit
 
 		// Max risk: for credit strategies = wing - credit; for debit (long)
@@ -640,6 +668,32 @@ func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64
 		}
 		if maxRisk < 1 {
 			maxRisk = 1
+		}
+
+		// Vol-scaling: size the trade so its max risk ≈ risk budget, scaled
+		// inversely with the trailing realized vol relative to target HV.
+		contracts := 1
+		entryHV := 0.0
+		if volScale {
+			entryHV = realizedVol(candles, i)
+			if entryHV <= 0 {
+				entryHV = targetHV
+			}
+			maxRiskRub := maxRisk * mult
+			scale := 1.0
+			if targetHV > 0 {
+				scale = targetHV / entryHV
+			}
+			if maxRiskRub > 0 {
+				c := riskBudget * scale / maxRiskRub
+				if c < 1 {
+					c = 1
+				}
+				if c > 100 {
+					c = 100
+				}
+				contracts = int(math.Round(c))
+			}
 		}
 
 		// Determine exit: scan each day in the hold window (or until expiry)
@@ -663,10 +717,11 @@ func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64
 				exitIdx = j
 				break
 			}
-			exitVal, _ := valueAtEntry(exit.Close, tExit)
+			exitVal, _ := valueAtEntry(exit.Close, tExit, -1.0)
 
 			pnl := exitVal - entryVal
-			pnlPct := pnl / maxRisk * 100
+			maxRiskRub := maxRisk * mult * float64(contracts)
+			pnlPct := pnl / maxRiskRub * 100
 			if stopLossPct > 0 && pnlPct <= -stopLossPct {
 				exitType = "stop_loss"
 				exitIdx = j
@@ -688,20 +743,20 @@ func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64
 		if tExit < 0 {
 			tExit = 0
 		}
-		exitVal, _ := valueAtEntry(exit.Close, tExit)
+		exitVal, _ := valueAtEntry(exit.Close, tExit, -1.0)
 
 		// Round-trip commission: each leg traded once to open and once to close.
-		comm := commPerContract * float64(len(specs)) * 2
+		comm := commPerContract * float64(len(specs)) * 2 * float64(contracts)
 		result.CommissionsTotal += comm
 
-		pnl := (exitVal - entryVal) - comm
+		pnlRub := (exitVal - entryVal) * mult * float64(contracts) - comm
 		pnlPct := 0.0
 		if maxRisk > 0 {
-			pnlPct = pnl / maxRisk * 100
+			pnlPct = pnlRub / (maxRisk * mult * float64(contracts)) * 100
 		}
 
-		win := pnl > 0
-		equityTotal += pnl
+		win := pnlRub > 0
+		equityTotal += pnlRub
 		if equityTotal > peak {
 			peak = equityTotal
 		}
@@ -710,6 +765,8 @@ func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64
 			maxDD = dd
 		}
 		equity = append(equity, equityTotal)
+		contractSum += contracts
+		tradeCount++
 
 		result.TradesDetail = append(result.TradesDetail, backtestTrade{
 			EntryDate: entry.Date.Format("2006-01-02"),
@@ -720,7 +777,9 @@ func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64
 			NetCredit: math.Round(netCredit*100) / 100,
 			MaxRisk:   math.Round(maxRisk*100) / 100,
 			Comm:      math.Round(comm*100) / 100,
-			PnL:       math.Round(pnl*100) / 100,
+			Contracts: contracts,
+			EntryHV:   math.Round(entryHV*10000) / 10000,
+			PnL:       math.Round(pnlRub*100) / 100,
 			PnLPct:    math.Round(pnlPct*100) / 100,
 			Win:       win,
 			ExitType:  exitType,
@@ -761,6 +820,9 @@ func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64
 	}
 	result.TotalPnL = math.Round(equityTotal*100) / 100
 	result.MaxDrawdown = math.Round(maxDD*100) / 100
+	if tradeCount > 0 {
+		result.AvgContracts = math.Round(float64(contractSum)/float64(tradeCount)*100) / 100
+	}
 
 	return &result, nil
 }
@@ -831,12 +893,34 @@ func backtestHandler(w http.ResponseWriter, r *http.Request) {
 			iv = f
 		}
 	}
+	slippageBps := 0.0
+	if v := r.URL.Query().Get("slip"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+			slippageBps = f
+		}
+	}
+	volScale := false
+	if v := r.URL.Query().Get("volscale"); v == "1" || v == "true" || v == "on" {
+		volScale = true
+	}
+	targetHV := 0.25
+	if v := r.URL.Query().Get("targethv"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			targetHV = f
+		}
+	}
+	riskBudget := 20000.0
+	if v := r.URL.Query().Get("riskbudget"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			riskBudget = f
+		}
+	}
 
 	if holdDays >= days {
 		holdDays = days / 2
 	}
 
-	res, err := runStrategyBacktest(symbol, strategy, days, holdDays, iv, dteMin, dteMax, stopLossPct, takeProfitPct, commPerContract, minHV)
+	res, err := runStrategyBacktest(symbol, strategy, days, holdDays, iv, dteMin, dteMax, stopLossPct, takeProfitPct, commPerContract, minHV, slippageBps, volScale, targetHV, riskBudget)
 	if err != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
 		return

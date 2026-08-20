@@ -266,6 +266,25 @@
                     <label class="text-xs text-slate-400 block mb-1">Мин. реализ. волат., %</label>
                     <input id="bt-minhv" type="number" step="5" min="0" max="200" value="0" placeholder="нет" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-20 focus:outline-none focus:border-amber-500" title="Входить только если реализованная волатильность ≥ N% годовых (фильтр дешёвой волатильности)">
                 </div>
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">Скольжение, б.п.</label>
+                    <input id="bt-slip" type="number" step="1" min="0" max="200" value="10" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-20 focus:outline-none focus:border-amber-500" title="Исполнение: покупка по ask, продажа по bid. 10 б.п. = 0.1% от премии на ногу в обе стороны">
+                </div>
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">Риск-бюджет, ₽</label>
+                    <input id="bt-riskbudget" type="number" step="1000" min="1000" max="10000000" value="20000" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-28 focus:outline-none focus:border-amber-500" title="Целевой риск на сделку при vol-scaling (макс. убыток × контракты)">
+                </div>
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">Vol-scaling</label>
+                    <select id="bt-volscale" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm focus:outline-none focus:border-amber-500" title="Масштабировать размер позиции обратно волатильности: меньше контрактов при высокой HV">
+                        <option value="1">вкл</option>
+                        <option value="0" selected>выкл</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">Целевая HV, %</label>
+                    <input id="bt-targethv" type="number" step="5" min="5" max="100" value="25" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-20 focus:outline-none focus:border-amber-500" title="Волатильность, при которой позиция размером 1:1. Выше — контрактов меньше">
+                </div>
                 <button onclick="runBacktest()" class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-md transition">▶ Запустить бэктест</button>
             </div>
 
@@ -310,6 +329,10 @@
                     <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
                         <span class="text-xs text-slate-500 block">ВХОД: РЕАЛИЗ. ВОЛАТ.</span>
                         <span id="bt-stat-hv" class="text-lg font-bold text-slate-200">—</span>
+                    </div>
+                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+                        <span class="text-xs text-slate-500 block">СРЕДНИЙ РАЗМЕР (VOL-SCALE)</span>
+                        <span id="bt-stat-contracts" class="text-lg font-bold text-indigo-400">1</span>
                     </div>
                 </div>
 
@@ -1135,8 +1158,12 @@
             const tp = parseFloat(document.getElementById('bt-tp').value) || 0;
             const comm = parseFloat(document.getElementById('bt-comm').value);
             const minhv = parseFloat(document.getElementById('bt-minhv').value) || 0;
+            const slip = parseFloat(document.getElementById('bt-slip').value) || 0;
+            const riskbudget = parseFloat(document.getElementById('bt-riskbudget').value) || 20000;
+            const volscale = document.getElementById('bt-volscale').value === '1' ? 1 : 0;
+            const targethv = parseFloat(document.getElementById('bt-targethv').value) || 25;
             const ivRaw = document.getElementById('bt-iv').value;
-            let url = `/api/v1/backtest?strategy=${strategy}&symbol=${currentAsset}&days=${days}&hold=${hold}&dtemin=${dteMin}&dtemax=${dteMax}&stop=${stop}&tp=${tp}&comm=${comm || 0}&minhv=${minhv}`;
+            let url = `/api/v1/backtest?strategy=${strategy}&symbol=${currentAsset}&days=${days}&hold=${hold}&dtemin=${dteMin}&dtemax=${dteMax}&stop=${stop}&tp=${tp}&comm=${comm || 0}&minhv=${minhv}&slip=${slip}&riskbudget=${riskbudget}&volscale=${volscale}&targethv=${targethv / 100}`;
             if (ivRaw) url += `&iv=${parseFloat(ivRaw)}`;
 
             document.getElementById('backtest-loading').classList.remove('hidden');
@@ -1162,6 +1189,7 @@
                 document.getElementById('bt-stat-iv').innerText = `${(data.iv_used * 100).toFixed(1)}%`;
                 document.getElementById('bt-stat-comm').innerText = `₽${Math.round(data.commissions_total || 0).toLocaleString()}`;
                 document.getElementById('bt-stat-hv').innerText = data.min_hv > 0 ? `≥ ${(data.min_hv * 100).toFixed(0)}%` : 'выкл';
+                document.getElementById('bt-stat-contracts').innerText = data.avg_contracts > 0 ? data.avg_contracts : '1';
                 document.getElementById('backtest-note').innerText = `${data.note || ''} Серия: ${data.series}, стратегия: ${data.strategy_name}`;
 
                 drawBacktestChart(data.equity_curve || []);
