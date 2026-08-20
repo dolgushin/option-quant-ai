@@ -794,6 +794,11 @@ func hedgePositionByID(id string, live bool, w http.ResponseWriter) {
 		json.NewEncoder(w).Encode(map[string]interface{}{"error": "no futures series for " + pos.Symbol})
 		return
 	}
+	// For premium equity options (SBER/SBERP) the hedge instrument is the
+	// underlying share itself (Alor symbol = ticker), not a futures code.
+	if _, isEquity := equityOptions[pos.Symbol]; isEquity {
+		futureSecid = pos.Symbol
+	}
 
 	// Place a real order when requested and Alor is configured.
 	orderNote := "бумажный хедж (Alor не подключён)"

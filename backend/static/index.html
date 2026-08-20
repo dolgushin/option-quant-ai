@@ -34,6 +34,8 @@
                     <button onclick="switchAsset('Si')" id="btn-Si" class="px-3 py-1.5 text-xs font-bold rounded-md bg-emerald-600 text-white transition">Si (USD/RUB)</button>
                     <button onclick="switchAsset('RI')" id="btn-RI" class="px-3 py-1.5 text-xs font-bold rounded-md text-slate-400 hover:text-white transition">RI (RTS)</button>
                     <button onclick="switchAsset('CR')" id="btn-CR" class="px-3 py-1.5 text-xs font-bold rounded-md text-slate-400 hover:text-white transition">CR (Yuan)</button>
+                    <button onclick="switchAsset('SBER')" id="btn-SBER" class="px-3 py-1.5 text-xs font-bold rounded-md text-slate-400 hover:text-white transition">SBER (Сбер)</button>
+                    <button onclick="switchAsset('SBERP')" id="btn-SBERP" class="px-3 py-1.5 text-xs font-bold rounded-md text-slate-400 hover:text-white transition">SBERP (Сбер пр.)</button>
                     <button onclick="switchAsset('BTC')" id="btn-BTC" class="px-3 py-1.5 text-xs font-bold rounded-md text-slate-400 hover:text-white transition">BTC (Crypto)</button>
                 </div>
 
@@ -382,6 +384,8 @@
                         <option value="Si">Si — доллар</option>
                         <option value="RI">RI — индекс РТС</option>
                         <option value="CR">CR — юань</option>
+                        <option value="SBER">SBER — Сбербанк обыкн.</option>
+                        <option value="SBERP">SBERP — Сбербанк прив.</option>
                     </select>
                 </div>
                 <div>
@@ -878,6 +882,8 @@
                             <option value="Si">Si (USD/RUB)</option>
                             <option value="RI">RI (RTS)</option>
                             <option value="CR">CR (Yuan)</option>
+                            <option value="SBER">SBER (Сбер)</option>
+                            <option value="SBERP">SBERP (Сбер пр.)</option>
                         </select>
                     </div>
                     <div class="col-span-2">
@@ -1121,7 +1127,7 @@
 
         function switchAsset(asset) {
             currentAsset = asset;
-            ['Si', 'RI', 'CR', 'BTC'].forEach(a => {
+            ['Si', 'RI', 'CR', 'SBER', 'SBERP', 'BTC'].forEach(a => {
                 const btn = document.getElementById(`btn-${a}`);
                 if (btn) {
                     if (a === asset) {

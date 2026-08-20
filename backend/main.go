@@ -67,12 +67,27 @@ var (
 
 	// Selected options series per asset (MOEX code: SiU6 = September 2026).
 	// The user can switch between quarterly/monthly series via POST /api/v1/series.
+	// For SBER/SBERP the series is a premium equity option expiry (e.g. SBRF-2026-09-16).
 	selectedSeries = map[string]string{
-		"Si": "SiU6",
-		"RI": "RIU6",
-		"CR": "CRU6",
+		"Si":    "SiU6",
+		"RI":    "RIU6",
+		"CR":    "CRU6",
+		"SBER":  "SBRF-2026-09-16",
+		"SBERP": "SBPR-2026-09-16",
 	}
 	seriesMu sync.Mutex
+
+	// equityOptions maps our UI symbols to the MOEX ISS premium option asset
+	// codes (board ROPD). SBER = Sberbank common shares, SBERP = preferred.
+	equityOptions = map[string]string{
+		"SBER":  "SBRF",
+		"SBERP": "SBPR",
+	}
+
+	// equityOptionCache holds the ROPD (premium options on shares) contracts.
+	equityOptionCache     []optionContract
+	equityOptionCacheTime time.Time
+	equityOptionMu        sync.Mutex
 
 	// tokenStore persists the Alor refresh token encrypted on disk.
 	tokenStore *secure.Store
@@ -141,7 +156,12 @@ func moexFuturesContracts() ([]futuresContract, error) {
 
 // futuresContractsForSymbol returns available contracts for a symbol root (Si, RI, CR),
 // newest to oldest, for the dropdown in the UI.
+// For premium equity options (SBER/SBERP) there is no matching futures prefix,
+// so we derive the "series" from the unique option expiries on the ROPD board.
 func futuresContractsForSymbol(symbol string) []futuresContract {
+	if _, isEquity := equityOptions[symbol]; isEquity {
+		return equitySeriesForSymbol(symbol)
+	}
 	contracts, err := moexFuturesContracts()
 	if err != nil {
 		return nil
@@ -151,6 +171,42 @@ func futuresContractsForSymbol(symbol string) []futuresContract {
 		if strings.HasPrefix(c.Code, symbol) {
 			out = append(out, c)
 		}
+	}
+	// Newest expiry first.
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].LastDelDate > out[i].LastDelDate {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out
+}
+
+// equitySeriesForSymbol builds pseudo futuresContract entries for premium
+// equity options (SBER/SBERP) from the unique expiries on the ROPD board.
+// Code follows the same "{ASSET}-{YYYY-MM-DD}" pattern used by selectedSeries.
+func equitySeriesForSymbol(symbol string) []futuresContract {
+	issAsset := equityOptions[symbol]
+	if issAsset == "" {
+		return nil
+	}
+	opts, err := moexEquityOptionContracts()
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []futuresContract
+	for _, o := range opts {
+		if o.AssetCode != issAsset || o.Expiry == "" || seen[o.Expiry] {
+			continue
+		}
+		seen[o.Expiry] = true
+		out = append(out, futuresContract{
+			Code:        issAsset + "-" + o.Expiry,
+			ShortName:   fmt.Sprintf("%s %s", symbol, o.Expiry),
+			LastDelDate: o.Expiry,
+		})
 	}
 	// Newest expiry first.
 	for i := 0; i < len(out); i++ {
@@ -211,6 +267,14 @@ func getSpotPrice(symbol string) (float64, error) {
 	}
 
 	// 1) MOEX ISS public API — free, no token required, real FORTS prices.
+	// For premium equity options (SBER/SBERP) the underlying is the share
+	// itself, quoted on the stock market (TQBR), not a FORTS futures.
+	if _, isEquity := equityOptions[symbol]; isEquity {
+		if price, err := moexStockSpotPrice(symbol); err == nil && price > 0 {
+			return price, nil
+		}
+	}
+
 	seriesMu.Lock()
 	issCode := selectedSeries[symbol]
 	seriesMu.Unlock()
@@ -235,9 +299,49 @@ func getSpotPrice(symbol string) (float64, error) {
 		return 80240.0, nil
 	case "CR":
 		return 1010.0, nil
+	case "SBER":
+		return 271.0, nil
+	case "SBERP":
+		return 271.0, nil
 	default:
 		return 0, fmt.Errorf("no price source for symbol %s", symbol)
 	}
+}
+
+// moexStockSpotPrice fetches the LAST trade price of a share (e.g. SBER,
+// SBERP) from the MOEX ISS stock TQBR board (no authentication required).
+func moexStockSpotPrice(ticker string) (float64, error) {
+	url := fmt.Sprintf("http://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/%s.json?iss.meta=off&iss.only=marketdata&marketdata.columns=SECID,LAST", ticker)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return 0, fmt.Errorf("moex iss share request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("moex iss share status: %d", resp.StatusCode)
+	}
+
+	var issResp struct {
+		Marketdata struct {
+			Data [][]interface{} `json:"data"`
+		} `json:"marketdata"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&issResp); err != nil {
+		return 0, fmt.Errorf("moex iss share decode failed: %w", err)
+	}
+
+	if len(issResp.Marketdata.Data) == 0 || len(issResp.Marketdata.Data[0]) < 2 {
+		return 0, fmt.Errorf("moex iss: no share data for %s", ticker)
+	}
+
+	last, ok := issResp.Marketdata.Data[0][1].(float64)
+	if !ok {
+		return 0, fmt.Errorf("moex iss: LAST not a number")
+	}
+	return last, nil
 }
 
 // moexISSSpotPrice fetches the LAST trade price of a FORTS futures contract
@@ -277,17 +381,18 @@ func moexISSSpotPrice(secid string) (float64, error) {
 	return last, nil
 }
 
-// optionContract describes a MOEX FORTS option: SECID, underlying asset code,
-// strike, call/put flag, expiry date and exchange margin (GO) figures.
+// optionContract describes a MOEX option: SECID, underlying asset code,
+// strike, call/put flag, expiry date, exchange margin (GO) figures and board.
 type optionContract struct {
-	SecID     string  // e.g. "Si85000BI6"
-	AssetCode string  // e.g. "Si"
+	SecID     string  // e.g. "Si85000BI6" (RFUD) or "SR100CC0" (ROPD)
+	AssetCode string  // e.g. "Si" (RFUD) or "SBRF" (ROPD)
 	Expiry    string  // e.g. "2026-09-17"
-	Strike    float64 // e.g. 85000
+	Strike    float64 // e.g. 85000 (futures options) or 100 (share options)
 	IsCall    bool
 	IMNP      float64 // GO for a short option position (seller)
 	IMP       float64 // GO for a long option position (buyer)
 	PrevPrice float64
+	Board     string // "RFUD" (options on futures) or "ROPD" (premium options on shares)
 }
 
 var (
@@ -324,6 +429,8 @@ func cachedOptionQuote(secid string) (last, bid, offer float64) {
 
 // contractMultiplier returns the point value (₽ per 1 price point) for a FORTS
 // contract symbol. Option premiums are quoted in the same points as the futures.
+// For premium options on shares (SBER/SBERP) the multiplier is the contract
+// lot (100 shares per contract); the premium is quoted per share.
 func contractMultiplier(symbol string) float64 {
 	switch symbol {
 	case "Si":
@@ -332,6 +439,8 @@ func contractMultiplier(symbol string) float64 {
 		return 100.0
 	case "CR":
 		return 1000.0
+	case "SBER", "SBERP":
+		return 100.0
 	default:
 		return 1.0
 	}
@@ -420,6 +529,7 @@ func moexOptionContracts() ([]optionContract, error) {
 			IMNP:      imnp,
 			IMP:       imp,
 			PrevPrice: prev,
+			Board:     "RFUD",
 		})
 	}
 
@@ -428,18 +538,93 @@ func moexOptionContracts() ([]optionContract, error) {
 	return opts, nil
 }
 
+// moexEquityOptionContracts fetches the premium option contracts on shares
+// (board ROPD, e.g. SBRF = Sberbank common, SBPR = Sberbank preferred), cached.
+// The same ISS columns are used; ASSETCODE carries the underlying share code.
+func moexEquityOptionContracts() ([]optionContract, error) {
+	equityOptionMu.Lock()
+	defer equityOptionMu.Unlock()
+	if len(equityOptionCache) > 0 && time.Since(equityOptionCacheTime) < 10*time.Minute {
+		return equityOptionCache, nil
+	}
+
+	url := "http://iss.moex.com/iss/engines/futures/markets/options/boards/ROPD/securities.json?iss.meta=off&iss.only=securities&securities.columns=SECID,LASTDELDATE,ASSETCODE,OPTIONTYPE,STRIKE,IMNP,IMP,PREVPRICE"
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var data struct {
+		Securities struct {
+			Data [][]interface{} `json:"data"`
+		} `json:"securities"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+
+	var opts []optionContract
+	for _, row := range data.Securities.Data {
+		if len(row) < 8 {
+			continue
+		}
+		secid, _ := row[0].(string)
+		expiry, _ := row[1].(string)
+		asset, _ := row[2].(string)
+		otype, _ := row[3].(string)
+		strike, _ := row[4].(float64)
+		imnp, _ := row[5].(float64)
+		imp, _ := row[6].(float64)
+		prev, _ := row[7].(float64)
+		if secid == "" || asset == "" {
+			continue
+		}
+		opts = append(opts, optionContract{
+			SecID:     secid,
+			AssetCode: asset,
+			Expiry:    expiry,
+			Strike:    strike,
+			IsCall:    otype == "C",
+			IMNP:      imnp,
+			IMP:       imp,
+			PrevPrice: prev,
+			Board:     "ROPD",
+		})
+	}
+
+	equityOptionCache = opts
+	equityOptionCacheTime = time.Now()
+	return opts, nil
+}
+
 // moexOptionsForAsset returns the option chain for a given underlying asset
-// (Si, RI, CR) and expiry date, filtered from the cached full list.
-// ISS uses different asset codes than our UI symbols: RI->RTS, CR->CNY.
+// and expiry date, filtered from the cached full list.
+// ISS uses different asset codes than our UI symbols: RI->RTS, CR->CNY,
+// SBER->SBRF (premium options on shares), SBERP->SBPR.
 func moexOptionsForAsset(asset, expiry string) []optionContract {
 	issAsset := asset
+	board := "RFUD"
 	switch asset {
 	case "RI":
 		issAsset = "RTS"
 	case "CR":
 		issAsset = "CNY"
+	case "SBER":
+		issAsset = "SBRF"
+		board = "ROPD"
+	case "SBERP":
+		issAsset = "SBPR"
+		board = "ROPD"
 	}
-	opts, err := moexOptionContracts()
+	var opts []optionContract
+	var err error
+	if board == "ROPD" {
+		opts, err = moexEquityOptionContracts()
+	} else {
+		opts, err = moexOptionContracts()
+	}
 	if err != nil {
 		return nil
 	}
@@ -452,23 +637,36 @@ func moexOptionsForAsset(asset, expiry string) []optionContract {
 	return out
 }
 
-// findOptionBySecID returns a cached option contract by its SECID.
+// findOptionBySecID returns a cached option contract by its SECID, searching
+// both the RFUD (futures options) and ROPD (share premium options) boards.
 func findOptionBySecID(secid string) *optionContract {
 	opts, err := moexOptionContracts()
-	if err != nil {
-		return nil
+	if err == nil {
+		for i := range opts {
+			if opts[i].SecID == secid {
+				return &opts[i]
+			}
+		}
 	}
-	for i := range opts {
-		if opts[i].SecID == secid {
-			return &opts[i]
+	eopts, err2 := moexEquityOptionContracts()
+	if err2 == nil {
+		for i := range eopts {
+			if eopts[i].SecID == secid {
+				return &eopts[i]
+			}
 		}
 	}
 	return nil
 }
 
-// moexOptionQuote fetches the live LAST/BID/OFFER for an option SECID.
+// moexOptionQuote fetches the live LAST/BID/OFFER for an option SECID on the
+// correct board (RFUD for futures options, ROPD for premium share options).
 func moexOptionQuote(secid string) (last, bid, offer float64, err error) {
-	url := fmt.Sprintf("http://iss.moex.com/iss/engines/futures/markets/options/boards/RFUD/securities/%s.json?iss.meta=off&iss.only=marketdata&marketdata.columns=SECID,LAST,BID,OFFER", secid)
+	board := "RFUD"
+	if opt := findOptionBySecID(secid); opt != nil && opt.Board != "" {
+		board = opt.Board
+	}
+	url := fmt.Sprintf("http://iss.moex.com/iss/engines/futures/markets/options/boards/%s/securities/%s.json?iss.meta=off&iss.only=marketdata&marketdata.columns=SECID,LAST,BID,OFFER", board, secid)
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
@@ -524,7 +722,12 @@ func nearestStrike(chain []optionContract, spot float64) float64 {
 
 // futuresSeriesAlor converts a MOEX series code (e.g. "SiU6") into the
 // human-readable Alor futures name (e.g. "Si-9.26") using cached MOEX data.
+// For premium equity options (SBER/SBERP) the hedge instrument is the share
+// itself, so Alor uses the plain ticker.
 func futuresSeriesAlor(symbol string) (string, bool) {
+	if _, isEquity := equityOptions[symbol]; isEquity {
+		return symbol, true
+	}
 	seriesMu.Lock()
 	code := selectedSeries[symbol]
 	seriesMu.Unlock()
