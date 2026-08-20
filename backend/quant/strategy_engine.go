@@ -254,3 +254,182 @@ func GetSpreadRollingAdvice(marketDirection string, drawdownPct float64) Rolling
 		Details:           "Правило роллирования: роллировать ТОЛЬКО если сохраняется исходный Edge. Запрещено увеличивать риск ради избежания фиксации убытка.",
 	}
 }
+
+// StrategyRotationItem is one strategy in the regime-based rotation ranking.
+type StrategyRotationItem struct {
+	StrategyType string  `json:"strategy_type"`
+	StrategyName string  `json:"strategy_name"`
+	Score        float64 `json:"score"` // 0..100, higher = better fit for regime
+	Action       string  `json:"action"` // "BUY" (rotate in) / "HOLD" / "CLOSE"
+	Reason       string  `json:"reason"`
+}
+
+// RotationAdvice ranks strategies for the current regime and tells which of the
+// held positions fit it (rotate out the ones that no longer make sense).
+type RotationAdvice struct {
+	Regime      string                 `json:"market_regime"`
+	Trend       string                 `json:"trend_regime"`
+	Ranking     []StrategyRotationItem `json:"ranking"`
+	PositionTips []PositionRotationTip  `json:"position_tips"`
+}
+
+// PositionRotationTip is a per-position recommendation.
+type PositionRotationTip struct {
+	PositionID string `json:"position_id"`
+	Strategy   string `json:"strategy"`
+	Symbol     string `json:"symbol"`
+	CurrentScore float64 `json:"current_score"`
+	Action     string `json:"action"` // "HOLD" / "ROTATE_OUT"
+	Recommend  string `json:"recommend"` // strategy to rotate into, if any
+	Reason     string `json:"reason"`
+}
+
+// StrategyRegimeScore returns 0..100 fitness of a strategy under a regime.
+func StrategyRegimeScore(strategyType string, regime MarketRegime, trend string) float64 {
+	if strategyType == "futures" {
+		// Directional futures fit a trend regime, poorly in rangebound.
+		if regime == RegimeTrend {
+			return 70
+		}
+		return 30
+	}
+	switch regime {
+	case RegimeHighTheta: // high IV, rangebound: sell premium aggressively
+		switch strategyType {
+		case "iron_condor":
+			return 92
+		case "iron_butterfly":
+			return 78
+		case "bear_call_spread":
+			return 70
+		case "bull_put_spread":
+			return 70
+		case "long_straddle", "long_strangle":
+			return 25
+		}
+	case RegimeStress: // high IV + trending: buy vol / hedge
+		switch strategyType {
+		case "long_straddle":
+			return 90
+		case "long_strangle":
+			return 85
+		case "iron_condor":
+			return 30
+		case "iron_butterfly":
+			return 20
+		case "bull_put_spread", "bear_call_spread":
+			return 40
+		}
+	case RegimeTrend: // directional breakout
+		if trend == "BULLISH" {
+			switch strategyType {
+			case "bull_put_spread":
+				return 80
+			case "bull_call_spread":
+				return 72
+			case "iron_condor":
+				return 55
+			case "long_straddle", "long_strangle":
+				return 45
+			}
+		} else if trend == "BEARISH" {
+			switch strategyType {
+			case "bear_call_spread":
+				return 80
+			case "bear_put_spread":
+				return 72
+			case "iron_condor":
+				return 55
+			case "long_straddle", "long_strangle":
+				return 45
+			}
+		}
+		return 50
+	default: // RegimeCalm: low IV, rangebound: theta harvest + cheap long vol
+		switch strategyType {
+		case "iron_condor":
+			return 85
+		case "iron_butterfly":
+			return 70
+		case "bull_put_spread", "bear_call_spread":
+			return 65
+		case "long_strangle":
+			return 55
+		case "long_straddle":
+			return 45
+		}
+	}
+	return 35
+}
+
+// RecommendRotation builds the regime-based strategy ranking and per-position
+// rotation tips given a market regime, trend regime and held positions.
+func RecommendRotation(regime MarketRegime, trend string, positions []HeldPositionInfo) RotationAdvice {
+	all := []string{"iron_condor", "iron_butterfly", "bull_put_spread", "bear_call_spread", "bull_call_spread", "bear_put_spread", "long_strangle", "long_straddle"}
+	names := map[string]string{
+		"iron_condor": "Iron Condor", "iron_butterfly": "Iron Butterfly",
+		"bull_put_spread": "Bull Put Spread", "bear_call_spread": "Bear Call Spread",
+		"bull_call_spread": "Bull Call Spread", "bear_put_spread": "Bear Put Spread",
+		"long_strangle": "Long Strangle", "long_straddle": "Long Straddle",
+	}
+
+	// Rank by regime score, keep the top 4.
+	var ranking []StrategyRotationItem
+	for _, t := range all {
+		s := StrategyRegimeScore(t, regime, trend)
+		ranking = append(ranking, StrategyRotationItem{
+			StrategyType: t,
+			StrategyName: names[t],
+			Score:        s,
+			Action:       "BUY",
+			Reason:       fmt.Sprintf("Пригодность к режиму %s: %.0f/100", string(regime), s),
+		})
+	}
+	for i := 0; i < len(ranking); i++ {
+		for j := i + 1; j < len(ranking); j++ {
+			if ranking[j].Score > ranking[i].Score {
+				ranking[i], ranking[j] = ranking[j], ranking[i]
+			}
+		}
+	}
+	if len(ranking) > 4 {
+		ranking = ranking[:4]
+	}
+
+	// Position tips: if a held strategy scores low, suggest rotating out into
+	// the current top-ranked strategy.
+	var tips []PositionRotationTip
+	topStrategy := ranking[0].StrategyType
+	for _, p := range positions {
+		score := StrategyRegimeScore(p.Strategy, regime, trend)
+		tip := PositionRotationTip{
+			PositionID:   p.ID,
+			Strategy:     p.Strategy,
+			Symbol:       p.Symbol,
+			CurrentScore: score,
+			Action:       "HOLD",
+			Recommend:    "",
+			Reason:       fmt.Sprintf("Стратегия вписывается в режим (%.0f/100).", score),
+		}
+		if score < 60 {
+			tip.Action = "ROTATE_OUT"
+			tip.Recommend = topStrategy
+			tip.Reason = fmt.Sprintf("Пригодность %.0f/100 ниже порога — рассмотрите ротацию в «%s» (%s).", score, names[topStrategy], string(regime))
+		}
+		tips = append(tips, tip)
+	}
+
+	return RotationAdvice{
+		Regime:       string(regime),
+		Trend:        trend,
+		Ranking:      ranking,
+		PositionTips: tips,
+	}
+}
+
+// HeldPositionInfo is the minimal position data the rotation advisor needs.
+type HeldPositionInfo struct {
+	ID       string
+	Strategy string
+	Symbol   string
+}

@@ -206,6 +206,14 @@
                         Analyzing position risks and triggers...
                     </div>
                 </div>
+
+                <!-- Regime Rotation -->
+                <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800 space-y-3 font-mono md:col-span-2">
+                    <h3 class="text-sm font-bold text-sky-400">🔄 Ротация стратегий по режиму рынка</h3>
+                    <div id="rotation-box" class="space-y-2 text-xs text-slate-300">
+                        Analyzing regime rotation...
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -1576,6 +1584,56 @@
             }
         }
 
+        async function updateRotation() {
+            try {
+                const res = await fetch(`/api/v1/strategy/rotation?symbol=${currentAsset}`);
+                const d = await res.json();
+                const rot = d.rotation || {};
+                const box = document.getElementById('rotation-box');
+
+                let html = `<div class="p-2.5 bg-sky-950/30 rounded border border-sky-800/50 space-y-1">
+                    <div class="flex justify-between items-center">
+                        <span class="font-bold text-sky-300">📈 Режим: ${rot.market_regime || '—'}</span>
+                        <span class="text-[10px] font-mono text-slate-300">Тренд: ${rot.trend_regime || '—'} · IV ${(d.iv*100).toFixed(1)}% · HV ${(d.hv*100).toFixed(1)}%</span>
+                    </div>
+                </div>`;
+
+                if ((rot.ranking || []).length) {
+                    html += `<div class="text-[10px] text-slate-400 uppercase">Приоритет стратегий в текущем режиме:</div>`;
+                    rot.ranking.forEach(r => {
+                        const bar = Math.round(r.score / 10) * 10;
+                        html += `<div class="p-2 bg-slate-800/80 rounded border border-slate-700 flex justify-between items-center">
+                            <span class="font-bold text-white">${r.strategy_name}</span>
+                            <div class="flex items-center gap-2">
+                                <span class="w-20 h-1.5 bg-slate-700 rounded overflow-hidden"><span class="block h-full bg-sky-500 rounded" style="width:${bar}%"></span></span>
+                                <span class="text-sky-300 font-bold">${Math.round(r.score)}</span>
+                            </div>
+                        </div>`;
+                    });
+                }
+
+                const tips = rot.position_tips || [];
+                if (tips.length) {
+                    html += `<div class="text-[10px] text-slate-400 uppercase">Советы по позициям:</div>`;
+                    tips.forEach(t => {
+                        const isRotate = t.action === 'ROTATE_OUT';
+                        html += `<div class="p-2 rounded border flex justify-between items-center ${isRotate ? 'bg-rose-950/30 border-rose-800/50' : 'bg-slate-800/60 border-slate-700/60'}">
+                            <div>
+                                <span class="font-bold ${isRotate ? 'text-rose-300' : 'text-emerald-300'}">${t.strategy}</span>
+                                <span class="text-[10px] text-slate-500 ml-1">${t.position_id}</span>
+                                <div class="text-[10px] text-slate-400">${t.reason}</div>
+                            </div>
+                            <span class="text-[10px] font-mono ${isRotate ? 'text-rose-400' : 'text-emerald-400'}">${isRotate ? `→ в ${t.recommend}` : t.action} (${Math.round(t.current_score)})</span>
+                        </div>`;
+                    });
+                }
+
+                box.innerHTML = html;
+            } catch (e) {
+                console.error("Rotation update failed", e);
+            }
+        }
+
         async function updatePositions() {
             try {
                 const res = await fetch('/api/v1/positions');
@@ -2072,6 +2130,7 @@
 
                 // 4. Update TDSS Strategies & Exit Advice
                 await updateTDSS();
+                await updateRotation();
                 await updatePositions();
                 await updatePortfolio();
                 await updateRisk();

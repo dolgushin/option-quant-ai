@@ -2548,6 +2548,76 @@ func optionsRecommendationsHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// normalizeStrategyName maps a position display name (e.g. "Iron Condor",
+// "Bull Call Spread") to its strategy key ("iron_condor", "bull_call_spread").
+func normalizeStrategyName(name string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.Contains(lower, "condor"):
+		return "iron_condor"
+	case strings.Contains(lower, "butterfly"):
+		return "iron_butterfly"
+	case strings.Contains(lower, "bull") && strings.Contains(lower, "put"):
+		return "bull_put_spread"
+	case strings.Contains(lower, "bull") && strings.Contains(lower, "call"):
+		return "bull_call_spread"
+	case strings.Contains(lower, "bear") && strings.Contains(lower, "put"):
+		return "bear_put_spread"
+	case strings.Contains(lower, "bear") && strings.Contains(lower, "call"):
+		return "bear_call_spread"
+	case strings.Contains(lower, "strangle"):
+		return "long_strangle"
+	case strings.Contains(lower, "straddle"):
+		return "long_straddle"
+	case strings.Contains(lower, "execution") || strings.Contains(lower, "futures"):
+		return "futures"
+	default:
+		return lower
+	}
+}
+
+// rotationHandler ranks strategies by the current market regime and flags held
+// positions that no longer fit it.
+// URL: /api/v1/strategy/rotation?symbol=Si
+func rotationHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "Si"
+	}
+
+	iv := currentATMIVRaw(symbol)
+	hv := realizedVolForSymbol(symbol)
+	if iv <= 0 {
+		iv = 0.35
+	}
+	if hv <= 0 {
+		hv = 0.28
+	}
+
+	trend := tradeTrend(symbol)
+	trendRegime := "SIDEWAYS"
+	if t, ok := trend["regime"].(string); ok {
+		trendRegime = t
+	}
+	isTrending := trendRegime == "BULLISH" || trendRegime == "BEARISH"
+	regime := quant.ClassifyMarketRegime(iv, hv, isTrending)
+
+	positions := quant.GetActivePositions()
+	held := make([]quant.HeldPositionInfo, 0, len(positions))
+	for _, p := range positions {
+		held = append(held, quant.HeldPositionInfo{ID: p.ID, Strategy: normalizeStrategyName(p.Strategy), Symbol: p.Symbol})
+	}
+
+	advice := quant.RecommendRotation(regime, trendRegime, held)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"rotation":  advice,
+		"iv":        math.Round(iv*10000) / 10000,
+		"hv":        math.Round(hv*10000) / 10000,
+		"trade_gate": tradeGate(symbol),
+	})
+}
+
 func optionsTrendHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	symbol := r.URL.Query().Get("symbol")
@@ -2737,6 +2807,7 @@ func main() {
 	http.HandleFunc("/api/v1/positions/pnl-attribution", pnlAttributionHandler)
 	http.HandleFunc("/api/v1/positions/sizing", positionSizingHandler)
 	http.HandleFunc("/api/v1/positions/expiry-risk", expiryRiskHandler)
+	http.HandleFunc("/api/v1/strategy/rotation", rotationHandler)
 	http.HandleFunc("/api/v1/position/profile", positionProfileHandler)
 	http.HandleFunc("/api/v1/trades", tradesHandler)
 	http.HandleFunc("/api/v1/portfolio", portfolioHandler)
