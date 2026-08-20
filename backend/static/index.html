@@ -49,6 +49,14 @@
             </div>
         </header>
 
+        <!-- Tab Navigation -->
+        <nav class="flex gap-2 border-b border-slate-800 pb-3">
+            <button id="tab-btn-dashboard" onclick="switchTab('dashboard')" class="px-4 py-2 text-xs font-bold rounded-lg bg-emerald-600 text-white transition">📊 Дашборд</button>
+            <button id="tab-btn-spreads" onclick="switchTab('spreads')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🎯 Вертикальные спреды</button>
+        </nav>
+
+        <div id="dashboard-view" class="space-y-4 md:space-y-6">
+
         <!-- Capital & Portfolio Bar -->
         <div class="bg-slate-800/90 p-4 rounded-xl border border-emerald-500/30 flex flex-col md:flex-row justify-between items-center gap-4 font-mono">
             <div class="flex flex-wrap items-center gap-6">
@@ -848,6 +856,94 @@
             </div>
         </div>
     </div>
+        </div><!-- /dashboard-view -->
+
+        <!-- ============ SPREADS VIEW ============ -->
+        <div id="spreads-view" class="hidden space-y-4 md:space-y-6">
+
+            <!-- Spread Builder -->
+            <div class="bg-slate-800/80 p-4 md:p-6 rounded-xl border border-indigo-500/40 space-y-4">
+                <div class="flex justify-between items-center border-b border-slate-700 pb-3">
+                    <div>
+                        <h2 class="text-lg font-semibold text-indigo-300">🎯 Вертикальные спреды</h2>
+                        <p class="text-xs text-slate-400">Bull Put / Bear Call (кредитные) · Bull Call / Bear Put (дебетовые)</p>
+                    </div>
+                    <span class="text-[10px] text-slate-500 font-mono">1 базовый актив · 1 стратегия · полный цикл: open → hedge → roll → close</span>
+                </div>
+
+                <div class="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
+                    <div>
+                        <span class="text-xs text-slate-400 block font-mono mb-1">АКТИВ</span>
+                        <select id="spr-symbol" class="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm font-mono">
+                            <option value="Si">Si (USD/RUB)</option>
+                            <option value="RI">RI (RTS)</option>
+                            <option value="CR">CR (Yuan)</option>
+                        </select>
+                    </div>
+                    <div class="col-span-2">
+                        <span class="text-xs text-slate-400 block font-mono mb-1">ТИП СПРЕДА</span>
+                        <div class="grid grid-cols-2 gap-1">
+                            <button onclick="setSpreadType('bull_put')" id="spr-type-bull_put" class="px-2 py-1.5 text-[11px] font-bold rounded bg-emerald-600 text-white transition">Bull Put</button>
+                            <button onclick="setSpreadType('bear_call')" id="spr-type-bear_call" class="px-2 py-1.5 text-[11px] font-bold rounded bg-slate-700 text-slate-200 transition">Bear Call</button>
+                            <button onclick="setSpreadType('bull_call')" id="spr-type-bull_call" class="px-2 py-1.5 text-[11px] font-bold rounded bg-slate-700 text-slate-200 transition">Bull Call</button>
+                            <button onclick="setSpreadType('bear_put')" id="spr-type-bear_put" class="px-2 py-1.5 text-[11px] font-bold rounded bg-slate-700 text-slate-200 transition">Bear Put</button>
+                        </div>
+                    </div>
+                    <div>
+                        <span class="text-xs text-slate-400 block font-mono mb-1">ЛОТЫ</span>
+                        <input id="spr-qty" type="number" min="1" value="1" class="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm font-mono">
+                    </div>
+                    <div>
+                        <span class="text-xs text-slate-400 block font-mono mb-1">ЭКСПИРАЦИЯ</span>
+                        <input id="spr-expiry" type="date" class="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm font-mono" title="Пусто = текущая серия">
+                    </div>
+                    <div>
+                        <button onclick="buildSpreadPlan()" class="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl transition">🔍 Построить</button>
+                    </div>
+                </div>
+
+                <!-- Spread Plan Result -->
+                <div id="spr-plan-box" class="hidden bg-slate-900/60 rounded-lg border border-indigo-700/40 p-3 text-xs font-mono space-y-2">
+                    <div id="spr-plan-title" class="font-bold text-indigo-300"></div>
+                    <div id="spr-plan-legs" class="grid grid-cols-1 md:grid-cols-2 gap-1 text-slate-300"></div>
+                    <div id="spr-plan-econ" class="flex flex-wrap gap-4 text-slate-300"></div>
+                    <div class="pt-2 border-t border-slate-700">
+                        <button onclick="openSpread()" class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition">✅ Открыть спред</button>
+                        <span id="spr-plan-err" class="text-rose-400 ml-3"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Open Spreads -->
+            <div class="bg-slate-800/80 p-4 md:p-6 rounded-xl border border-slate-700 space-y-3">
+                <div class="flex justify-between items-center border-b border-slate-700 pb-3">
+                    <h2 class="text-lg font-semibold text-slate-200">Открытые спреды</h2>
+                    <span id="spr-summary" class="text-[10px] text-slate-500 font-mono"></span>
+                </div>
+                <div class="overflow-x-auto font-mono">
+                    <table class="w-full text-left text-xs text-slate-300">
+                        <thead class="bg-slate-900/80 text-slate-400 uppercase border-b border-slate-700">
+                            <tr>
+                                <th class="p-2">Спред</th>
+                                <th class="p-2">Страйки</th>
+                                <th class="p-2">DTE</th>
+                                <th class="p-2">Вход / Сейчас</th>
+                                <th class="p-2">P&L ₽</th>
+                                <th class="p-2">P&L %</th>
+                                <th class="p-2">Δ / Θ</th>
+                                <th class="p-2">Хедж</th>
+                                <th class="p-2">Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody id="spr-body">
+                            <tr><td colspan="9" class="p-3 text-center text-slate-500">Загрузка...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div><!-- /spreads-view -->
+    </div>
 
     <button id="pwa-install" class="hidden fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-5 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-2xl border border-emerald-400/40 transition">📲 Установить приложение</button>
 
@@ -861,6 +957,167 @@
         let currentPerpQuarterly = null;
         let selectedStrategyData = null;
         let currentLotMultiplier = 1;
+        let currentSpreadType = 'bull_put';
+        let currentSpreadPlan = null;
+
+        function switchTab(tab) {
+            const dash = document.getElementById('dashboard-view');
+            const spr = document.getElementById('spreads-view');
+            const bDash = document.getElementById('tab-btn-dashboard');
+            const bSpr = document.getElementById('tab-btn-spreads');
+            if (tab === 'spreads') {
+                dash.classList.add('hidden');
+                spr.classList.remove('hidden');
+                bDash.className = 'px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition';
+                bSpr.className = 'px-4 py-2 text-xs font-bold rounded-lg bg-emerald-600 text-white transition';
+                updateSpreads();
+            } else {
+                spr.classList.add('hidden');
+                dash.classList.remove('hidden');
+                bSpr.className = 'px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition';
+                bDash.className = 'px-4 py-2 text-xs font-bold rounded-lg bg-emerald-600 text-white transition';
+            }
+        }
+
+        function setSpreadType(t) {
+            currentSpreadType = t;
+            const active = 'px-2 py-1.5 text-[11px] font-bold rounded bg-emerald-600 text-white transition';
+            const idle = 'px-2 py-1.5 text-[11px] font-bold rounded bg-slate-700 text-slate-200 transition';
+            ['bull_put', 'bear_call', 'bull_call', 'bear_put'].forEach(k => {
+                document.getElementById(`spr-type-${k}`).className = k === t ? active : idle;
+            });
+        }
+
+        async function buildSpreadPlan() {
+            const symbol = document.getElementById('spr-symbol').value;
+            const qty = parseInt(document.getElementById('spr-qty').value) || 1;
+            const expiry = document.getElementById('spr-expiry').value || '';
+            const box = document.getElementById('spr-plan-box');
+            box.classList.remove('hidden');
+            document.getElementById('spr-plan-title').innerText = '⏳ Построение...';
+            try {
+                const res = await fetch(`/api/v1/spreads/plan?symbol=${symbol}&type=${currentSpreadType}&qty=${qty}&expiry=${expiry}`);
+                const p = await res.json();
+                if (p.error) {
+                    document.getElementById('spr-plan-title').innerText = '⚠ Ошибка';
+                    document.getElementById('spr-plan-err').innerText = p.error;
+                    return;
+                }
+                currentSpreadPlan = p;
+                document.getElementById('spr-plan-title').innerText =
+                    `${p.display_name} · ${p.symbol} · эксп. ${p.expiry} (${p.days_to_exp} дн.) · спот ${p.spot_price.toLocaleString('ru-RU')}`;
+                document.getElementById('spr-plan-err').innerText = '';
+
+                let legs = '';
+                p.legs.forEach(l => {
+                    const cls = l.side === 'SELL' ? 'text-rose-300' : 'text-emerald-300';
+                    legs += `<div class="${cls}">${l.side} ${l.secid} @ ${l.price.toLocaleString('ru-RU')} (Δ ${l.delta}, Θ ${l.theta})</div>`;
+                });
+                document.getElementById('spr-plan-legs').innerHTML = legs;
+
+                const econ = `<span>Кредит: <b class="text-sky-300">${p.net_credit.toLocaleString('ru-RU')}₽</b></span>
+                    <span>Ширина крыла: <b>${p.width_step}</b></span>
+                    <span>Макс. прибыль: <b class="text-emerald-300">${p.max_profit.toLocaleString('ru-RU')}₽</b></span>
+                    <span>Макс. убыток: <b class="text-rose-300">${p.max_loss.toLocaleString('ru-RU')}₽</b></span>
+                    <span>ГО: <b>${p.margin_short.toLocaleString('ru-RU')}₽</b></span>
+                    <span>Θ/контракт: <b>${p.theta_per_contract}</b></span>
+                    <span>Δ/контракт: <b>${p.delta_per_contract}</b></span>`;
+                document.getElementById('spr-plan-econ').innerHTML = econ;
+            } catch (e) {
+                document.getElementById('spr-plan-title').innerText = '⚠ Ошибка сети';
+                document.getElementById('spr-plan-err').innerText = e.message;
+            }
+        }
+
+        async function openSpread() {
+            if (!currentSpreadPlan) { alert('Сначала постройте план'); return; }
+            const payload = {
+                symbol: currentSpreadPlan.symbol,
+                type: currentSpreadPlan.type,
+                expiry: currentSpreadPlan.expiry,
+                qty: currentSpreadPlan.qty
+            };
+            try {
+                const res = await fetch('/api/v1/spreads/open', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const d = await res.json();
+                if (!d.success) { alert(d.error); return; }
+                alert(`✅ Открыт: ${d.spread.display_name} (${d.spread.id})`);
+                currentSpreadPlan = null;
+                document.getElementById('spr-plan-box').classList.add('hidden');
+                updateSpreads();
+            } catch (e) { alert('Ошибка: ' + e.message); }
+        }
+
+        function sprAction(endpoint, id, live) {
+            return fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: id, live: !!live })
+            }).then(r => r.json());
+        }
+
+        async function hedgeSpread(id) {
+            const live = confirm('Живой ордер через Alor? Отмена = бумажный хедж');
+            const d = await sprAction('/api/v1/spreads/hedge', id, live);
+            alert(d.message || d.error || 'ok');
+            updateSpreads();
+        }
+
+        async function rollSpread(id) {
+            if (!confirm('Ролл спреда в следующую серию? Текущий закроется, новый откроется.')) return;
+            const d = await sprAction('/api/v1/spreads/roll', id, false);
+            alert(d.message || d.error || 'ok');
+            updateSpreads();
+        }
+
+        async function closeSpread(id) {
+            if (!confirm('Закрыть спред? (зафиксировать P&L в истории сделок)')) return;
+            const d = await sprAction('/api/v1/spreads/close', id, false);
+            if (d.success) alert(`✅ Закрыт, P&L: ${(d.trade.realized_pnl||0).toLocaleString('ru-RU')}₽`);
+            else alert(d.error);
+            updateSpreads();
+        }
+
+        async function updateSpreads() {
+            try {
+                const res = await fetch('/api/v1/spreads');
+                const d = await res.json();
+                document.getElementById('spr-summary').innerText =
+                    `${d.spreads.length} открыто | ${d.spreads.filter(s => s.net_credit > 0).length} кредитных | ${d.spreads.filter(s => s.net_credit <= 0).length} дебетовых`;
+                if (!d.spreads.length) {
+                    document.getElementById('spr-body').innerHTML =
+                        '<tr><td colspan="9" class="p-3 text-center text-slate-500">Нет открытых спредов</td></tr>';
+                    return;
+                }
+                let html = '';
+                d.spreads.forEach(s => {
+                    const pnlCls = s.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                    const creditCls = s.net_credit > 0 ? 'text-sky-300' : 'text-amber-300';
+                    html += `<tr class="border-b border-slate-800">
+                        <td class="p-2 font-bold text-indigo-300">${s.display_name} <span class="text-[9px] text-slate-500">${s.roll_count ? 'ролл×' + s.roll_count : ''}</span><div class="text-[9px] text-slate-500">${s.symbol} · ${s.id}</div></td>
+                        <td class="p-2">S ${s.short_strike.toLocaleString('ru-RU')} / L ${s.long_strike.toLocaleString('ru-RU')}</td>
+                        <td class="p-2">${s.dte}</td>
+                        <td class="p-2">${(s.entry_value||0).toLocaleString('ru-RU')} / ${(s.current_value||0).toLocaleString('ru-RU')}</td>
+                        <td class="p-2 ${pnlCls}">${s.pnl >= 0 ? '+' : ''}${(s.pnl||0).toLocaleString('ru-RU')}</td>
+                        <td class="p-2 ${pnlCls}">${(s.pnl_percent||0).toFixed(1)}%</td>
+                        <td class="p-2">${(s.net_delta||0).toFixed(1)} / ${(s.net_theta||0).toFixed(1)}</td>
+                        <td class="p-2"><span class="text-[9px] text-slate-400">${s.hedge_legs||0} фьюч.</span></td>
+                        <td class="p-2 whitespace-nowrap">
+                            <button onclick="hedgeSpread('${s.id}')" class="px-2 py-1 text-[10px] bg-sky-700 hover:bg-sky-600 text-white rounded transition">⚖ Хедж</button>
+                            <button onclick="rollSpread('${s.id}')" class="px-2 py-1 text-[10px] bg-amber-700 hover:bg-amber-600 text-white rounded transition">↻ Ролл</button>
+                            <button onclick="closeSpread('${s.id}')" class="px-2 py-1 text-[10px] bg-rose-700 hover:bg-rose-600 text-white rounded transition">✕ Закрыть</button>
+                        </td>
+                    </tr>`;
+                });
+                document.getElementById('spr-body').innerHTML = html;
+            } catch (e) {
+                console.error("Spreads update failed", e);
+            }
+        }
 
         function switchAsset(asset) {
             currentAsset = asset;

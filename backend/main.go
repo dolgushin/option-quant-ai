@@ -1485,104 +1485,7 @@ func deltaHedgeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	positions := quant.GetActivePositions()
-	var pos *quant.Position
-	for i := range positions {
-		if positions[i].ID == req.ID {
-			pos = &positions[i]
-			break
-		}
-	}
-	if pos == nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{"error": "position not found"})
-		return
-	}
-
-	repricePosition(pos)
-
-	// Net delta after repricing; futures hedge offsets it to ~0.
-	netDelta := pos.Delta
-	hedgeQty := int(math.Round(-netDelta))
-	if hedgeQty == 0 {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-			"message": "Позиция уже дельта-нейтральна (net delta ≈ 0)",
-			"delta":   netDelta,
-			"hedge":   0,
-		})
-		return
-	}
-	side := "buy"
-	if hedgeQty < 0 {
-		side = "sell"
-		hedgeQty = -hedgeQty
-	}
-	sideUp := "BUY"
-	if side == "sell" {
-		sideUp = "SELL"
-	}
-
-	futureSecid := selectedSeries[pos.Symbol]
-	if futureSecid == "" {
-		json.NewEncoder(w).Encode(map[string]interface{}{"error": "no futures series for " + pos.Symbol})
-		return
-	}
-
-	// Place a real order when requested and Alor is configured.
-	orderNote := "бумажный хедж (Alor не подключён)"
-	if req.Live && alorExec != nil {
-		resp, err := alorExec.DeltaHedge(futureSecid, netDelta)
-		if err != nil {
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": false,
-				"error":   "Alor hedge failed: " + err.Error(),
-			})
-			return
-		}
-		if resp != nil && resp.Message != "" {
-			orderNote = resp.Message
-		} else {
-			orderNote = "ордер отправлен в Alor"
-		}
-	}
-
-	// Record the hedge leg on the position (paper tracking in both cases).
-	spot, _ := getSpotPrice(pos.Symbol)
-	if spot <= 0 {
-		spot = pos.CurrentValue
-	}
-	mult := contractMultiplier(pos.Symbol)
-	margin := moexFutureInitialMargin(futureSecid)
-	if margin <= 0 {
-		margin = spot * mult * 0.15
-	}
-
-	hedgeLeg := quant.PositionLeg{
-		SecID:        futureSecid,
-		Symbol:       pos.Symbol,
-		Kind:         "FUTURES",
-		Side:         sideUp,
-		Quantity:     hedgeQty,
-		EntryPrice:   spot,
-		CurrentPrice: spot,
-	}
-	pos.Legs = append(pos.Legs, hedgeLeg)
-	pos.Margin += margin * float64(hedgeQty)
-	repricePosition(pos)
-	quant.SavePosition(*pos)
-
-	portfolio := quant.GetPortfolio()
-	stats := quant.ComputeStats()
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":   true,
-		"message":   fmt.Sprintf("Хедж: %s %d контрактов %s (%s)", sideUp, hedgeQty, futureSecid, orderNote),
-		"side":      sideUp,
-		"hedge_qty": hedgeQty,
-		"delta":     pos.Delta,
-		"position":  pos,
-		"portfolio": portfolio,
-		"stats":     stats,
-	})
+	hedgePositionByID(req.ID, req.Live, w)
 }
 
 func tradesHandler(w http.ResponseWriter, r *http.Request) {
@@ -2765,6 +2668,7 @@ func main() {
 	}
 	initAlorClients()
 	initTelegram()
+	initSpreads(dataDir)
 
 	// Background Telegram notifier (stop channel unused for lifetime app).
 	go telegramNotifier(make(chan struct{}))
@@ -2812,6 +2716,14 @@ func main() {
 	http.HandleFunc("/api/v1/positions/pnl-attribution", pnlAttributionHandler)
 	http.HandleFunc("/api/v1/positions/sizing", positionSizingHandler)
 	http.HandleFunc("/api/v1/positions/expiry-risk", expiryRiskHandler)
+
+	// Vertical Spreads console
+	http.HandleFunc("/api/v1/spreads/plan", spreadPlanHandler)
+	http.HandleFunc("/api/v1/spreads/open", spreadOpenHandler)
+	http.HandleFunc("/api/v1/spreads/close", spreadCloseHandler)
+	http.HandleFunc("/api/v1/spreads/hedge", spreadHedgeHandler)
+	http.HandleFunc("/api/v1/spreads/roll", spreadRollHandler)
+	http.HandleFunc("/api/v1/spreads", spreadListHandler)
 	http.HandleFunc("/api/v1/strategy/rotation", rotationHandler)
 	http.HandleFunc("/api/v1/position/profile", positionProfileHandler)
 	http.HandleFunc("/api/v1/trades", tradesHandler)
