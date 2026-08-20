@@ -12,7 +12,8 @@
     <link rel="apple-touch-icon" href="/icon-512.png">
     <title>OptionQuant AI — MOEX FORTS & Alor Terminal</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="/vendor/chart.umd.min.js"></script>
+    <script>window.Chart || document.write('<script src="https://cdn.jsdelivr.net/npm/chart.js"><\/script>');</script>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen p-3 md:p-6 font-sans">
     <div class="max-w-7xl mx-auto space-y-4 md:space-y-6">
@@ -923,8 +924,14 @@
         }
 
         function initSkewChart() {
-            const ctx = document.getElementById('skewChart').getContext('2d');
-            skewChartInstance = new Chart(ctx, {
+            const ctx = document.getElementById('skewChart');
+            if (!ctx || typeof Chart === 'undefined') {
+                const box = ctx ? ctx.closest('.relative') : null;
+                if (box) box.innerHTML = '<div class="p-4 text-xs text-amber-400 font-mono">⚠ Chart.js не загрузился (CDN недоступен). Проверьте интернет и обновите страницу.</div>';
+                return;
+            }
+            const context = ctx.getContext('2d');
+            skewChartInstance = new Chart(context, {
                 type: 'line',
                 data: {
                     labels: [],

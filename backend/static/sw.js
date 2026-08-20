@@ -4,8 +4,8 @@ const CORE = [
   '/manifest.json',
   '/icon.svg',
   '/icon-512.png',
-  'https://cdn.tailwindcss.com',
-  'https://cdn.jsdelivr.net/npm/chart.js'
+  '/vendor/chart.umd.min.js',
+  'https://cdn.tailwindcss.com'
 ];
 
 self.addEventListener('install', (e) => {
