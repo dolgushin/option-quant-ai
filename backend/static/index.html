@@ -3,12 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#10b981">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/svg+xml" href="/icon.svg">
+    <link rel="apple-touch-icon" href="/icon-512.png">
     <title>OptionQuant AI — MOEX FORTS & Alor Terminal</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
-<body class="bg-slate-900 text-slate-100 min-h-screen p-6 font-sans">
-    <div class="max-w-7xl mx-auto space-y-6">
+<body class="bg-slate-900 text-slate-100 min-h-screen p-3 md:p-6 font-sans">
+    <div class="max-w-7xl mx-auto space-y-4 md:space-y-6">
         
         <!-- Header & Asset Selector -->
         <header class="flex flex-col md:flex-row justify-between items-center border-b border-slate-800 pb-4 gap-4">
@@ -813,6 +820,8 @@
             </div>
         </div>
     </div>
+
+    <button id="pwa-install" class="hidden fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-5 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-2xl border border-emerald-400/40 transition">📲 Установить приложение</button>
 
     <script>
         let skewChartInstance = null;
@@ -2394,6 +2403,36 @@
 
             setInterval(updateDashboard, 3000);
         });
+
+        // PWA: install prompt banner.
+        let deferredPrompt = null;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            const btn = document.getElementById('pwa-install');
+            if (btn) btn.classList.remove('hidden');
+        });
+        window.addEventListener('appinstalled', () => {
+            const btn = document.getElementById('pwa-install');
+            if (btn) btn.classList.add('hidden');
+        });
+        document.getElementById('pwa-install').addEventListener('click', async () => {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                await deferredPrompt.userChoice;
+                deferredPrompt = null;
+                document.getElementById('pwa-install').classList.add('hidden');
+            }
+        });
+
+        // Register service worker for offline caching.
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').catch((err) => {
+                    console.error('SW registration failed', err);
+                });
+            });
+        }
     </script>
 </body>
 </html>
