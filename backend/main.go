@@ -2735,6 +2735,7 @@ func main() {
 	http.HandleFunc("/api/v1/positions/close", closePositionHandler)
 	http.HandleFunc("/api/v1/positions/hedge", deltaHedgeHandler)
 	http.HandleFunc("/api/v1/positions/pnl-attribution", pnlAttributionHandler)
+	http.HandleFunc("/api/v1/positions/sizing", positionSizingHandler)
 	http.HandleFunc("/api/v1/position/profile", positionProfileHandler)
 	http.HandleFunc("/api/v1/trades", tradesHandler)
 	http.HandleFunc("/api/v1/portfolio", portfolioHandler)
