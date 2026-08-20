@@ -515,6 +515,33 @@
                 <div id="stress-worst" class="mt-1 text-[10px] text-slate-400"></div>
             </div>
 
+            <!-- Greeks Heatmap -->
+            <div class="overflow-x-auto font-mono">
+                <div class="flex justify-between items-center mb-1">
+                    <span class="text-xs font-bold text-slate-400 uppercase">Греки-Heatmap — страйк × экспирация</span>
+                    <div class="flex items-center gap-2">
+                        <span id="heat-summary" class="text-[10px] text-slate-500"></span>
+                        <div class="flex bg-slate-800 p-0.5 rounded-lg border border-slate-700">
+                            <button onclick="setHeatMetric('delta')" id="heat-btn-delta" class="px-2 py-0.5 text-[10px] font-bold rounded-md transition">Δ Delta</button>
+                            <button onclick="setHeatMetric('gamma')" id="heat-btn-gamma" class="px-2 py-0.5 text-[10px] font-bold rounded-md transition">Γ Gamma</button>
+                        </div>
+                    </div>
+                </div>
+                <div id="heat-legend" class="mb-1 flex gap-3 text-[9px] text-slate-500">
+                    <span><span class="inline-block w-2 h-2 rounded-sm bg-slate-700"></span> LOW</span>
+                    <span><span class="inline-block w-2 h-2 rounded-sm bg-amber-500"></span> MEDIUM</span>
+                    <span><span class="inline-block w-2 h-2 rounded-sm bg-orange-500"></span> HIGH</span>
+                    <span><span class="inline-block w-2 h-2 rounded-sm bg-rose-500"></span> CRITICAL (короткая гамма)</span>
+                </div>
+                <table class="w-full text-left text-xs text-slate-300">
+                    <thead class="bg-slate-900/80 text-slate-400 uppercase border-b border-slate-700">
+                        <tr id="heat-header"></tr>
+                    </thead>
+                    <tbody id="heat-body"></tbody>
+                </table>
+                <div id="heat-worst" class="mt-1 text-[10px] text-slate-400"></div>
+            </div>
+
             <!-- Expiry / Roll / Pin Risk -->
             <div class="overflow-x-auto font-mono">
                 <div class="flex justify-between items-center mb-1">
@@ -1804,6 +1831,77 @@
             }
         }
 
+        let heatMetric = 'gamma';
+        let heatData = null;
+
+        function setHeatMetric(m) {
+            heatMetric = m;
+            const dBtn = document.getElementById('heat-btn-delta');
+            const gBtn = document.getElementById('heat-btn-gamma');
+            const active = 'bg-emerald-600 text-white';
+            const idle = 'text-slate-400';
+            dBtn.className = `px-2 py-0.5 text-[10px] font-bold rounded-md transition ${m === 'delta' ? active : idle}`;
+            gBtn.className = `px-2 py-0.5 text-[10px] font-bold rounded-md transition ${m === 'gamma' ? active : idle}`;
+            if (heatData) renderHeatmap(heatData);
+        }
+
+        function heatCellClass(level) {
+            switch (level) {
+                case 'CRITICAL': return 'bg-rose-500/25 text-rose-300 ring-1 ring-rose-500 font-bold';
+                case 'HIGH': return 'bg-orange-500/20 text-orange-300';
+                case 'MEDIUM': return 'bg-amber-500/15 text-amber-200';
+                default: return 'bg-slate-800/60 text-slate-400';
+            }
+        }
+
+        function renderHeatmap(h) {
+            document.getElementById('heat-summary').innerText =
+                `ΣΔ ${h.total_delta >= 0 ? '+' : ''}${Math.round(h.total_delta).toLocaleString('ru-RU')}₽ · ΣΓ ${Math.round(h.total_gamma).toLocaleString('ru-RU')}₽/п²`;
+
+            let header = '<th class="p-2 text-slate-500">Страйк \\ Экспирация</th>';
+            h.expiries.forEach(e => { header += `<th class="p-2">${e}</th>`; });
+            header += '<th class="p-2 text-slate-500">Σ строка</th>';
+            document.getElementById('heat-header').innerHTML = header;
+
+            let body = '';
+            h.rows.forEach(row => {
+                const rowVal = heatMetric === 'gamma' ? row.gamma_rub : row.delta_rub;
+                const rowCls = heatCellClass(row.level);
+                body += `<tr><td class="p-2 font-bold text-slate-300">${Math.round(row.strike).toLocaleString('ru-RU')}</td>`;
+                row.cells.forEach(c => {
+                    const v = heatMetric === 'gamma' ? c.gamma_rub : c.delta_rub;
+                    const isWorst = c.strike === h.worst_strike && Math.round(Math.abs(c.gamma_rub) * 100) === Math.round(h.max_gamma_cell * 100);
+                    const cls = heatCellClass(c.level);
+                    const title = `${c.strike} / ${c.expiry}\nΔ ${c.delta_rub}₽ · Γ ${c.gamma_rub}₽/п²\nПозиций: ${c.positions}`;
+                    let cellCls = cls;
+                    if (isWorst) cellCls += ' ring-2 ring-rose-400';
+                    body += `<td class="${cellCls} p-2" title="${title}">${v >= 0 ? '+' : ''}${Math.round(v).toLocaleString('ru-RU')}${heatMetric === 'gamma' ? '' : '₽'}</td>`;
+                });
+                body += `<td class="${rowCls} p-2 font-bold">${rowVal >= 0 ? '+' : ''}${Math.round(rowVal).toLocaleString('ru-RU')}${heatMetric === 'gamma' ? '' : '₽'}</td></tr>`;
+            });
+            document.getElementById('heat-body').innerHTML = body;
+
+            document.getElementById('heat-worst').innerHTML =
+                `<span class="text-rose-400 font-bold">Макс. концентрация:</span> страйк ${Math.round(h.worst_strike).toLocaleString('ru-RU')} ` +
+                `(Γ ${Math.round(h.max_gamma_cell).toLocaleString('ru-RU')}₽/п², Δ ${Math.round(h.max_delta_cell).toLocaleString('ru-RU')}₽). ` +
+                `<span class="text-slate-500">${h.note}</span>`;
+        }
+
+        async function updateHeatmap() {
+            try {
+                const res = await fetch(`/api/v1/risk/heatmap?symbol=${currentAsset}`);
+                heatData = await res.json();
+                if (!heatData.rows || !heatData.rows.length) {
+                    document.getElementById('heat-body').innerHTML =
+                        '<tr><td colspan="3" class="p-3 text-center text-slate-500">Нет активных позиций</td></tr>';
+                    return;
+                }
+                renderHeatmap(heatData);
+            } catch (e) {
+                console.error("Heatmap failed", e);
+            }
+        }
+
         async function updateExpiryRisk() {
             try {
                 const res = await fetch('/api/v1/positions/expiry-risk');
@@ -2175,6 +2273,7 @@
                 await updatePnlAttribution();
                 await updateStressTest();
                 await updateExpiryRisk();
+                await updateHeatmap();
 
                 updateSkewChart();
             } catch (e) {

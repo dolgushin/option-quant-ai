@@ -2818,6 +2818,7 @@ func main() {
 	http.HandleFunc("/api/v1/portfolio", portfolioHandler)
 	http.HandleFunc("/api/v1/risk", riskHandler)
 	http.HandleFunc("/api/v1/risk/stress", stressTestHandler)
+	http.HandleFunc("/api/v1/risk/heatmap", heatmapHandler)
 	http.HandleFunc("/api/v1/capital", capitalHandler)
 	http.HandleFunc("/api/v1/copilot/ask", copilotHandler)
 	http.HandleFunc("/api/v1/options/exit-advice", optionsExitAdviceHandler)
