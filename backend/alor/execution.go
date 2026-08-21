@@ -2,12 +2,24 @@ package alor
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
 	"time"
 )
+
+// reqID returns a unique request id for the X-REQID header required by the
+// Alor Command API v2 (duplicates are rejected by the server).
+func reqID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
+}
 
 type ExecutionClient struct {
 	authClient *AuthClient
@@ -57,11 +69,13 @@ func (e *ExecutionClient) PlaceOrder(symbol, side, orderType string, price float
 		return nil, fmt.Errorf("auth error: %w", err)
 	}
 
+	// Command API v2 endpoints (https://alor.dev/docs/api/quick-start/prod-env):
+	// POST /commandapi/warptrans/TRADE/v2/client/orders/actions/{market|limit}
 	var endpoint string
 	if orderType == "market" {
-		endpoint = fmt.Sprintf("%s/command/v2/orders/market", e.baseURL)
+		endpoint = fmt.Sprintf("%s/commandapi/warptrans/TRADE/v2/client/orders/actions/market", e.baseURL)
 	} else {
-		endpoint = fmt.Sprintf("%s/command/v2/orders/limit", e.baseURL)
+		endpoint = fmt.Sprintf("%s/commandapi/warptrans/TRADE/v2/client/orders/actions/limit", e.baseURL)
 	}
 
 	portfolio := e.portfolio
@@ -89,8 +103,9 @@ func (e *ExecutionClient) PlaceOrder(symbol, side, orderType string, price float
 	}
 	httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-REQID", reqID())
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send order to Alor: %w", err)
