@@ -48,7 +48,7 @@ func TestDecideSpreadActionPriority(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := decideSpreadAction(tt.rec, tt.dte, tt.delta, tt.pnl, tt.spot, tt.spotOK)
+			got := decideSpreadAction(tt.rec, tt.dte, tt.delta, tt.pnl, tt.spot, 0.30, tt.spotOK)
 			if got.Action != tt.want {
 				t.Fatalf("action = %q (%s), want %q", got.Action, got.Detail, tt.want)
 			}
@@ -58,7 +58,7 @@ func TestDecideSpreadActionPriority(t *testing.T) {
 
 func TestDecideSpreadActionCapturedPctUnits(t *testing.T) {
 	rec := spreadRecord{Symbol: "SBER", Type: "bull_put", Qty: 2, MaxProfit: 1.0} // 2 × 100 = 200 ₽ credit
-	run := decideSpreadAction(rec, 30, 0, 100, 0, false)
+	run := decideSpreadAction(rec, 30, 0, 100, 0, 0.30, false)
 	if math.Abs(run.CapturedPct-0.5) > 1e-9 {
 		t.Fatalf("captured pct = %v, want 0.5 (multiplier/qty scaling broken)", run.CapturedPct)
 	}
@@ -124,5 +124,51 @@ func TestExecSpreadActionClosesPosition(t *testing.T) {
 	trades := quant.GetTrades()
 	if len(trades) == 0 {
 		t.Fatalf("expected a recorded trade after stop-out")
+	}
+}
+
+func TestDecideSpreadStateMachine(t *testing.T) {
+	base := spreadRecord{
+		ID: "spr-sm", Symbol: "SBER", Type: "bull_call", Qty: 1,
+		MaxProfit: 1.0, MaxLoss: 5.0,
+		LongStrike: 250, ShortStrike: 260,
+		State: "VERTICAL", EntrySpot: 270,
+		ProfitTargetPct: 0.75, ProfitAction: "CLOSE",
+		TPRMode: "ONE_DAY_SIGMA", TPRSigmaMult: 1, SigmaAnnual: 0.30,
+	}
+
+	tests := []struct {
+		name string
+		mut  func(*spreadRecord)
+		dte  int
+		pnl  float64
+		spot float64
+		want string
+	}{
+		{"profit target closes by default", func(r *spreadRecord) {}, 20, 80, 272, "CLOSE"},
+		{"profit target with condor action", func(r *spreadRecord) { r.ProfitAction = "CONDOR" }, 20, 80, 272, "CONVERT_CONDOR"},
+		{"profit target with roll action", func(r *spreadRecord) { r.ProfitAction = "ROLL" }, 20, 80, 272, "ROLL_PROFIT"},
+		{"tpr sigma without view is review only", func(r *spreadRecord) {}, 20, 0, 264.5, "REVIEW"},
+		{"tpr with bullish view builds ladder", func(r *spreadRecord) { r.ViewOverride = "BULLISH" }, 20, 0, 264.5, "CONVERT_LADDER"},
+		{"tpr with sideways view builds ratio", func(r *spreadRecord) { r.ViewOverride = "SIDEWAYS" }, 20, 0, 264.5, "CONVERT_RATIO"},
+		{"tpr with bearish view adds put", func(r *spreadRecord) { r.ViewOverride = "BEARISH" }, 20, 0, 264.5, "ADD_ATM_PUT"},
+		{"ladder tpr2 buys back far short", func(r *spreadRecord) { r.State = "LADDER"; r.TPR2 = 265 }, 20, 0, 266, "BUYBACK_FAR_SHORT"},
+		{"ladder tpr1 shifts left", func(r *spreadRecord) { r.State = "LADDER"; r.TPR1 = 255; r.TPR2 = 280 }, 20, 0, 254, "SHIFT_LEFT"},
+		{"ratio tpr2 buys back extras", func(r *spreadRecord) { r.State = "RATIO"; r.TPR2 = 268; r.ViewOverride = "" }, 20, 0, 268.5, "BUYBACK_EXTRA"},
+		{"reconstructed state time-stops", func(r *spreadRecord) { r.State = "LADDER"; r.AutoRollDTE = 7; r.TPR2 = 300 }, 7, 0, 270, "CLOSE"},
+		{"inside sigma band is quiet", func(r *spreadRecord) {}, 20, 0, 269, "NONE"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := base
+			if tt.mut != nil {
+				tt.mut(&rec)
+			}
+			got := decideSpreadAction(rec, tt.dte, 0, tt.pnl, tt.spot, 0.30, true)
+			if got.Action != tt.want {
+				t.Fatalf("action = %q (%s), want %q", got.Action, got.Detail, tt.want)
+			}
+		})
 	}
 }

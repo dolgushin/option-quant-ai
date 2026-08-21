@@ -79,6 +79,7 @@ type spreadPlan struct {
 	MarginShort   float64     `json:"margin_short"`
 	ThetaPerCtr   float64     `json:"theta_per_contract"`
 	DeltaPerCtr   float64     `json:"delta_per_contract"`
+	CentralStrike float64     `json:"central_strike"`
 	IsDebit       bool        `json:"is_debit"`
 }
 
@@ -113,6 +114,19 @@ type spreadRecord struct {
 	RollStrikeRiskPct float64 `json:"roll_strike_risk_pct"`
 	AutoHedge         bool    `json:"auto_hedge"`
 	Live              bool    `json:"live"`
+	// Strategy state machine (vertical spread management spec, KNOWLEDGE.md §5).
+	State           string  `json:"state"`                // VERTICAL / LADDER / RATIO / CONDOR / BACKSPREAD_LIKE
+	EntrySpot       float64 `json:"entry_spot"`           // spot at open — reference for TPR sigma moves
+	ProfitTargetPct float64 `json:"profit_target_pct"`    // T/P: share of max profit (spec 0.70–0.80)
+	ProfitAction    string  `json:"profit_action"`        // CLOSE | ROLL | CONDOR at T/P
+	TPRMode         string  `json:"tpr_mode"`             // OFF | ONE_DAY_SIGMA | MAX_LOSS
+	TPRSigmaMult    float64 `json:"tpr_sigma_mult"`       // σ multiplier for ONE_DAY_SIGMA
+	SigmaAnnual     float64 `json:"sigma_annual"`         // annualized vol used for the 1-day sigma
+	AllowUndefined  bool    `json:"allow_undefined_risk"` // naked tails allowed (false by default, spec §22)
+	ViewOverride    string  `json:"view_override"`        // BULLISH/SIDEWAYS/BEARISH reconstruction view at TPR
+	TPR1            float64 `json:"tpr1"`                 // lower decision point (absolute spot)
+	TPR2            float64 `json:"tpr2"`                 // upper decision point (absolute spot)
+	RollAlpha       float64 `json:"roll_alpha"`           // share of realized profit risked on a profit roll
 }
 
 var (
@@ -192,6 +206,53 @@ func openSpreads() []spreadRecord {
 	return out
 }
 
+// optionChainFor returns the sorted unique strikes of the live option chain
+// for symbol/expiry plus a strike/type lookup helper. Shared by the spread
+// builder and the state-machine reconstructions.
+func optionChainFor(symbol, expiry string) ([]float64, func(float64, bool) *optionContract, error) {
+	if expiry == "" {
+		if expiryT := currentSeriesExpiry(symbol); expiryT != nil {
+			expiry = expiryT.Format("2006-01-02")
+		}
+	}
+	chain := moexOptionsForAsset(symbol, expiry)
+	if len(chain) == 0 {
+		return nil, nil, fmt.Errorf("option chain not available for %s %s", symbol, expiry)
+	}
+	seen := map[float64]bool{}
+	var strikes []float64
+	for _, o := range chain {
+		if !seen[o.Strike] {
+			seen[o.Strike] = true
+			strikes = append(strikes, o.Strike)
+		}
+	}
+	sort.Float64s(strikes)
+	find := func(strike float64, isCall bool) *optionContract {
+		for i := range chain {
+			if chain[i].Strike == strike && chain[i].IsCall == isCall {
+				return &chain[i]
+			}
+		}
+		return nil
+	}
+	return strikes, find, nil
+}
+
+// nearestStrikeFromStrikes picks the strike closest to spot from a sorted list.
+func nearestStrikeFromStrikes(strikes []float64, spot float64) float64 {
+	if len(strikes) == 0 {
+		return spot
+	}
+	best := strikes[0]
+	for _, s := range strikes {
+		if math.Abs(s-spot) < math.Abs(best-spot) {
+			best = s
+		}
+	}
+	return best
+}
+
 // buildVerticalSpread computes the full plan of a vertical spread for the
 // given symbol/type/expiry/qty without opening anything. If expiry is empty it
 // uses the currently selected series.
@@ -219,21 +280,12 @@ func buildVerticalSpread(symbol, spreadType, expiry string, qty int) (*spreadPla
 		}
 	}
 
-	chain := moexOptionsForAsset(symbol, expiry)
-	if len(chain) == 0 {
-		return nil, fmt.Errorf("option chain not available for %s %s", symbol, expiry)
+	strikes, findOpt, err := optionChainFor(symbol, expiry)
+	if err != nil {
+		return nil, err
 	}
 
-	atmStrike := nearestStrike(chain, spot)
-	seen := map[float64]bool{}
-	var strikes []float64
-	for _, o := range chain {
-		if !seen[o.Strike] {
-			seen[o.Strike] = true
-			strikes = append(strikes, o.Strike)
-		}
-	}
-	sort.Float64s(strikes)
+	atmStrike := nearestStrikeFromStrikes(strikes, spot)
 
 	atmIdx := -1
 	for i, s := range strikes {
@@ -244,15 +296,6 @@ func buildVerticalSpread(symbol, spreadType, expiry string, qty int) (*spreadPla
 	}
 	if atmIdx < 0 {
 		atmIdx = 0
-	}
-
-	findOpt := func(strike float64, isCall bool) *optionContract {
-		for i := range chain {
-			if chain[i].Strike == strike && chain[i].IsCall == isCall {
-				return &chain[i]
-			}
-		}
-		return nil
 	}
 
 	days := dteInDays(expiry, time.Now())
@@ -361,6 +404,7 @@ func buildVerticalSpread(symbol, spreadType, expiry string, qty int) (*spreadPla
 	plan.MarginShort = math.Round(marginShort*100) / 100
 	plan.ThetaPerCtr = math.Round(thetaTotal*100) / 100
 	plan.DeltaPerCtr = math.Round(deltaTotal*100) / 100
+	plan.CentralStrike = atmStrike
 	return plan, nil
 }
 
@@ -476,6 +520,16 @@ func spreadOpenHandler(w http.ResponseWriter, r *http.Request) {
 		AutoRollDTE:       defaultAutoRollDTE(dteInDays(plan.Expiry, time.Now())),
 		RollCreditPct:     0.5,
 		RollStrikeRiskPct: 0.03,
+		// State machine defaults (KNOWLEDGE.md §5): T/P at 75% of max profit,
+		// one-day-sigma TPR watch, undefined-risk reconstructions disabled.
+		State:           "VERTICAL",
+		EntrySpot:       plan.Spot,
+		ProfitTargetPct: 0.75,
+		ProfitAction:    "CLOSE",
+		TPRMode:         "ONE_DAY_SIGMA",
+		TPRSigmaMult:    1,
+		SigmaAnnual:     0.30,
+		RollAlpha:       1,
 	}
 	saveSpreadRecord(rec)
 
@@ -527,6 +581,13 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 			"live":            s.Live,
 			"dte":             dteInDays(s.Expiry, time.Now()),
 			"multiplier":      contractMultiplier(s.Symbol),
+			"state":           s.State,
+			"tpr1":            s.TPR1,
+			"tpr2":            s.TPR2,
+			"profit_target_pct": s.ProfitTargetPct,
+			"profit_action":   s.ProfitAction,
+			"tpr_mode":        s.TPRMode,
+			"view_override":   s.ViewOverride,
 		}
 
 		// Live telemetry from the linked position.

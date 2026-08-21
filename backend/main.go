@@ -219,23 +219,53 @@ func equitySeriesForSymbol(symbol string) []futuresContract {
 	return out
 }
 
-// seriesType classifies a contract as quarterly, monthly or weekly by its expiry.
-func seriesType(lastDelDate string, ref time.Time) string {
-	if lastDelDate == "" {
-		return "серия"
-	}
-	t, err := time.Parse("2006-01-02", lastDelDate)
+// classifyExpiry labels an expiry using the whole live chain: dates inside a
+// dense cluster of expiries (neighbours ≤13 days apart) are weekly series, an
+// isolated date in a quarter-end month is quarterly, any other isolated date
+// is monthly.
+func classifyExpiry(expiry string, all []time.Time) string {
+	t, err := time.Parse("2006-01-02", expiry)
 	if err != nil {
 		return "серия"
 	}
-	dte := int(t.Sub(ref).Hours() / 24)
-	if dte <= 7 {
+	inCluster, aloneInMonth := false, true
+	for _, o := range all {
+		if o.Equal(t) {
+			continue
+		}
+		diff := o.Sub(t)
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff < 14*24*time.Hour {
+			inCluster = true
+		}
+		if o.Year() == t.Year() && o.Month() == t.Month() {
+			aloneInMonth = false
+		}
+	}
+	switch {
+	case inCluster:
 		return "недельная"
-	}
-	if t.Month()%3 == 0 {
+	case aloneInMonth && t.Month()%3 == 0:
 		return "квартальная"
+	default:
+		return "месячная"
 	}
-	return "месячная"
+}
+
+// seriesTypeCode maps a series label to its short W/M/Q code.
+func seriesTypeCode(label string) string {
+	switch label {
+	case "недельная":
+		return "W"
+	case "квартальная":
+		return "Q"
+	case "месячная":
+		return "M"
+	default:
+		return ""
+	}
 }
 
 // dteInDays returns days-to-expiry from a MOEX expiry date string.
@@ -797,7 +827,19 @@ func seriesInfoHandler(w http.ResponseWriter, r *http.Request) {
 		Expiry      string `json:"expiry"`
 		DaysToExp   int    `json:"days_to_exp"`
 		Type        string `json:"type"`
+		TypeCode    string `json:"type_code"`
 		IsCurrent   bool   `json:"is_current"`
+	}
+
+	today := now.Format("2006-01-02")
+	var liveDates []time.Time
+	for _, c := range contracts {
+		if c.LastDelDate == "" || c.LastDelDate < today {
+			continue
+		}
+		if t, err := time.Parse("2006-01-02", c.LastDelDate); err == nil {
+			liveDates = append(liveDates, t)
+		}
 	}
 
 	var items []seriesItem
@@ -805,15 +847,17 @@ func seriesInfoHandler(w http.ResponseWriter, r *http.Request) {
 	currentShort := ""
 	for _, c := range contracts {
 		// Only include series that are still alive (expiry in the future).
-		if c.LastDelDate != "" && c.LastDelDate < now.Format("2006-01-02") {
+		if c.LastDelDate != "" && c.LastDelDate < today {
 			continue
 		}
+		label := classifyExpiry(c.LastDelDate, liveDates)
 		items = append(items, seriesItem{
 			Code:      c.Code,
 			ShortName: c.ShortName,
 			Expiry:    c.LastDelDate,
 			DaysToExp: dteInDays(c.LastDelDate, now),
-			Type:      seriesType(c.LastDelDate, now),
+			Type:      label,
+			TypeCode:  seriesTypeCode(label),
 			IsCurrent: c.Code == current,
 		})
 		if c.Code == current {
@@ -828,7 +872,7 @@ func seriesInfoHandler(w http.ResponseWriter, r *http.Request) {
 		"options_series": current,
 		"expiry":         currentExpiry,
 		"days_to_exp":    dteInDays(currentExpiry, now),
-		"type":           seriesType(currentExpiry, now),
+		"type":           classifyExpiry(currentExpiry, liveDates),
 		"series":         items,
 	})
 }

@@ -97,6 +97,10 @@ ISS MOEX, 2026-08-21.
 | Ролл только за кредит | встроенный guard в `autoRollSpread` | всегда включён для кредитных спредов |
 | Дельта-хедж | `auto_hedge` + `max_hedge_delta` | порог 0.05–0.10 | 
 | Стоп 1.5–2× кредита | `stop_loss_pct` — авто-закрытие (CLOSE) менеджером | 0.6–0.8 доли макс. убытка |
+| T/P 70–80% (спецификация §5) | `profit_target_pct` + `profit_action` | 0.75; CLOSE по умолчанию, ROLL/CONDOR опционально |
+| TPR — точка решения | `tpr_mode` + `tpr_sigma_mult` | ONE_DAY_SIGMA, k=1σ; MAX_LOSS = стоп-режим |
+| Реконструкция при TPR | `view_override` (BULLISH/SIDEWAYS/BEARISH) | не задано → только REVIEW-алерт |
+| Защита от naked-хвостов | `allow_undefined_risk` | false: ratio автоматически получает дальнее крыло |
 
 Авто-менеджер проверяет открытые спреды раз в 60 секунд; журнал —
 `GET /api/v1/spreads/manager`, правила — `POST /api/v1/spreads/rules`.
@@ -110,6 +114,35 @@ ISS MOEX, 2026-08-21.
 3. Ликвидность страйков новой серии (bid/ask, объём)?
 4. Размер позиции не увеличен, стрики те же?
 5. ГО новой позиции укладывается в свободные средства?
+
+## 5. Машина состояний вертикального спреда (спецификация управления)
+
+Источник: детальная спецификация «Управление вертикальным опционным спредом» v1.0
+(схема OptionsOffice + курс по волатильности + проверка OCC/Cboe/Fidelity/Schwab/tastylive).
+Реализована в `spreads_manager.go` (`decideSpreadAction` + исполнители).
+
+### Состояния
+```text
+VERTICAL ── T/P (70–80% макс. прибыли) ──→ CLOSE | ROLL_PROFIT (α×прибыли) | CONDOR (IV ср.+)
+VERTICAL ── TPR (движение против ≥ k·σ1d) → новый прогноз:
+    рост     → LADDER:   +q C(K0 ATM), −2q C(K1); TPR1=K0−wing, TPR2=K2
+    боковик  → RATIO:    −N C(K2) [+ крыло при allow_undefined=false]; TPR2 ≈ UpperBE − буфер
+    падение  → BACKSPREAD_LIKE: +⌈q/2⌉ ATM put; time stop = auto_roll_dte
+LADDER:  спот≥TPR2 → откуп дальнего шорта → VERTICAL; спот≤TPR1 → сдвиг влево на шаг
+RATIO:   спот≥TPR2 → откуп доп. шортов → VERTICAL; боковик → продажа путов ТОЛЬКО вручную
+BACKSPREAD_LIKE: боковик → дельта-хедж; DTE≤порога → CLOSE (time stop)
+```
+
+### Ключевые правила внедрения
+- **Basis T/P зафиксирован**: доля от максимальной теоретической прибыли позиции.
+- **TPR**: `σ1d = σ_annual/√252`; σ берётся из правил, иначе ATM IV, иначе 30%.
+- **Реконструкция без прогноза не исполняется** — менеджер поднимает REVIEW и ждёт
+  `view_override`. Каждая корректировка = новая сделка (Schwab).
+- **allow_undefined_risk=false по умолчанию** (spec §22): ratio получает дальнее
+  длинное крыло; продажа голых путов автоматом запрещена.
+- Лестница/ratio определены для bull_call; для остальных типов — REVIEW-подсказка.
+- После каждого действия пересчитываются греки/экономика (`recomputeVerticalEcon`),
+  новые TPR1/TPR2 сохраняются в записи.
 
 ## Источники
 - tastylive — «Managing Vertical Spreads» (50% profit target, 21 DTE roll-for-a-credit, hold if debit-only).

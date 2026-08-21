@@ -873,6 +873,49 @@
 
             <div class="space-y-4 font-mono text-xs text-slate-300">
                 <div class="bg-slate-900/60 p-3 rounded-lg border border-slate-700">
+                    <span class="text-slate-400 block mb-2">🧠 СТРАТЕГИЯ (машина состояний)</span>
+                    <label class="flex items-center justify-between gap-2 py-1">
+                        <span>T/P: доля макс. прибыли</span>
+                        <span class="flex items-center gap-2">
+                            <input id="rules-ptarget" type="number" min="0" max="100" step="5" value="75" class="w-16 bg-slate-950 border border-slate-600 rounded px-2 py-1 text-right text-white"> %
+                        </span>
+                    </label>
+                    <label class="flex items-center justify-between gap-2 py-1">
+                        <span>Действие при T/P</span>
+                        <select id="rules-paction" class="bg-slate-950 border border-slate-600 rounded px-2 py-1 text-white">
+                            <option value="">CLOSE (закрыть)</option>
+                            <option value="ROLL">ROLL (на часть прибыли)</option>
+                            <option value="CONDOR">CONDOR (добавить крыло)</option>
+                        </select>
+                    </label>
+                    <label class="flex items-center justify-between gap-2 py-1">
+                        <span>TPR-режим</span>
+                        <select id="rules-tprmode" class="bg-slate-950 border border-slate-600 rounded px-2 py-1 text-white">
+                            <option value="ONE_DAY_SIGMA">1 день σ</option>
+                            <option value="MAX_LOSS">макс. убыток</option>
+                            <option value="">OFF</option>
+                        </select>
+                    </label>
+                    <label class="flex items-center justify-between gap-2 py-1">
+                        <span>Порог TPR, kσ</span>
+                        <input id="rules-tprk" type="number" min="0.5" max="3" step="0.25" value="1" class="w-16 bg-slate-950 border border-slate-600 rounded px-2 py-1 text-right text-white">
+                    </label>
+                    <label class="flex items-center justify-between gap-2 py-1">
+                        <span>Прогноз при TPR (авто-реконструкция)</span>
+                        <select id="rules-view" class="bg-slate-950 border border-slate-600 rounded px-2 py-1 text-white">
+                            <option value="">— ждать решения (REVIEW)</option>
+                            <option value="BULLISH">рост → лестница</option>
+                            <option value="SIDEWAYS">боковик → ratio</option>
+                            <option value="BEARISH">падение → ATM put</option>
+                        </select>
+                    </label>
+                    <label class="flex items-center justify-between gap-2 py-1">
+                        <span>Разрешить неограниченный риск</span>
+                        <input id="rules-undef" type="checkbox" class="w-4 h-4 accent-rose-500">
+                    </label>
+                </div>
+
+                <div class="bg-slate-900/60 p-3 rounded-lg border border-slate-700">
                     <span class="text-slate-400 block mb-2">↻ АВТО-РОЛЛ (сработает при первом выполненном условии)</span>
                     <label class="flex items-center justify-between py-1">
                         <span>Ролл при DTE ≤</span>
@@ -1070,9 +1113,10 @@
                 const res = await fetch(`/api/v1/series?symbol=${symbol}`);
                 const data = await res.json();
                 let html = '<option value="">Текущая серия (авто)</option>';
-                (data.series || []).forEach(s => {
-                    const tag = s.type ? `, ${s.type}` : '';
-                    html += `<option value="${s.expiry}">${s.expiry} · ${s.days_to_exp} дн.${tag}</option>`;
+                const list = (data.series || []).slice().sort((a, b) => a.expiry.localeCompare(b.expiry));
+                list.forEach(s => {
+                    const code = s.type_code || '';
+                    html += `<option value="${s.expiry}">${s.expiry}${code ? ' ' + code : ''} · ${s.days_to_exp} дн.</option>`;
                 });
                 sel.innerHTML = html;
             } catch (e) {
@@ -1200,6 +1244,12 @@
                     document.getElementById('rules-credit').value = Math.round((s.roll_credit_pct||0)*100);
                     document.getElementById('rules-strike').value = Math.round((s.roll_strike_risk_pct||0)*100);
                     document.getElementById('rules-stoploss').value = Math.round((s.stop_loss_pct||0)*100);
+                    document.getElementById('rules-ptarget').value = Math.round((s.profit_target_pct ?? 0.75)*100);
+                    document.getElementById('rules-paction').value = s.profit_action || '';
+                    document.getElementById('rules-tprmode').value = s.tpr_mode || '';
+                    document.getElementById('rules-tprk').value = s.tpr_sigma_mult || 1;
+                    document.getElementById('rules-view').value = s.view_override || '';
+                    document.getElementById('rules-undef').checked = !!s.allow_undefined_risk;
                     document.getElementById('rules-autohedge').checked = !!s.auto_hedge;
                     document.getElementById('rules-maxdelta').value = s.max_hedge_delta || 1;
                     document.getElementById('rules-live').checked = !!s.live;
@@ -1214,6 +1264,12 @@
                 roll_credit_pct: (parseInt(document.getElementById('rules-credit').value) || 0) / 100,
                 roll_strike_risk_pct: (parseFloat(document.getElementById('rules-strike').value) || 0) / 100,
                 stop_loss_pct: (parseFloat(document.getElementById('rules-stoploss').value) || 0) / 100,
+                profit_target_pct: (parseFloat(document.getElementById('rules-ptarget').value) || 0) / 100,
+                profit_action: document.getElementById('rules-paction').value,
+                tpr_mode: document.getElementById('rules-tprmode').value,
+                tpr_sigma_mult: parseFloat(document.getElementById('rules-tprk').value) || 1,
+                view_override: document.getElementById('rules-view').value,
+                allow_undefined_risk: document.getElementById('rules-undef').checked,
                 auto_hedge: document.getElementById('rules-autohedge').checked,
                 max_hedge_delta: parseFloat(document.getElementById('rules-maxdelta').value) || 0,
                 live: document.getElementById('rules-live').checked
@@ -1268,7 +1324,7 @@
                     const creditCls = s.net_credit > 0 ? 'text-sky-300' : 'text-amber-300';
                     html += `<tr class="border-b border-slate-800">
                         <td class="p-2 font-bold text-indigo-300">${s.display_name} <span class="text-[9px] text-slate-500">${s.roll_count ? 'ролл×' + s.roll_count : ''}</span><div class="text-[9px] text-slate-500">${s.symbol} · ${s.id}</div>
-                            <div class="text-[9px] text-slate-400">эксп. ${s.expiry} · DTE ${s.dte}</div>
+                            <div class="text-[9px] text-slate-400">эксп. ${s.expiry} · DTE ${s.dte}${s.state && s.state !== 'VERTICAL' ? ` · <span class="text-indigo-300 font-bold">◆ ${s.state}</span>` : ''}</div>
                             <div class="text-[9px] text-slate-500">${spreadRuleBadge(s)}</div></td>
                         <td class="p-2">S ${s.short_strike.toLocaleString('ru-RU')} / L ${s.long_strike.toLocaleString('ru-RU')}</td>
                         <td class="p-2">${s.dte}</td>
