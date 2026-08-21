@@ -30,6 +30,11 @@ type spreadRules struct {
 	// RollStrikeRiskPct triggers a roll when the spot is within this fraction
 	// of the short strike (e.g. 0.02 = price within 2% of the sold strike).
 	RollStrikeRiskPct float64 `json:"roll_strike_risk_pct"`
+	// StopLossPct closes the whole spread when the drawdown reaches this
+	// fraction of the maximum possible loss (0 disables). 0.75 approximates
+	// the KNOWLEDGE.md §1.4 loss cap of ~1.5x credit for a one-third-width
+	// credit spread.
+	StopLossPct float64 `json:"stop_loss_pct"`
 	// AutoHedge enables automatic delta hedging of the linked position.
 	AutoHedge bool `json:"auto_hedge"`
 	// MaxHedgeDelta is the |net delta| threshold above which a hedge order is
@@ -48,7 +53,7 @@ type managerRun struct {
 	Pnl        float64 `json:"pnl"`
 	MaxProfit  float64 `json:"max_profit"`
 	CapturedPct float64 `json:"captured_pct"`
-	Action     string `json:"action"`  // ROLL / HEDGE / NONE
+	Action     string `json:"action"`  // ROLL / HEDGE / CLOSE / NONE
 	Detail     string `json:"detail"`
 	Live       bool   `json:"live"`
 }
@@ -106,15 +111,12 @@ func runSpreadManagerPass() {
 	spreadManagerMu.Unlock()
 }
 
-// evaluateSpread computes current telemetry for a spread and decides whether
-// any automatic action is required based on its rules.
+// evaluateSpread gathers live telemetry for a spread (position PnL/delta,
+// days to expiry and the spot price when the strike rule is enabled) and
+// delegates the decision to decideSpreadAction.
 func evaluateSpread(s spreadRecord) managerRun {
-	run := managerRun{
-		SpreadID:  s.ID,
-		CheckedAt: time.Now().Format(time.RFC3339),
-		DTE:       dteInDays(s.Expiry, time.Now()),
-		MaxProfit: s.MaxProfit,
-	}
+	dte := dteInDays(s.Expiry, time.Now())
+	netDelta, pnl := 0.0, 0.0
 
 	positions := quant.GetActivePositions()
 	for i := range positions {
@@ -122,46 +124,83 @@ func evaluateSpread(s spreadRecord) managerRun {
 			p := &positions[i]
 			repricePosition(p)
 			quant.SavePosition(*p)
-			run.NetDelta = math.Round(p.Delta*100) / 100
-			run.Pnl = math.Round(p.PnL*100) / 100
+			netDelta = p.Delta
+			pnl = p.PnL
 			break
 		}
 	}
 
-	// Fraction of max profit already captured (for credit spreads this is the
-	// share of the net credit that has been "kept").
-	if run.MaxProfit > 0 {
-		run.CapturedPct = math.Round(run.Pnl/run.MaxProfit*1000) / 1000
-	}
-
-	// 1) DTE rule.
-	if s.AutoRollDTE > 0 && run.DTE <= s.AutoRollDTE {
-		run.Action = "ROLL"
-		run.Detail = fmt.Sprintf("DTE %d ≤ %d — экспирация близко", run.DTE, s.AutoRollDTE)
-		return run
-	}
-
-	// 2) Credit/profit captured rule (only meaningful for credit spreads).
-	if s.RollCreditPct > 0 && !isDebitSpreadType(s.Type) && run.CapturedPct >= s.RollCreditPct {
-		run.Action = "ROLL"
-		run.Detail = fmt.Sprintf("Собранно %.0f%% кредита (≥ %.0f%%)", run.CapturedPct*100, s.RollCreditPct*100)
-		return run
-	}
-
-	// 3) Strike proximity rule.
+	spotOK, spot := false, 0.0
 	if s.RollStrikeRiskPct > 0 {
-		spot, err := getSpotPrice(s.Symbol)
-		if err == nil && spot > 0 && s.ShortStrike > 0 {
-			dist := math.Abs(spot-s.ShortStrike) / s.ShortStrike
-			if dist <= s.RollStrikeRiskPct {
-				run.Action = "ROLL"
-				run.Detail = fmt.Sprintf("Цена %.2f подошла к стрику %.2f (дист. %.2f%%)", spot, s.ShortStrike, dist*100)
-				return run
-			}
+		if v, err := getSpotPrice(s.Symbol); err == nil && v > 0 {
+			spot, spotOK = v, true
 		}
 	}
 
-	// 4) Delta hedge rule.
+	run := decideSpreadAction(s, dte, netDelta, pnl, spot, spotOK)
+	run.CheckedAt = time.Now().Format(time.RFC3339)
+	return run
+}
+
+// decideSpreadAction maps spread telemetry to a management action using the
+// record's rules. Priority follows KNOWLEDGE.md §1: stop-loss first, then the
+// roll triggers (DTE, captured credit share, short-strike test) and finally
+// delta hedging. MaxProfit/MaxLoss are stored per underlying unit, so they are
+// scaled by the contract multiplier and quantity before being compared with
+// the position-level PnL.
+func decideSpreadAction(s spreadRecord, dte int, netDelta, pnl, spot float64, spotOK bool) managerRun {
+	units := float64(s.Qty)
+	if units < 1 {
+		units = 1
+	}
+	scale := contractMultiplier(s.Symbol) * units
+	maxProfit := s.MaxProfit * scale
+	maxLoss := s.MaxLoss * scale
+
+	run := managerRun{
+		SpreadID:  s.ID,
+		DTE:       dte,
+		NetDelta:  math.Round(netDelta*100) / 100,
+		Pnl:       math.Round(pnl*100) / 100,
+		MaxProfit: math.Round(maxProfit*100) / 100,
+	}
+	if maxProfit > 0 {
+		run.CapturedPct = math.Round(pnl/maxProfit*1000) / 1000
+	}
+
+	// 1) Stop-loss: close when the drawdown reaches the configured fraction of
+	// the maximum loss (KNOWLEDGE.md §1.4).
+	if s.StopLossPct > 0 && maxLoss > 0 && pnl <= -s.StopLossPct*maxLoss {
+		run.Action = "CLOSE"
+		run.Detail = fmt.Sprintf("Убыток %.0f ₽ достиг порога %.0f%% макс. убытка (%.0f ₽)", pnl, s.StopLossPct*100, maxLoss)
+		return run
+	}
+
+	// 2) DTE roll trigger.
+	if s.AutoRollDTE > 0 && dte <= s.AutoRollDTE {
+		run.Action = "ROLL"
+		run.Detail = fmt.Sprintf("DTE %d ≤ %d — экспирация близко", dte, s.AutoRollDTE)
+		return run
+	}
+
+	// 3) Captured-credit trigger (credit spreads only).
+	if s.RollCreditPct > 0 && !isDebitSpreadType(s.Type) && run.CapturedPct >= s.RollCreditPct {
+		run.Action = "ROLL"
+		run.Detail = fmt.Sprintf("Собрано %.0f%% кредита (≥ %.0f%%)", run.CapturedPct*100, s.RollCreditPct*100)
+		return run
+	}
+
+	// 4) Short-strike proximity trigger.
+	if s.RollStrikeRiskPct > 0 && spotOK && s.ShortStrike > 0 {
+		dist := math.Abs(spot-s.ShortStrike) / s.ShortStrike
+		if dist <= s.RollStrikeRiskPct {
+			run.Action = "ROLL"
+			run.Detail = fmt.Sprintf("Цена %.2f подошла к стрику %.2f (дист. %.2f%%)", spot, s.ShortStrike, dist*100)
+			return run
+		}
+	}
+
+	// 5) Delta hedge trigger.
 	if s.AutoHedge {
 		threshold := s.MaxHedgeDelta
 		if threshold <= 0 {
@@ -176,6 +215,20 @@ func evaluateSpread(s spreadRecord) managerRun {
 
 	run.Action = "NONE"
 	return run
+}
+
+// defaultAutoRollDTE returns the roll-by-time default from KNOWLEDGE.md §1.3:
+// long series roll at 21 DTE, weekly MOEX series on the last full week (7
+// DTE); contracts already in their final week start with the rule disabled.
+func defaultAutoRollDTE(dte int) int {
+	switch {
+	case dte > 45:
+		return 21
+	case dte > 8:
+		return 7
+	default:
+		return 0
+	}
 }
 
 // execSpreadAction executes a decided automatic action. Rolls and hedges reuse
@@ -222,6 +275,29 @@ func execSpreadAction(s *spreadRecord, run *managerRun) {
 		}
 		run.Live = s.Live
 		run.Detail = fmt.Sprintf("Авто-хедж: %d контрактов (Δ %.2f)", hedgeQty, pos.Delta)
+	case "CLOSE":
+		pos, found := quant.RemovePosition(s.PositionID)
+		if !found {
+			run.Action = "NONE"
+			run.Detail = "Позиция не найдена"
+			return
+		}
+		repricePosition(&pos)
+		quant.AddTrade(quant.Trade{
+			ID:          fmt.Sprintf("trd-%d", time.Now().Unix()),
+			Strategy:    pos.Strategy,
+			Symbol:      pos.Symbol,
+			OpenedAt:    pos.OpenedAt,
+			ClosedAt:    time.Now(),
+			EntryValue:  pos.EntryValue,
+			ExitValue:   pos.CurrentValue,
+			RealizedPnL: pos.PnL,
+			PnLPercent:  pos.PnLPercent,
+		})
+		s.Status = "CLOSED"
+		saveSpreadRecord(*s)
+		run.Live = s.Live
+		run.Detail = "Стоп-лосс исполнен (" + run.Detail + ")"
 	}
 }
 
@@ -391,6 +467,7 @@ func spreadRulesHandler(w http.ResponseWriter, r *http.Request) {
 	s.AutoRollDTE = req.Rules.AutoRollDTE
 	s.RollCreditPct = req.Rules.RollCreditPct
 	s.RollStrikeRiskPct = req.Rules.RollStrikeRiskPct
+	s.StopLossPct = req.Rules.StopLossPct
 	s.AutoHedge = req.Rules.AutoHedge
 	s.MaxHedgeDelta = req.Rules.MaxHedgeDelta
 	s.Live = req.Rules.Live

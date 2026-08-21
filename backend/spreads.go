@@ -465,12 +465,23 @@ func spreadOpenHandler(w http.ResponseWriter, r *http.Request) {
 		OpenedAt:     time.Now().Format(time.RFC3339),
 		Status:       "OPEN",
 		RollCount:    0,
-		StopLossPct:  0,
 		TakeProfitPct: 0,
 		TrailingStopPct: 0,
 		MaxHedgeDelta: 0,
+		// Knowledge-base defaults (KNOWLEDGE.md §1): stop at ~1.5x credit
+		// (0.75 of max loss for a one-third-width credit), weekly MOEX series
+		// roll on the last full week, profit capture target 50%, risk band 3%
+		// around the short strike. All editable via the rules API/UI.
+		StopLossPct:       0.75,
+		AutoRollDTE:       defaultAutoRollDTE(dteInDays(plan.Expiry, time.Now())),
+		RollCreditPct:     0.5,
+		RollStrikeRiskPct: 0.03,
 	}
 	saveSpreadRecord(rec)
+
+	if !spreadManagerEnabled() {
+		startSpreadManager()
+	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":   true,

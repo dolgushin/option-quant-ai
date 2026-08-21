@@ -889,6 +889,17 @@
                 </div>
 
                 <div class="bg-slate-900/60 p-3 rounded-lg border border-slate-700">
+                    <span class="text-slate-400 block mb-2">🛑 СТОП-ЛОСС</span>
+                    <label class="flex items-center justify-between gap-2 py-1">
+                        <span>Закрыть при убытке ≥</span>
+                        <span class="flex items-center gap-2">
+                            <input id="rules-stoploss" type="number" min="0" max="200" step="5" value="75" class="w-20 bg-slate-950 border border-slate-600 rounded px-2 py-1 text-right text-white"> % макс. убытка
+                        </span>
+                    </label>
+                    <p class="text-[10px] text-slate-500 mt-1">75% ≈ потеря кредита ×1.5 при кредите ≥ ⅓ крыла (KNOWLEDGE.md §1.4); 0 — выключено</p>
+                </div>
+
+                <div class="bg-slate-900/60 p-3 rounded-lg border border-slate-700">
                     <span class="text-slate-400 block mb-2">⚖ АВТО-ХЕДЖ ДЕЛЬТЫ</span>
                     <label class="flex items-center justify-between py-1">
                         <span>Включить</span>
@@ -1146,6 +1157,7 @@
             if (s.auto_roll_dte > 0) parts.push(`DTE≤${s.auto_roll_dte}`);
             if (s.roll_credit_pct > 0) parts.push(`кредит≥${Math.round(s.roll_credit_pct*100)}%`);
             if (s.roll_strike_risk_pct > 0) parts.push(`стрик≤${s.roll_strike_risk_pct*100}%`);
+            if (s.stop_loss_pct > 0) parts.push(`стоп≥${Math.round(s.stop_loss_pct*100)}%`);
             if (s.auto_hedge) parts.push(`хедж|Δ|>${s.max_hedge_delta}`);
             if (!parts.length) return 'ручное управление';
             return '⚙ ' + parts.join(' · ') + (s.live ? ' 🔴live' : '');
@@ -1164,6 +1176,7 @@
                     document.getElementById('rules-dte').value = s.auto_roll_dte || 0;
                     document.getElementById('rules-credit').value = Math.round((s.roll_credit_pct||0)*100);
                     document.getElementById('rules-strike').value = Math.round((s.roll_strike_risk_pct||0)*100);
+                    document.getElementById('rules-stoploss').value = Math.round((s.stop_loss_pct||0)*100);
                     document.getElementById('rules-autohedge').checked = !!s.auto_hedge;
                     document.getElementById('rules-maxdelta').value = s.max_hedge_delta || 1;
                     document.getElementById('rules-live').checked = !!s.live;
@@ -1177,6 +1190,7 @@
                 auto_roll_dte: parseInt(document.getElementById('rules-dte').value) || 0,
                 roll_credit_pct: (parseInt(document.getElementById('rules-credit').value) || 0) / 100,
                 roll_strike_risk_pct: (parseFloat(document.getElementById('rules-strike').value) || 0) / 100,
+                stop_loss_pct: (parseFloat(document.getElementById('rules-stoploss').value) || 0) / 100,
                 auto_hedge: document.getElementById('rules-autohedge').checked,
                 max_hedge_delta: parseFloat(document.getElementById('rules-maxdelta').value) || 0,
                 live: document.getElementById('rules-live').checked
