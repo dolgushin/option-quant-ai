@@ -219,6 +219,111 @@ func equitySeriesForSymbol(symbol string) []futuresContract {
 	return out
 }
 
+// isSyntheticSeriesCode reports whether the series code is an expiry-based
+// synthetic entry ("Si-2026-08-20") from optionSeriesForSymbol rather than a
+// real futures contract code.
+func isSyntheticSeriesCode(code string) bool {
+	i := strings.IndexByte(code, '-')
+	if i <= 0 || len(code)-i != 11 {
+		return false
+	}
+	date := code[i+1:]
+	for j := 0; j < len(date); j++ {
+		c := date[j]
+		isDigit := c >= '0' && c <= '9'
+		isSep := c == '-' && (j == 4 || j == 7)
+		if !isDigit && !isSep {
+			return false
+		}
+	}
+	return true
+}
+
+// syntheticSeriesExpiry parses the date part of a synthetic series code.
+func syntheticSeriesExpiry(code string) (*time.Time, bool) {
+	if !isSyntheticSeriesCode(code) {
+		return nil, false
+	}
+	t, err := time.Parse("2006-01-02", code[strings.IndexByte(code, '-')+1:])
+	if err != nil {
+		return nil, false
+	}
+	return &t, true
+}
+
+// resolveRealFuturesCode maps a synthetic expiry-based code to the real
+// futures contract of the same root expiring on/after that date — needed where
+// a tradable ticker is required (quoting, margin, hedging).
+func resolveRealFuturesCode(symbol, code string) string {
+	exp, ok := syntheticSeriesExpiry(code)
+	if !ok {
+		return code
+	}
+	contracts, err := moexFuturesContracts()
+	if err != nil {
+		return ""
+	}
+	best := ""
+	var bestDate time.Time
+	for _, c := range contracts {
+		if !strings.HasPrefix(c.Code, symbol) || c.LastDelDate == "" {
+			continue
+		}
+		d, err := time.Parse("2006-01-02", c.LastDelDate)
+		if err != nil || d.Before(*exp) {
+			continue
+		}
+		if best == "" || d.Before(bestDate) {
+			best, bestDate = c.Code, d
+		}
+	}
+	return best
+}
+
+// optionSeriesForSymbol builds the series list from real OPTION expiries:
+// unique dates of the asset's options — RFUD board for futures underlyings
+// (weekly/monthly/quarterly series), ROPD board for SBER/SBERP. Codes are
+// synthetic "{SYMBOL}-{YYYY-MM-DD}"; selectedSeries accepts both these and
+// real futures codes.
+func optionSeriesForSymbol(symbol string) []futuresContract {
+	if _, isEquity := equityOptions[symbol]; isEquity {
+		return equitySeriesForSymbol(symbol)
+	}
+	issAsset := symbol
+	switch symbol {
+	case "RI":
+		issAsset = "RTS"
+	case "CR":
+		issAsset = "CNY"
+	}
+	opts, err := moexOptionContracts()
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []futuresContract
+	for _, o := range opts {
+		if !strings.EqualFold(o.AssetCode, issAsset) || o.Expiry == "" || seen[o.Expiry] {
+			continue
+		}
+		seen[o.Expiry] = true
+		out = append(out, futuresContract{
+			Code:        symbol + "-" + o.Expiry,
+			ShortName:   fmt.Sprintf("%s %s", symbol, o.Expiry),
+			LastDelDate: o.Expiry,
+		})
+	}
+	// Newest expiry first.
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].LastDelDate > out[i].LastDelDate {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out
+}
+
 // classifyExpiry labels an expiry using the whole live chain: dates inside a
 // dense cluster of expiries (neighbours ≤13 days apart) are weekly series, an
 // isolated date in a quarter-end month is quarterly, any other isolated date
@@ -228,24 +333,40 @@ func classifyExpiry(expiry string, all []time.Time) string {
 	if err != nil {
 		return "серия"
 	}
-	inCluster, aloneInMonth := false, true
-	for _, o := range all {
+	// Pass 1: mark every expiry that belongs to a dense weekly cluster
+	// (a neighbour within 13 days).
+	inCluster := make([]bool, len(all))
+	for i := range all {
+		for j := range all {
+			if i == j {
+				continue
+			}
+			diff := all[j].Sub(all[i])
+			if diff < 0 {
+				diff = -diff
+			}
+			if diff < 14*24*time.Hour {
+				inCluster[i] = true
+				break
+			}
+		}
+	}
+	selfCluster := false
+	aloneInMonth := true
+	for i, o := range all {
 		if o.Equal(t) {
+			selfCluster = inCluster[i]
 			continue
 		}
-		diff := o.Sub(t)
-		if diff < 0 {
-			diff = -diff
-		}
-		if diff < 14*24*time.Hour {
-			inCluster = true
-		}
-		if o.Year() == t.Year() && o.Month() == t.Month() {
+		// Month-uniqueness counts only significant (non-weekly) expiries:
+		// a weekly series inside the quarter month must not demote its
+		// quarterly date (e.g. Sep weekly + Sep quarterly).
+		if !inCluster[i] && o.Year() == t.Year() && o.Month() == t.Month() {
 			aloneInMonth = false
 		}
 	}
 	switch {
-	case inCluster:
+	case selfCluster:
 		return "недельная"
 	case aloneInMonth && t.Month()%3 == 0:
 		return "квартальная"
@@ -308,6 +429,11 @@ func getSpotPrice(symbol string) (float64, error) {
 	seriesMu.Lock()
 	issCode := selectedSeries[symbol]
 	seriesMu.Unlock()
+	// Synthetic expiry codes are not tradable tickers — resolve to the nearest
+	// real futures contract for quoting.
+	if isSyntheticSeriesCode(issCode) {
+		issCode = resolveRealFuturesCode(symbol, issCode)
+	}
 	if issCode != "" {
 		if price, err := moexISSSpotPrice(issCode); err == nil && price > 0 {
 			return price, nil
@@ -793,6 +919,12 @@ func futuresSeriesAlor(symbol string) (string, bool) {
 	if code == "" {
 		return "", false
 	}
+	if isSyntheticSeriesCode(code) {
+		code = resolveRealFuturesCode(symbol, code)
+		if code == "" {
+			return "", false
+		}
+	}
 	contracts, err := moexFuturesContracts()
 	if err == nil {
 		for _, c := range contracts {
@@ -819,7 +951,14 @@ func seriesInfoHandler(w http.ResponseWriter, r *http.Request) {
 	seriesMu.Unlock()
 
 	now := time.Now()
-	contracts := futuresContractsForSymbol(symbol)
+	// Series list = real option expiries (weekly/monthly/quarterly), not the
+	// quarterly-only futures contract list.
+	contracts := optionSeriesForSymbol(symbol)
+
+	curExpiry := ""
+	if t := currentSeriesExpiry(symbol); t != nil {
+		curExpiry = t.Format("2006-01-02")
+	}
 
 	type seriesItem struct {
 		Code        string `json:"code"`
@@ -858,7 +997,7 @@ func seriesInfoHandler(w http.ResponseWriter, r *http.Request) {
 			DaysToExp: dteInDays(c.LastDelDate, now),
 			Type:      label,
 			TypeCode:  seriesTypeCode(label),
-			IsCurrent: c.Code == current,
+			IsCurrent: curExpiry != "" && c.LastDelDate == curExpiry,
 		})
 		if c.Code == current {
 			currentExpiry = c.LastDelDate
@@ -898,9 +1037,9 @@ func setSeriesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the series exists for this symbol.
+	// Verify the series exists for this symbol (option-expiry based list).
 	found := false
-	for _, c := range futuresContractsForSymbol(req.Symbol) {
+	for _, c := range optionSeriesForSymbol(req.Symbol) {
 		if c.Code == req.Series {
 			found = true
 			break
@@ -1973,6 +2112,10 @@ func currentSeriesExpiry(symbol string) *time.Time {
 	seriesMu.Lock()
 	code := selectedSeries[symbol]
 	seriesMu.Unlock()
+	// Synthetic expiry-based codes ("Si-2026-08-20") carry the date directly.
+	if t, ok := syntheticSeriesExpiry(code); ok {
+		return t
+	}
 	for _, c := range futuresContractsForSymbol(symbol) {
 		if c.Code == code && c.LastDelDate != "" {
 			if t, err := time.Parse("2006-01-02", c.LastDelDate); err == nil {

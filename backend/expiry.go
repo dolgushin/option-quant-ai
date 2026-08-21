@@ -267,7 +267,9 @@ type nextSeries struct {
 }
 
 func nextRollSeries(symbol, currentExpiry string) nextSeries {
-	contracts := futuresContractsForSymbol(symbol)
+	// Roll targets are OPTION expiries (weekly/monthly/quarterly series), not
+	// the quarterly-only futures contract list.
+	contracts := optionSeriesForSymbol(symbol)
 	cur, err := time.Parse("2006-01-02", currentExpiry)
 	if err != nil {
 		return nextSeries{}
