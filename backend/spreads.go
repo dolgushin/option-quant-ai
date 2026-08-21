@@ -107,6 +107,12 @@ type spreadRecord struct {
 	TakeProfitPct  float64 `json:"take_profit_pct"`
 	TrailingStopPct float64 `json:"trailing_stop_pct"`
 	MaxHedgeDelta  float64 `json:"max_hedge_delta"`
+	// Auto-management rules (spreads_manager.go).
+	AutoRollDTE       int     `json:"auto_roll_dte"`
+	RollCreditPct     float64 `json:"roll_credit_pct"`
+	RollStrikeRiskPct float64 `json:"roll_strike_risk_pct"`
+	AutoHedge         bool    `json:"auto_hedge"`
+	Live              bool    `json:"live"`
 }
 
 var (
@@ -503,7 +509,12 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 			"take_profit_pct": s.TakeProfitPct,
 			"trailing_stop_pct": s.TrailingStopPct,
 			"max_hedge_delta": s.MaxHedgeDelta,
-			"dte":           dteInDays(s.Expiry, time.Now()),
+			"auto_roll_dte":   s.AutoRollDTE,
+			"roll_credit_pct": s.RollCreditPct,
+			"roll_strike_risk_pct": s.RollStrikeRiskPct,
+			"auto_hedge":      s.AutoHedge,
+			"live":            s.Live,
+			"dte":             dteInDays(s.Expiry, time.Now()),
 		}
 
 		// Live telemetry from the linked position.

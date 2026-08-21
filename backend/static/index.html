@@ -860,6 +860,58 @@
             </div>
         </div>
     </div>
+
+    <div id="spread-rules-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-slate-800 border border-slate-700 w-full max-w-lg rounded-2xl p-6 space-y-5 shadow-2xl relative">
+            <div class="flex justify-between items-center border-b border-slate-700 pb-4">
+                <div>
+                    <h3 id="rules-modal-title" class="text-xl font-bold text-amber-400">⚙ Авто-управление спредом</h3>
+                    <p id="rules-modal-subtitle" class="text-xs text-slate-400 font-mono"></p>
+                </div>
+                <button onclick="document.getElementById('spread-rules-modal').classList.add('hidden')" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+            </div>
+
+            <div class="space-y-4 font-mono text-xs text-slate-300">
+                <div class="bg-slate-900/60 p-3 rounded-lg border border-slate-700">
+                    <span class="text-slate-400 block mb-2">↻ АВТО-РОЛЛ (сработает при первом выполненном условии)</span>
+                    <label class="flex items-center justify-between py-1">
+                        <span>Ролл при DTE ≤</span>
+                        <input id="rules-dte" type="number" min="0" value="5" class="w-20 bg-slate-950 border border-slate-600 rounded px-2 py-1 text-right text-white"> дней
+                    </label>
+                    <label class="flex items-center justify-between py-1">
+                        <span>Ролл при сборе ≥</span>
+                        <input id="rules-credit" type="number" min="0" max="100" value="85" class="w-20 bg-slate-950 border border-slate-600 rounded px-2 py-1 text-right text-white"> % кредита
+                    </label>
+                    <label class="flex items-center justify-between py-1">
+                        <span>Ролл при подходе цены к стрику ≤</span>
+                        <input id="rules-strike" type="number" min="0" max="20" step="0.5" value="2" class="w-20 bg-slate-950 border border-slate-600 rounded px-2 py-1 text-right text-white"> %
+                    </label>
+                </div>
+
+                <div class="bg-slate-900/60 p-3 rounded-lg border border-slate-700">
+                    <span class="text-slate-400 block mb-2">⚖ АВТО-ХЕДЖ ДЕЛЬТЫ</span>
+                    <label class="flex items-center justify-between py-1">
+                        <span>Включить</span>
+                        <input id="rules-autohedge" type="checkbox" class="w-5 h-5 accent-sky-500">
+                    </label>
+                    <label class="flex items-center justify-between py-1">
+                        <span>Порог |Δ|</span>
+                        <input id="rules-maxdelta" type="number" min="0" step="0.5" value="1" class="w-20 bg-slate-950 border border-slate-600 rounded px-2 py-1 text-right text-white">
+                    </label>
+                </div>
+
+                <label class="flex items-center gap-2 py-1 text-slate-400">
+                    <input id="rules-live" type="checkbox" class="w-4 h-4 accent-rose-500">
+                    <span>Живые ордера через Alor (иначе — бумажные)</span>
+                </label>
+            </div>
+
+            <div class="pt-4 border-t border-slate-700 flex gap-3">
+                <button onclick="saveSpreadRules()" class="flex-1 py-3 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl transition">💾 Применить правила</button>
+                <button onclick="document.getElementById('spread-rules-modal').classList.add('hidden')" class="px-5 py-3 bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold rounded-xl transition">Cancel</button>
+            </div>
+        </div>
+    </div>
         </div><!-- /dashboard-view -->
 
         <!-- ============ SPREADS VIEW ============ -->
@@ -926,6 +978,7 @@
                     <h2 class="text-lg font-semibold text-slate-200">Открытые спреды</h2>
                     <span id="spr-summary" class="text-[10px] text-slate-500 font-mono"></span>
                 </div>
+                <div id="spr-manager" class="hidden text-[10px] font-mono text-slate-400 bg-slate-900/60 border border-slate-700 rounded-lg p-2 space-y-1"></div>
                 <div class="overflow-x-auto font-mono">
                     <table class="w-full text-left text-xs text-slate-300">
                         <thead class="bg-slate-900/80 text-slate-400 uppercase border-b border-slate-700">
@@ -1088,12 +1141,84 @@
             updateSpreads();
         }
 
+        function spreadRuleBadge(s) {
+            const parts = [];
+            if (s.auto_roll_dte > 0) parts.push(`DTE≤${s.auto_roll_dte}`);
+            if (s.roll_credit_pct > 0) parts.push(`кредит≥${Math.round(s.roll_credit_pct*100)}%`);
+            if (s.roll_strike_risk_pct > 0) parts.push(`стрик≤${s.roll_strike_risk_pct*100}%`);
+            if (s.auto_hedge) parts.push(`хедж|Δ|>${s.max_hedge_delta}`);
+            if (!parts.length) return 'ручное управление';
+            return '⚙ ' + parts.join(' · ') + (s.live ? ' 🔴live' : '');
+        }
+
+        let currentRulesSpreadId = null;
+
+        function openSpreadRules(id) {
+            currentRulesSpreadId = id;
+            fetch('/api/v1/spreads')
+                .then(r => r.json())
+                .then(d => {
+                    const s = d.spreads.find(x => x.id === id);
+                    if (!s) return;
+                    document.getElementById('rules-modal-subtitle').innerText = `${s.display_name} · ${s.symbol} · ${s.id} · DTE ${s.dte}`;
+                    document.getElementById('rules-dte').value = s.auto_roll_dte || 0;
+                    document.getElementById('rules-credit').value = Math.round((s.roll_credit_pct||0)*100);
+                    document.getElementById('rules-strike').value = Math.round((s.roll_strike_risk_pct||0)*100);
+                    document.getElementById('rules-autohedge').checked = !!s.auto_hedge;
+                    document.getElementById('rules-maxdelta').value = s.max_hedge_delta || 1;
+                    document.getElementById('rules-live').checked = !!s.live;
+                    document.getElementById('spread-rules-modal').classList.remove('hidden');
+                });
+        }
+
+        async function saveSpreadRules() {
+            if (!currentRulesSpreadId) return;
+            const rules = {
+                auto_roll_dte: parseInt(document.getElementById('rules-dte').value) || 0,
+                roll_credit_pct: (parseInt(document.getElementById('rules-credit').value) || 0) / 100,
+                roll_strike_risk_pct: (parseFloat(document.getElementById('rules-strike').value) || 0) / 100,
+                auto_hedge: document.getElementById('rules-autohedge').checked,
+                max_hedge_delta: parseFloat(document.getElementById('rules-maxdelta').value) || 0,
+                live: document.getElementById('rules-live').checked
+            };
+            try {
+                const res = await fetch('/api/v1/spreads/rules', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: currentRulesSpreadId, rules: rules })
+                });
+                const d = await res.json();
+                if (!d.success) { alert(d.error); return; }
+                alert('✅ ' + (d.note || 'Правила применены'));
+                document.getElementById('spread-rules-modal').classList.add('hidden');
+                updateSpreads();
+            } catch (e) { alert('Ошибка: ' + e.message); }
+        }
+
+        async function updateSpreadManager() {
+            try {
+                const res = await fetch('/api/v1/spreads/manager');
+                const d = await res.json();
+                const box = document.getElementById('spr-manager');
+                if (!d.enabled || !d.log || !d.log.length) { box.classList.add('hidden'); return; }
+                let html = `<div>🤖 Авто-менеджер: <b class="${d.enabled ? 'text-emerald-400' : 'text-rose-400'}">${d.enabled ? 'активен' : 'выкл'}</b> · прогонов: ${d.runs} · последний: ${d.started_at ? new Date(d.started_at).toLocaleTimeString('ru-RU') : '—'}</div>`;
+                d.log.forEach(r => {
+                    if (r.action === 'NONE') return;
+                    const cls = r.action === 'ROLL' ? 'text-amber-400' : 'text-sky-400';
+                    html += `<div class="${cls}">${r.checked_at ? new Date(r.checked_at).toLocaleTimeString('ru-RU') : ''} · ${r.spread_id} → ${r.action}${r.live ? ' (live)' : ''}: ${r.detail}</div>`;
+                });
+                box.innerHTML = html;
+                box.classList.remove('hidden');
+            } catch (e) { /* manager not available */ }
+        }
+
         async function updateSpreads() {
             try {
                 const res = await fetch('/api/v1/spreads');
                 const d = await res.json();
                 document.getElementById('spr-summary').innerText =
                     `${d.spreads.length} открыто | ${d.spreads.filter(s => s.net_credit > 0).length} кредитных | ${d.spreads.filter(s => s.net_credit <= 0).length} дебетовых`;
+                updateSpreadManager();
                 if (!d.spreads.length) {
                     document.getElementById('spr-body').innerHTML =
                         '<tr><td colspan="9" class="p-3 text-center text-slate-500">Нет открытых спредов</td></tr>';
@@ -1104,7 +1229,8 @@
                     const pnlCls = s.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400';
                     const creditCls = s.net_credit > 0 ? 'text-sky-300' : 'text-amber-300';
                     html += `<tr class="border-b border-slate-800">
-                        <td class="p-2 font-bold text-indigo-300">${s.display_name} <span class="text-[9px] text-slate-500">${s.roll_count ? 'ролл×' + s.roll_count : ''}</span><div class="text-[9px] text-slate-500">${s.symbol} · ${s.id}</div></td>
+                        <td class="p-2 font-bold text-indigo-300">${s.display_name} <span class="text-[9px] text-slate-500">${s.roll_count ? 'ролл×' + s.roll_count : ''}</span><div class="text-[9px] text-slate-500">${s.symbol} · ${s.id}</div>
+                            <div class="text-[9px] text-slate-500">${spreadRuleBadge(s)}</div></td>
                         <td class="p-2">S ${s.short_strike.toLocaleString('ru-RU')} / L ${s.long_strike.toLocaleString('ru-RU')}</td>
                         <td class="p-2">${s.dte}</td>
                         <td class="p-2">${(s.entry_value||0).toLocaleString('ru-RU')} / ${(s.current_value||0).toLocaleString('ru-RU')}</td>
@@ -1113,6 +1239,7 @@
                         <td class="p-2">${(s.net_delta||0).toFixed(1)} / ${(s.net_theta||0).toFixed(1)}</td>
                         <td class="p-2"><span class="text-[9px] text-slate-400">${s.hedge_legs||0} фьюч.</span></td>
                         <td class="p-2 whitespace-nowrap">
+                            <button onclick="openSpreadRules('${s.id}')" class="px-2 py-1 text-[10px] bg-amber-700 hover:bg-amber-600 text-white rounded transition">⚙ Правила</button>
                             <button onclick="hedgeSpread('${s.id}')" class="px-2 py-1 text-[10px] bg-sky-700 hover:bg-sky-600 text-white rounded transition">⚖ Хедж</button>
                             <button onclick="rollSpread('${s.id}')" class="px-2 py-1 text-[10px] bg-amber-700 hover:bg-amber-600 text-white rounded transition">↻ Ролл</button>
                             <button onclick="closeSpread('${s.id}')" class="px-2 py-1 text-[10px] bg-rose-700 hover:bg-rose-600 text-white rounded transition">✕ Закрыть</button>

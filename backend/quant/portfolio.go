@@ -182,6 +182,19 @@ func GetActivePositions() []Position {
 	return activePositions
 }
 
+// GetPositionByID returns a copy of the active position with the given id.
+func GetPositionByID(id string) (*Position, bool) {
+	positionsMu.Lock()
+	defer positionsMu.Unlock()
+	for i := range activePositions {
+		if activePositions[i].ID == id {
+			p := activePositions[i]
+			return &p, true
+		}
+	}
+	return nil, false
+}
+
 func SetPositions(positions []Position) {
 	positionsMu.Lock()
 	activePositions = positions

@@ -541,6 +541,9 @@ func moexOptionContracts() ([]optionContract, error) {
 // moexEquityOptionContracts fetches the premium option contracts on shares
 // (board ROPD, e.g. SBRF = Sberbank common, SBPR = Sberbank preferred), cached.
 // The same ISS columns are used; ASSETCODE carries the underlying share code.
+// Note: the ROPD board also lists OPTIONS ON THE FUTURES (shortnames like
+// "SBRF-9.26M...", strikes in futures scale), so we keep only the share
+// premium options whose shortname starts with the share ticker prefix.
 func moexEquityOptionContracts() ([]optionContract, error) {
 	equityOptionMu.Lock()
 	defer equityOptionMu.Unlock()
@@ -548,8 +551,8 @@ func moexEquityOptionContracts() ([]optionContract, error) {
 		return equityOptionCache, nil
 	}
 
-	url := "http://iss.moex.com/iss/engines/futures/markets/options/boards/ROPD/securities.json?iss.meta=off&iss.only=securities&securities.columns=SECID,LASTDELDATE,ASSETCODE,OPTIONTYPE,STRIKE,IMNP,IMP,PREVPRICE"
-	client := &http.Client{Timeout: 15 * time.Second}
+	url := "http://iss.moex.com/iss/engines/futures/markets/options/boards/ROPD/securities.json?iss.meta=off&iss.only=securities&securities.columns=SECID,LASTDELDATE,ASSETCODE,OPTIONTYPE,STRIKE,IMNP,IMP,PREVPRICE,SHORTNAME&iss.rows=50000"
+	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err
@@ -567,7 +570,7 @@ func moexEquityOptionContracts() ([]optionContract, error) {
 
 	var opts []optionContract
 	for _, row := range data.Securities.Data {
-		if len(row) < 8 {
+		if len(row) < 9 {
 			continue
 		}
 		secid, _ := row[0].(string)
@@ -578,7 +581,14 @@ func moexEquityOptionContracts() ([]optionContract, error) {
 		imnp, _ := row[5].(float64)
 		imp, _ := row[6].(float64)
 		prev, _ := row[7].(float64)
+		shortname, _ := row[8].(string)
 		if secid == "" || asset == "" {
+			continue
+		}
+		// Keep only share premium options. SBRF share options shortname starts
+		// with "SBER" (SBERP200330CE100), SBPR with "SBERPP"; futures-based
+		// options use the futures code ("SBRF-9.26M...") and must be excluded.
+		if !isShareOption(asset, shortname) {
 			continue
 		}
 		opts = append(opts, optionContract{
@@ -597,6 +607,25 @@ func moexEquityOptionContracts() ([]optionContract, error) {
 	equityOptionCache = opts
 	equityOptionCacheTime = time.Now()
 	return opts, nil
+}
+
+// isShareOption reports whether a ROPD contract is a premium option on the
+// underlying share rather than an option on the SBRF futures contract.
+// Share option shortnames start with the share ticker ("SBER", "SBERP"),
+// while futures-based shortnames start with the futures code ("SBRF-...",
+// "SBPR-..." is not used, but we exclude any code that looks like a futures).
+func isShareOption(asset, shortname string) bool {
+	if shortname == "" {
+		return true // no shortname → keep (defensive)
+	}
+	switch asset {
+	case "SBRF":
+		return strings.HasPrefix(shortname, "SBER")
+	case "SBPR":
+		return strings.HasPrefix(shortname, "SBERP")
+	default:
+		return true
+	}
 }
 
 // moexOptionsForAsset returns the option chain for a given underlying asset
@@ -2926,6 +2955,8 @@ func main() {
 	http.HandleFunc("/api/v1/spreads/close", spreadCloseHandler)
 	http.HandleFunc("/api/v1/spreads/hedge", spreadHedgeHandler)
 	http.HandleFunc("/api/v1/spreads/roll", spreadRollHandler)
+	http.HandleFunc("/api/v1/spreads/rules", spreadRulesHandler)
+	http.HandleFunc("/api/v1/spreads/manager", spreadManagerHandler)
 	http.HandleFunc("/api/v1/spreads", spreadListHandler)
 	http.HandleFunc("/api/v1/strategy/rotation", rotationHandler)
 	http.HandleFunc("/api/v1/position/profile", positionProfileHandler)
