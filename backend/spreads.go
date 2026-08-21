@@ -526,6 +526,7 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 			"auto_hedge":      s.AutoHedge,
 			"live":            s.Live,
 			"dte":             dteInDays(s.Expiry, time.Now()),
+			"multiplier":      contractMultiplier(s.Symbol),
 		}
 
 		// Live telemetry from the linked position.
@@ -542,6 +543,37 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 				item["net_delta"] = math.Round(p.Delta*100) / 100
 				item["net_theta"] = math.Round(p.Theta*100) / 100
 				item["hedge_legs"] = countHedgeLegs(p)
+
+				// Per-leg profile: strike, live price and implied volatility
+				// of every leg so the UI can show the full position breakdown.
+				tYears := float64(dteInDays(s.Expiry, time.Now())) / 365.0
+				if tYears <= 0 {
+					tYears = 30.0 / 365.0
+				}
+				spot, _ := getSpotPrice(s.Symbol)
+				if spot > 0 {
+					item["spot"] = math.Round(spot*100) / 100
+				}
+				legs := make([]map[string]interface{}, 0, len(p.Legs))
+				for _, l := range p.Legs {
+					lm := map[string]interface{}{
+						"secid":         l.SecID,
+						"side":          l.Side,
+						"kind":          l.Kind,
+						"strike":        l.Strike,
+						"is_call":       l.IsCall,
+						"quantity":      l.Quantity,
+						"entry_price":   math.Round(l.EntryPrice*100) / 100,
+						"current_price": math.Round(l.CurrentPrice*100) / 100,
+					}
+					if l.Kind == "OPTION" && spot > 0 && l.CurrentPrice > 0 {
+						if iv := quant.ImpliedVolatility(l.IsCall, l.CurrentPrice, spot, l.Strike, tYears, 0.16); iv > 0 {
+							lm["iv_pct"] = math.Round(iv*1000) / 10
+						}
+					}
+					legs = append(legs, lm)
+				}
+				item["legs"] = legs
 				break
 			}
 		}
