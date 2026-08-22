@@ -3138,6 +3138,7 @@ func main() {
 
 	// Vertical Spreads console
 	http.HandleFunc("/api/v1/spreads/plan", spreadPlanHandler)
+	http.HandleFunc("/api/v1/spreads/advice", spreadAdviceHandler)
 	http.HandleFunc("/api/v1/spreads/open", spreadOpenHandler)
 	http.HandleFunc("/api/v1/spreads/close", spreadCloseHandler)
 	http.HandleFunc("/api/v1/spreads/hedge", spreadHedgeHandler)

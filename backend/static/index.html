@@ -1021,6 +1021,7 @@
                     <div id="spr-plan-title" class="font-bold text-indigo-300"></div>
                     <div id="spr-plan-legs" class="grid grid-cols-1 md:grid-cols-2 gap-1 text-slate-300"></div>
                     <div id="spr-plan-econ" class="flex flex-wrap gap-4 text-slate-300"></div>
+                    <div id="spr-advice" class="pt-3 border-t border-slate-700 space-y-1"></div>
                     <div class="pt-2 border-t border-slate-700">
                         <button onclick="openSpread()" class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition">✅ Открыть спред</button>
                         <span id="spr-plan-err" class="text-rose-400 ml-3"></span>
@@ -1125,6 +1126,49 @@
         }
         document.getElementById('spr-symbol').addEventListener('change', loadExpiryOptions);
 
+        // Pre-trade decision panel (KNOWLEDGE.md §6): DTE window, trend fit,
+        // IV-vs-HV edge, credit quality and leg liquidity.
+        async function loadSpreadAdvice(symbol, type, expiry, qty) {
+            const box = document.getElementById('spr-advice');
+            if (!box) return;
+            box.innerHTML = '<div class="text-[10px] text-slate-500">⏳ Анализ момента входа...</div>';
+            try {
+                const res = await fetch(`/api/v1/spreads/advice?symbol=${symbol}&type=${type}&expiry=${encodeURIComponent(expiry)}&qty=${qty}`);
+                const d = await res.json();
+                if (d.error) {
+                    box.innerHTML = `<div class="text-rose-400 text-[11px]">Советник недоступен: ${d.error}</div>`;
+                    return;
+                }
+                const headCls = d.score >= 70 ? 'text-emerald-400' : d.score >= 45 ? 'text-amber-400' : 'text-rose-400';
+                const barCls = d.score >= 70 ? 'bg-emerald-500' : d.score >= 45 ? 'bg-amber-500' : 'bg-rose-500';
+                let html = `<div class="flex items-center justify-between ${headCls} font-bold">
+                    <span>🎯 Система решений: ${d.verdict}</span><span>${d.score}/100</span></div>
+                    <div class="h-1.5 bg-slate-800 rounded overflow-hidden"><div class="${barCls} h-full" style="width:${d.score}%"></div></div>`;
+                (d.checks || []).forEach(c => {
+                    const icon = c.status === 'ok' ? '✅' : c.status === 'warn' ? '⚠️' : c.status === 'bad' ? '❌' : 'ℹ️';
+                    const col = c.status === 'ok' ? 'text-emerald-300' : c.status === 'warn' ? 'text-amber-300' : c.status === 'bad' ? 'text-rose-300' : 'text-slate-400';
+                    html += `<div class="flex gap-2 items-start"><span>${icon}</span>
+                        <div class="${col}"><b class="text-slate-200">${c.title}</b> <span class="text-[9px] text-slate-500">+${c.earned}/${c.weight}</span>
+                        <div class="text-[10px] leading-snug">${c.detail}</div></div></div>`;
+                });
+                if (d.metrics) {
+                    const m = d.metrics;
+                    const bits = [];
+                    if (m.atm_iv) bits.push(`IV ${m.atm_iv}%`);
+                    if (m.hv20) bits.push(`HV20 ${m.hv20}%`);
+                    if (m.iv_hv_edge !== undefined && m.iv_rank) bits.push(`Rank ${Math.round(m.iv_rank)}%`);
+                    if (m.rsi14) bits.push(`RSI ${m.rsi14}`);
+                    if (m.sma20 && m.sma50) bits.push(`SMA20/50 ${m.sma20}/${m.sma50}`);
+                    if (bits.length) html += `<div class="text-[9px] text-slate-500 font-mono pt-1">${bits.join(' · ')}</div>`;
+                }
+                html += `<div class="text-[10px] text-slate-400">${d.summary}</div>`;
+                box.innerHTML = html;
+            } catch (e) {
+                console.error('Advice failed', e);
+                box.innerHTML = '';
+            }
+        }
+
         async function buildSpreadPlan() {
             const symbol = document.getElementById('spr-symbol').value;
             const qty = parseInt(document.getElementById('spr-qty').value) || 1;
@@ -1160,6 +1204,8 @@
                     <span>Θ/контракт: <b>${p.theta_per_contract}</b></span>
                     <span>Δ/контракт: <b>${p.delta_per_contract}</b></span>`;
                 document.getElementById('spr-plan-econ').innerHTML = econ;
+
+                loadSpreadAdvice(symbol, currentSpreadType, expiry, qty);
             } catch (e) {
                 document.getElementById('spr-plan-title').innerText = '⚠ Ошибка сети';
                 document.getElementById('spr-plan-err').innerText = e.message;
