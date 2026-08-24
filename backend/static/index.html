@@ -1220,6 +1220,7 @@
                 document.getElementById('spr-plan-econ').innerHTML = econ;
 
                 drawPlanPayoff(p);
+                loadPlanAnalytics(symbol, currentSpreadType, expiry, qty);
                 loadSpreadAdvice(symbol, currentSpreadType, expiry, qty);
             } catch (e) {
                 document.getElementById('spr-plan-title').innerText = '⚠ Ошибка сети';
@@ -1482,6 +1483,172 @@
                     </div>
                 </div>`;
             drawPayoffChart(s, scale);
+            loadSpreadAnalytics(s);
+        }
+
+        // Generic multi-line chart over a spot grid with optional vertical markers.
+        function drawCurvesChart(canvasId, spots, series, markers) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas || typeof Chart === 'undefined' || !spots || !spots.length) return;
+            const ctx = canvas.getContext('2d');
+            const datasets = series.map(sr => ({
+                label: sr.label,
+                data: sr.data.map((y, i) => ({ x: spots[i], y })),
+                borderColor: sr.color,
+                borderWidth: 2,
+                borderDash: sr.dash || [],
+                pointRadius: 0,
+                fill: false,
+                tension: 0.12,
+            }));
+            (markers || []).forEach(m => {
+                const ys = [];
+                datasets.forEach(ds => ds.data.forEach(p => ys.push(p.y)));
+                datasets.push({
+                    label: m.label,
+                    data: [{ x: m.x, y: Math.min(...ys) }, { x: m.x, y: Math.max(...ys) }],
+                    borderColor: m.color,
+                    borderWidth: 1,
+                    borderDash: m.dash || [],
+                    pointRadius: 0,
+                    fill: false,
+                });
+            });
+            if (profileCharts[canvasId]) profileCharts[canvasId].destroy();
+            profileCharts[canvasId] = new Chart(ctx, {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    animation: false,
+                    scales: {
+                        x: { type: 'linear', title: { display: false }, ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 8 }, grid: { color: '#1e293b' } },
+                        y: { ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 7 }, grid: { color: '#1e293b' } },
+                    },
+                    plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 9 }, boxWidth: 12 } } },
+                },
+            });
+        }
+
+        function analyticsMarkers(s) {
+            const m = [];
+            if (s.spot) m.push({ x: s.spot, label: 'спот', color: '#f59e0b', dash: [4, 4] });
+            if (s.central_strike) m.push({ x: s.central_strike, label: 'центр', color: '#22d3ee', dash: [] });
+            return m;
+        }
+
+        // MOEX-constructor-style analytics for an open spread: enriched leg
+        // table (theo/P&L/greeks + totals) and P&L/delta/theta curves.
+        async function loadSpreadAnalytics(s) {
+            try {
+                const res = await fetch(`/api/v1/spreads/analytics?id=${s.id}`);
+                const d = await res.json();
+                if (d.error || !d.curves) return;
+                renderSpreadProfileFull(s, d);
+            } catch (e) { console.error('Analytics failed', e); }
+        }
+
+        function renderSpreadProfileFull(s, d) {
+            const box = document.getElementById(`sprd-box-${s.id}`);
+            if (!box) return;
+            const srcById = {};
+            (s.legs || []).forEach(l => { srcById[l.secid] = l; });
+            const g2 = v => (v != null || v === 0 ? Number(v).toLocaleString('ru-RU') : '—');
+            const g3 = v => (v == null ? '—' : (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2)));
+
+            let legRows = '';
+            (d.legs || []).forEach(l => {
+                const dirCls = l.side === 'SELL' ? 'text-rose-300' : 'text-emerald-300';
+                const kindTag = l.kind === 'FUTURES' ? 'хедж' : (l.is_call ? 'CALL' : 'PUT');
+                const q = srcById[l.secid] || {};
+                const srcTag = q.quote_src === 'mid' ? 'стакан' : q.quote_src === 'last' ? 'сделка' : q.quote_src === 'settle' ? 'клиринг' : '';
+                const qBadge = srcTag ? `<div class="text-[10px] ${q.quote_stale ? 'text-amber-400' : 'text-slate-500'}">${srcTag}${q.quote_time ? ' ' + q.quote_time.slice(0, 5) : ''}${q.quote_stale ? ' ⚠' : ''}</div>` : '';
+                legRows += `<tr class="border-b border-slate-800">
+                    <td class="py-1 pr-2 ${dirCls}">${l.side}</td>
+                    <td class="py-1 pr-2">${l.secid || '—'}</td>
+                    <td class="py-1 pr-2 text-slate-400">${kindTag}</td>
+                    <td class="py-1 pr-2 text-right">${l.strike != null ? l.strike.toLocaleString('ru-RU') : '—'}</td>
+                    <td class="py-1 pr-2 text-right">${g2(l.entry)}</td>
+                    <td class="py-1 pr-2 text-right">${g2(l.current)}${qBadge}</td>
+                    <td class="py-1 pr-2 text-right text-slate-400">${g2(l.theo)}</td>
+                    <td class="py-1 pr-2 text-right ${l.pnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}">${l.pnl >= 0 ? '+' : ''}${g2(l.pnl)}</td>
+                    <td class="py-1 pr-2 text-right">${g3(l.delta)}</td>
+                    <td class="py-1 pr-2 text-right">${g3(l.gamma)}</td>
+                    <td class="py-1 pr-2 text-right">${g3(l.vega)}</td>
+                    <td class="py-1 pr-2 text-right">${g3(l.theta)}</td>
+                    <td class="py-1 text-right">${l.iv != null ? l.iv.toFixed(1) + '%' : '—'}</td>
+                </tr>`;
+            });
+            const t = d.totals || {};
+            const pnlCls = (t.pnl || 0) >= 0 ? 'text-emerald-300' : 'text-rose-300';
+            const tfoot = `<tr class="border-t-2 border-slate-600 text-slate-100 font-bold">
+                <td colspan="7" class="py-1 pr-2 text-right">Итого:</td>
+                <td class="py-1 pr-2 text-right ${pnlCls}">${(t.pnl || 0) >= 0 ? '+' : ''}${g2(t.pnl)}</td>
+                <td class="py-1 pr-2 text-right">${g3(t.delta)}</td>
+                <td class="py-1 pr-2 text-right">${g3(t.gamma)}</td>
+                <td class="py-1 pr-2 text-right">${g3(t.vega)}</td>
+                <td class="py-1 pr-2 text-right">${g3(t.theta)}</td>
+                <td class="py-1"></td>
+            </tr>`;
+
+            box.innerHTML = `
+                <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                    <div>
+                        <div class="text-[10px] text-slate-400 uppercase mb-1 font-mono">Ноги · эксп. ${s.expiry} · ${s.multiplier || 1} ₽/пункт × ${s.qty} контр.${s.central_strike ? ` · <span class="text-cyan-300">центр ${s.central_strike.toLocaleString('ru-RU')}</span>` : ''}${s.atm_strike_now ? ` · ATM ${s.atm_strike_now.toLocaleString('ru-RU')}` : ''}</div>
+                        <div class="overflow-x-auto">
+                        <table class="w-full text-left text-[11px] font-mono text-slate-300">
+                            <thead class="text-slate-500 border-b border-slate-700 uppercase">
+                                <tr><th class="py-1 pr-2">Стор.</th><th class="py-1 pr-2">Тикер</th><th class="py-1 pr-2">Тип</th><th class="py-1 pr-2 text-right">Страйк</th><th class="py-1 pr-2 text-right">Вход</th><th class="py-1 pr-2 text-right">Сейчас</th><th class="py-1 pr-2 text-right">Теор</th><th class="py-1 pr-2 text-right">P&L</th><th class="py-1 pr-2 text-right">Δ</th><th class="py-1 pr-2 text-right">Γ</th><th class="py-1 pr-2 text-right">Vega</th><th class="py-1 pr-2 text-right">Θ/д</th><th class="py-1 text-right">IV</th></tr>
+                            </thead>
+                            <tbody>${legRows}</tbody>
+                            <tfoot>${tfoot}</tfoot>
+                        </table>
+                        </div>
+                        <div class="text-[10px] text-slate-500 mt-1 font-mono">Греки — на единицу актива; Θ — в ₽/день; P&L — в ₽ (с множителем)</div>
+                    </div>
+                    <div class="space-y-2">
+                        <div class="bg-slate-900/60 rounded-lg p-2 border border-slate-700">
+                            <div class="text-[10px] text-slate-400 font-mono mb-1">P&L: сейчас (БШ) и на экспирацию, ₽</div>
+                            <canvas id="spr-ch-pnl-${s.id}" height="150"></canvas>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div class="bg-slate-900/60 rounded-lg p-2 border border-slate-700">
+                                <div class="text-[10px] text-slate-400 font-mono mb-1">Дельта</div>
+                                <canvas id="spr-ch-delta-${s.id}" height="120"></canvas>
+                            </div>
+                            <div class="bg-slate-900/60 rounded-lg p-2 border border-slate-700">
+                                <div class="text-[10px] text-slate-400 font-mono mb-1">Тета, ₽/день</div>
+                                <canvas id="spr-ch-theta-${s.id}" height="120"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+
+            const mk = analyticsMarkers(s);
+            drawCurvesChart(`spr-ch-pnl-${s.id}`, d.curves.spots, [
+                { label: 'P&L сейчас', data: d.curves.pnl_now, color: '#f87171' },
+                { label: 'P&L на экспирацию', data: d.curves.pnl_expiry, color: '#818cf8' },
+            ], mk);
+            drawCurvesChart(`spr-ch-delta-${s.id}`, d.curves.spots, [
+                { label: 'сейчас', data: d.curves.delta_now, color: '#f87171' },
+                { label: 'на экспирацию', data: d.curves.delta_expiry, color: '#818cf8' },
+            ]);
+            drawCurvesChart(`spr-ch-theta-${s.id}`, d.curves.spots, [
+                { label: 'сейчас', data: d.curves.theta_now, color: '#f87171' },
+                { label: 'эксп. −1 день', data: d.curves.theta_t1, color: '#818cf8' },
+            ]);
+        }
+
+        // Builder chart upgrade: P&L now (BS) + expiry from the analytics API.
+        async function loadPlanAnalytics(symbol, type, expiry, qty) {
+            try {
+                const res = await fetch(`/api/v1/spreads/analytics?symbol=${symbol}&type=${type}&expiry=${encodeURIComponent(expiry)}&qty=${qty}`);
+                const d = await res.json();
+                if (d.error || !d.curves) return;
+                drawCurvesChart('spr-payoff-__plan__', d.curves.spots, [
+                    { label: 'P&L сейчас', data: d.curves.pnl_now, color: '#f87171' },
+                    { label: 'P&L на экспирацию', data: d.curves.pnl_expiry, color: '#818cf8' },
+                ], analyticsMarkers({ spot: d.spot, central_strike: d.central_strike }));
+            } catch (e) { console.error('Plan analytics failed', e); }
         }
 
         // Payoff for the builder plan: adapt plan fields to the profile chart.
