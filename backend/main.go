@@ -674,10 +674,16 @@ func moexOptionQuoteEx(secid string) (optionQuoteEx, error) {
 func contractMultiplier(symbol string) float64 {
 	switch symbol {
 	case "RI":
-		if v := riPointValue(); v > 0 {
+		if v := assetPointValue("RTS"); v > 0 {
 			return v
 		}
 		return 1.66
+	case "NG":
+		// Natural gas: 1 point = 0.001 USD × 1000 MMBtu × USDRUB ≈ 8292 ₽.
+		if v := assetPointValue("NG"); v > 0 {
+			return v
+		}
+		return 8292.11
 	case "CR":
 		return 1000.0
 	case "SBER", "SBERP":
@@ -688,18 +694,19 @@ func contractMultiplier(symbol string) float64 {
 }
 
 var (
-	riPointValCache   float64
-	riPointValTime    time.Time
-	riPointValMu      sync.Mutex
+	assetPointCache   = map[string]float64{}
+	assetPointTime    = map[string]time.Time{}
+	assetPointMu      sync.Mutex
 )
 
-// riPointValue resolves the RI point value in rubles from the STEPPRICE and
-// MINSTEP of a live RI (RTS) option, cached for an hour.
-func riPointValue() float64 {
-	riPointValMu.Lock()
-	defer riPointValMu.Unlock()
-	if riPointValCache > 0 && time.Since(riPointValTime) < time.Hour {
-		return riPointValCache
+// assetPointValue resolves the ruble value of one premium point for an ISS
+// asset code from the STEPPRICE/MINSTEP of a live option of that asset
+// (handles USD-linked contracts like RI and NG), cached for an hour.
+func assetPointValue(assetCode string) float64 {
+	assetPointMu.Lock()
+	defer assetPointMu.Unlock()
+	if v, ok := assetPointCache[assetCode]; ok && v > 0 && time.Since(assetPointTime[assetCode]) < time.Hour {
+		return v
 	}
 	opts, err := moexOptionContracts()
 	if err != nil {
@@ -707,7 +714,7 @@ func riPointValue() float64 {
 	}
 	secid := ""
 	for _, o := range opts {
-		if strings.EqualFold(o.AssetCode, "RTS") && o.PrevPrice > 0 {
+		if strings.EqualFold(o.AssetCode, assetCode) && o.PrevPrice > 0 {
 			secid = o.SecID
 			break
 		}
@@ -748,9 +755,15 @@ func riPointValue() float64 {
 		return 0
 	}
 	v := stepPrice / minStep
-	riPointValCache = v
-	riPointValTime = time.Now()
+	assetPointCache[assetCode] = v
+	assetPointTime[assetCode] = time.Now()
 	return v
+}
+
+// riPointValue resolves the RI point value in rubles from the STEPPRICE and
+// MINSTEP of a live RI (RTS) option, cached for an hour.
+func riPointValue() float64 {
+	return assetPointValue("RTS")
 }
 
 // contractExpiry returns the option expiry date (YYYY-MM-DD) for a symbol by
@@ -3310,6 +3323,7 @@ func main() {
 	initAlorClients()
 	initTelegram()
 	initSpreads(dataDir)
+	initCore(dataDir)
 
 	// Background Telegram notifier (stop channel unused for lifetime app).
 	go telegramNotifier(make(chan struct{}))
@@ -3363,6 +3377,9 @@ func main() {
 	http.HandleFunc("/api/v2/stats/overview", statsOverviewHandler)
 	http.HandleFunc("/api/v2/stats/breakdown", statsBreakdownHandler)
 	http.HandleFunc("/api/v2/forecast", forecastHandler)
+	http.HandleFunc("/api/v2/core/settings", coreSettingsHandler)
+	http.HandleFunc("/api/v2/core/analyze", coreAnalyzeHandler)
+	http.HandleFunc("/api/v2/core/verdicts", coreVerdictsHandler)
 	http.HandleFunc("/api/v1/spreads/analytics", spreadAnalyticsHandler)
 	http.HandleFunc("/api/v1/spreads/advice", spreadAdviceHandler)
 	http.HandleFunc("/api/v1/spreads/open", spreadOpenHandler)

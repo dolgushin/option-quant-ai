@@ -65,6 +65,7 @@
             <button id="tab-btn-spreads" onclick="switchTab('spreads')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🎯 Вертикальные спреды</button>
             <button id="tab-btn-stats" onclick="switchTab('stats')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">📈 Статистика</button>
             <button id="tab-btn-fc" onclick="switchTab('forecast')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🔮 Прогноз</button>
+            <button id="tab-btn-core" onclick="switchTab('core')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🧠 Ядро</button>
         </nav>
 
         <div id="dashboard-view" class="space-y-4 md:space-y-6">
@@ -1137,6 +1138,53 @@
             </div>
         </div>
 
+        <!-- Analytics Core -->
+        <div id="core-view" class="hidden space-y-4 md:space-y-6">
+            <div class="flex justify-between items-center flex-wrap gap-2">
+                <h2 class="text-lg font-semibold text-slate-200">🧠 Аналитическое ядро</h2>
+                <button onclick="runCoreAnalysis()" id="core-run" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl transition">⚡ Проанализировать рынок</button>
+            </div>
+
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700 space-y-2">
+                    <div class="text-[11px] text-slate-400 font-mono uppercase">Настройки ИИ-консультанта</div>
+                    <label class="block text-[11px] font-mono text-slate-400">Base URL (OpenAI-совместимый)
+                        <input id="core-url" placeholder="https://api.openai.com/v1" class="w-full mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-white"></label>
+                    <label class="block text-[11px] font-mono text-slate-400">API-ключ
+                        <input id="core-key" type="password" placeholder="sk-..." class="w-full mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-white"></label>
+                    <label class="block text-[11px] font-mono text-slate-400">Модель
+                        <input id="core-model" placeholder="gpt-4o-mini" class="w-full mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-white"></label>
+                    <label class="block text-[11px] font-mono text-slate-400">Автоскан, мин (0 = выкл)
+                        <input id="core-interval" type="number" min="0" max="1440" value="0" class="w-full mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-right text-white"></label>
+                    <label class="flex items-center gap-2 text-[11px] font-mono text-slate-400">
+                        <input id="core-autopaper" type="checkbox" class="w-4 h-4 accent-rose-500">
+                        Авто-бумажные сделки при вердикте ИИ (соглашение кванта и ИИ, скоринг ≥ 70)
+                    </label>
+                    <button onclick="saveCoreSettings()" class="w-full py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-lg transition text-xs">💾 Сохранить настройки</button>
+                </div>
+
+                <div class="xl:col-span-2 bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                    <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">Состояние рынка по инструментам</div>
+                    <div id="core-instruments" class="overflow-x-auto"><div class="text-slate-500 font-mono text-[11px]">Нажмите «Проанализировать рынок»</div></div>
+                </div>
+            </div>
+
+            <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">Кандидаты (квантовый скоринг, фильтры базы знаний)</div>
+                <div id="core-candidates" class="overflow-x-auto"></div>
+            </div>
+
+            <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">Вердикт ИИ-консультанта</div>
+                <div id="core-verdict"><div class="text-slate-500 font-mono text-[11px]">Появится после анализа. Без ключа — только квантовая рекомендация.</div></div>
+            </div>
+
+            <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">История вердиктов</div>
+                <div id="core-history" class="space-y-1 max-h-64 overflow-y-auto"></div>
+            </div>
+        </div>
+
     </div>
 
     <button id="pwa-install" class="hidden fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-5 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-2xl border border-emerald-400/40 transition">📲 Установить приложение</button>
@@ -1158,8 +1206,8 @@
         const tabActive = 'px-4 py-2 text-xs font-bold rounded-lg bg-emerald-600 text-white transition';
 
         function switchTab(tab) {
-            const views = { dashboard: 'dashboard-view', spreads: 'spreads-view', stats: 'stats-view', forecast: 'forecast-view' };
-            const btns = { dashboard: 'tab-btn-dashboard', spreads: 'tab-btn-spreads', stats: 'tab-btn-stats', forecast: 'tab-btn-fc' };
+            const views = { dashboard: 'dashboard-view', spreads: 'spreads-view', stats: 'stats-view', forecast: 'forecast-view', core: 'core-view' };
+            const btns = { dashboard: 'tab-btn-dashboard', spreads: 'tab-btn-spreads', stats: 'tab-btn-stats', forecast: 'tab-btn-fc', core: 'tab-btn-core' };
             Object.values(views).forEach(id => document.getElementById(id).classList.add('hidden'));
             Object.values(btns).forEach(id => document.getElementById(id).className = tabIdle);
             document.getElementById(views[tab]).classList.remove('hidden');
@@ -1167,6 +1215,7 @@
             if (tab === 'spreads') updateSpreads();
             if (tab === 'stats') loadStats();
             if (tab === 'forecast') loadForecast();
+            if (tab === 'core') loadCoreTab();
         }
 
         // ---- Statistics module ----
@@ -1355,6 +1404,159 @@
                 rh += `<div class="text-[10px] text-slate-500 mt-2">${rg.note || ''}</div>`;
                 document.getElementById('fc-regime').innerHTML = rh;
             } catch (e) { console.error('Forecast failed', e); }
+        }
+
+        // ---- Analytics Core ----
+        async function loadCoreTab() {
+            try {
+                const res = await fetch('/api/v2/core/settings');
+                const d = await res.json();
+                const s = d.settings || {};
+                document.getElementById('core-url').value = s.base_url || '';
+                document.getElementById('core-model').value = s.model || '';
+                document.getElementById('core-interval').value = s.interval_min || 0;
+                document.getElementById('core-autopaper').checked = !!s.auto_paper;
+                document.getElementById('core-key').placeholder = s.api_key ? `сохранён (${s.api_key})` : 'sk-...';
+            } catch (e) { console.error(e); }
+            loadCoreHistory();
+        }
+
+        async function saveCoreSettings() {
+            const body = JSON.stringify({
+                base_url: document.getElementById('core-url').value.trim(),
+                api_key: document.getElementById('core-key').value.trim(),
+                model: document.getElementById('core-model').value.trim(),
+                interval_min: parseInt(document.getElementById('core-interval').value) || 0,
+                auto_paper: document.getElementById('core-autopaper').checked,
+            });
+            const res = await fetch('/api/v2/core/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+            const d = await res.json();
+            alert('✅ Настройки ядра сохранены');
+            loadCoreTab();
+        }
+
+        async function runCoreAnalysis() {
+            const btn = document.getElementById('core-run');
+            btn.disabled = true;
+            btn.innerText = '⏳ Сбор данных и анализ...';
+            document.getElementById('core-verdict').innerHTML = '<div class="text-slate-500 font-mono text-[11px]">⏳ Собираю поверхность волатильности по 6 инструментам, считаю кандидатов, консультируюсь с ИИ...</div>';
+            try {
+                const res = await fetch('/api/v2/core/analyze', { method: 'POST' });
+                const d = await res.json();
+                if (!d.success) {
+                    document.getElementById('core-verdict').innerHTML = `<div class="text-rose-400 font-mono text-[11px]">Ошибка: ${d.error}</div>`;
+                    return;
+                }
+                renderCoreVerdict(d.verdict);
+                loadCoreHistory();
+            } catch (e) {
+                document.getElementById('core-verdict').innerHTML = `<div class="text-rose-400 font-mono text-[11px]">Ошибка: ${e.message}</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerText = '⚡ Проанализировать рынок';
+            }
+        }
+
+        function renderCoreVerdict(v) {
+            const inst = document.getElementById('core-instruments');
+            let ih = `<table class="w-full text-left text-[11px] font-mono text-slate-300">
+                <thead class="text-slate-500 border-b border-slate-700 uppercase">
+                    <tr><th class="py-1 pr-2">Инстр.</th><th class="py-1 pr-2 text-right">Спот</th><th class="py-1 pr-2">Режим</th><th class="py-1 pr-2 text-right">SMA200</th><th class="py-1 pr-2 text-right">ADX</th><th class="py-1 pr-2 text-right">RSI</th><th class="py-1 pr-2 text-right">IV</th><th class="py-1 pr-2 text-right">HV20</th><th class="py-1 pr-2 text-right">Rank</th><th class="py-1 pr-2 text-right">Skew</th><th class="py-1 text-right">Ликв.%</th></tr>
+                </thead><tbody>`;
+            (v.brief.instruments || []).forEach(i => {
+                const reg = i.regime === 'BULLISH' ? '<span class="text-emerald-400">бычий</span>' : i.regime === 'BEARISH' ? '<span class="text-rose-400">медвежий</span>' : '<span class="text-slate-400">боковик</span>';
+                ih += `<tr class="border-b border-slate-800">
+                    <td class="py-1 pr-2 text-slate-100 font-bold">${i.symbol}</td>
+                    <td class="py-1 pr-2 text-right">${i.spot ? i.spot.toLocaleString('ru-RU') : '—'}</td>
+                    <td class="py-1 pr-2">${reg}${i.above_sma200 ? ' <span class="text-[9px] text-emerald-500">↑200</span>' : (i.sma200 ? ' <span class="text-[9px] text-rose-500">↓200</span>' : '')}</td>
+                    <td class="py-1 pr-2 text-right">${i.sma200 ? i.sma200.toLocaleString('ru-RU') : '—'}</td>
+                    <td class="py-1 pr-2 text-right">${i.adx14 || '—'}</td>
+                    <td class="py-1 pr-2 text-right">${i.rsi14 || '—'}</td>
+                    <td class="py-1 pr-2 text-right">${i.iv_atm ? i.iv_atm + '%' : '—'}</td>
+                    <td class="py-1 pr-2 text-right">${i.hv20 ? i.hv20 + '%' : '—'}</td>
+                    <td class="py-1 pr-2 text-right">${i.iv_rank || '—'}</td>
+                    <td class="py-1 pr-2 text-right">${i.skew25 || '—'}</td>
+                    <td class="py-1 text-right ${i.liquidity_pct > 25 ? 'text-rose-400' : ''}">${i.liquidity_pct || '—'}</td>
+                </tr>`;
+            });
+            inst.innerHTML = ih + '</tbody></table>';
+
+            const cd = document.getElementById('core-candidates');
+            if (!v.brief.candidates || !v.brief.candidates.length) {
+                cd.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Кандидатов нет — текущие режимы не проходят фильтры базы знаний. Лучшее решение — не входить.</div>';
+            } else {
+                let ch = `<table class="w-full text-left text-[11px] font-mono text-slate-300">
+                    <thead class="text-slate-500 border-b border-slate-700 uppercase">
+                        <tr><th class="py-1 pr-2">Счёт</th><th class="py-1 pr-2">Инстр.</th><th class="py-1 pr-2">Конструкция</th><th class="py-1 pr-2 text-right">Страйки</th><th class="py-1 pr-2 text-right">Эксп.</th><th class="py-1 pr-2 text-right">Кредит</th><th class="py-1 pr-2 text-right">Макс.уб.</th><th class="py-1">Почему</th><th class="py-1"></th></tr>
+                    </thead><tbody>`;
+                v.brief.candidates.forEach((c, idx) => {
+                    const cls = c.score >= 70 ? 'text-emerald-400' : c.score >= 45 ? 'text-amber-400' : 'text-rose-400';
+                    ch += `<tr class="border-b border-slate-800">
+                        <td class="py-1 pr-2 font-bold ${cls}">${c.score}</td>
+                        <td class="py-1 pr-2 text-slate-100">${c.symbol}</td>
+                        <td class="py-1 pr-2">${c.display_name}</td>
+                        <td class="py-1 pr-2 text-right">${c.short_strike.toLocaleString('ru-RU')} / ${c.long_strike.toLocaleString('ru-RU')}</td>
+                        <td class="py-1 pr-2 text-right">${c.expiry} (${c.dte}д)</td>
+                        <td class="py-1 pr-2 text-right ${c.net_credit >= 0 ? 'text-sky-300' : 'text-amber-300'}">${c.net_credit}</td>
+                        <td class="py-1 pr-2 text-right text-rose-300">${c.max_loss.toLocaleString('ru-RU')}</td>
+                        <td class="py-1 text-slate-500 text-[10px]">${(c.reasons || []).slice(0, 2).join(' · ')}</td>
+                        <td class="py-1">${idx === 0 ? `<button onclick="candidateToBuilder('${c.symbol}','${c.strategy}','${c.expiry}')" class="px-2 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded text-[10px]">→ конструктор</button>` : ''}</td>
+                    </tr>`;
+                });
+                cd.innerHTML = ch + '</tbody></table>';
+            }
+
+            const vd = document.getElementById('core-verdict');
+            if (v.ai) {
+                const a = v.ai;
+                const badge = a.trade ? '<span class="text-emerald-400 font-bold">ВХОД ОБОСНОВАН</span>' : '<span class="text-rose-400 font-bold">ВХОД НЕ РЕКОМЕНДОВАН</span>';
+                vd.innerHTML = `<div class="space-y-1 text-[11px] font-mono">
+                    <div class="flex justify-between"><span>${badge} · уверенность ${Math.round((a.confidence || 0) * 100)}%</span><span class="text-slate-500">конструкция: ${a.construction || '—'} ${a.symbol || ''} ${a.expiry || ''}</span></div>
+                    ${a.entry_plan ? `<div><b class="text-slate-300">Вход:</b> <span class="text-slate-400">${a.entry_plan}</span></div>` : ''}
+                    ${a.management_plan ? `<div><b class="text-slate-300">Управление:</b> <span class="text-slate-400">${a.management_plan}</span></div>` : ''}
+                    ${a.hedge_plan ? `<div><b class="text-slate-300">Хедж:</b> <span class="text-slate-400">${a.hedge_plan}</span></div>` : ''}
+                    ${a.invalidation ? `<div><b class="text-slate-300">Инвалидация:</b> <span class="text-rose-300">${a.invalidation}</span></div>` : ''}
+                    <div class="text-slate-400 border-t border-slate-700 pt-1">${a.reasoning || ''}</div>
+                </div>`;
+            } else {
+                const top = v.quant_top;
+                vd.innerHTML = `<div class="text-[11px] font-mono space-y-1">
+                    <div class="text-amber-400">ИИ не подключён (${v.ai_error || 'нет ключа'}) — квантовая рекомендация:</div>
+                    ${top ? `<div class="text-slate-300">Лучший кандидат: <b>${top.symbol} ${top.display_name}</b> ${top.short_strike}/${top.long_strike}, эксп. ${top.expiry}, счёт ${top.score}/100.</div>` : '<div class="text-slate-400">Подходящих конструкций сейчас нет.</div>'}
+                </div>`;
+            }
+        }
+
+        function candidateToBuilder(symbol, strategy, expiry) {
+            switchTab('spreads');
+            document.getElementById('spr-symbol').value = symbol;
+            document.getElementById('spr-symbol').dispatchEvent(new Event('change'));
+            setTimeout(() => {
+                setSpreadType(strategy);
+                if (expiry) document.getElementById('spr-expiry').value = expiry;
+                buildSpreadPlan();
+            }, 800);
+        }
+
+        async function loadCoreHistory() {
+            try {
+                const res = await fetch('/api/v2/core/verdicts');
+                const d = await res.json();
+                const box = document.getElementById('core-history');
+                if (!d.verdicts || !d.verdicts.length) {
+                    box.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Вердиктов пока нет.</div>';
+                    return;
+                }
+                let html = '';
+                d.verdicts.slice(0, 20).forEach(v => {
+                    const t = v.ai && v.ai.trade ? '<span class="text-emerald-400">ИИ: вход</span>' : (v.ai ? '<span class="text-rose-400">ИИ: ждать</span>' : '<span class="text-slate-500">квант</span>');
+                    const top = v.quant_top ? `${v.quant_top.symbol} ${v.quant_top.display_name} (${v.quant_top.score})` : 'нет кандидатов';
+                    html += `<div class="text-[10px] font-mono text-slate-400 border-b border-slate-800 pb-1">
+                        ${new Date(v.at).toLocaleString('ru-RU')} · ${t} · топ: ${top}${v.paper_open ? ` · <span class="text-indigo-300">открыта бумага ${v.paper_open}</span>` : ''}
+                    </div>`;
+                });
+                box.innerHTML = html;
+            } catch (e) { console.error(e); }
         }
 
         function setSpreadType(t) {

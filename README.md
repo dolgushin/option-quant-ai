@@ -37,6 +37,16 @@
  при закрытии получает контекст входа — DTE, спот, историческую ATM IV,
  тренд-режим и IV-vs-HV.
 
+**🧠 Ядро** — аналитическое ядро с ИИ-консультантом: собирает полную картину
+ по 6 инструментам (Si, RI, CR, NG, SBER, SBERP) — тренд-контекст
+ (SMA20/50/200, ADX, RSI), поверхность волатильности (ATM IV, skew, term
+ structure, IV Rank, HV), ликвидность; генерирует кандидатов по фильтрам
+ базы знаний и консультируется с внешней нейросетью через OpenAI-совместимый
+ API (настраиваемый endpoint/ключ/модель). Вердикт: конструкция, страйки,
+ план входа/управления/хеджа, инвалидация. Автоскан по расписанию с
+ Telegram-уведомлениями, опциональные авто-бумажные сделки при согласии
+ кванта и ИИ. Финальное решение — за трейдером.
+
 ## Быстрый старт
 
 ```powershell
@@ -88,7 +98,7 @@ backend/
 | Портфель | `/api/v1/positions`, `/api/v1/positions/{close,hedge,sizing,expiry-risk,pnl-attribution}`, `/api/v1/portfolio`, `/api/v1/risk`, `/api/v1/risk/{heatmap,stress}` |
 | Опционы | `/api/v1/options/{skew,iv-rank,trend,recommendations,rolling-advice,gamma-step,exit-advice,vertical-spread}` |
 | Стратегии | `/api/v1/strategy/{build,ironcondor,parity,rotation}`, `/api/v1/backtest` |
-| Аналитика v2 | `/api/v2/stats/{overview,breakdown}`, `/api/v2/forecast` |
+| Аналитика v2 | `/api/v2/stats/{overview,breakdown}`, `/api/v2/forecast`, `/api/v2/core/{settings,analyze,verdicts}` |
 | Прочее | `/api/v1/trades`, `/api/v1/position/profile`, `/api/v1/copilot/ask`, `/api/v1/settings/{token,telegram}`, `/health` |
 
 ## Важные доменные факты
