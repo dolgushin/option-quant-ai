@@ -128,6 +128,7 @@ type spreadRecord struct {
 	TPR1            float64 `json:"tpr1"`                 // lower decision point (absolute spot)
 	TPR2            float64 `json:"tpr2"`                 // upper decision point (absolute spot)
 	RollAlpha       float64 `json:"roll_alpha"`           // share of realized profit risked on a profit roll
+	CentralStrike   float64 `json:"central_strike"`       // ATM strike of the series at open
 }
 
 var (
@@ -532,6 +533,7 @@ func spreadOpenHandler(w http.ResponseWriter, r *http.Request) {
 		TPRSigmaMult:    1,
 		SigmaAnnual:     0.30,
 		RollAlpha:       1,
+		CentralStrike:   plan.CentralStrike,
 	}
 	saveSpreadRecord(rec)
 
@@ -590,6 +592,7 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 			"profit_action":   s.ProfitAction,
 			"tpr_mode":        s.TPRMode,
 			"view_override":   s.ViewOverride,
+			"central_strike":  s.CentralStrike,
 		}
 
 		// Live telemetry from the linked position.
@@ -616,6 +619,9 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 				spot, _ := getSpotPrice(s.Symbol)
 				if spot > 0 {
 					item["spot"] = math.Round(spot*100) / 100
+					if strikes, _, cerr := optionChainFor(s.Symbol, s.Expiry); cerr == nil && len(strikes) > 0 {
+						item["atm_strike_now"] = nearestStrikeFromStrikes(strikes, spot)
+					}
 				}
 				legs := make([]map[string]interface{}, 0, len(p.Legs))
 				for _, l := range p.Legs {

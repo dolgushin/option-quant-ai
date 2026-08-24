@@ -1029,7 +1029,12 @@
                     <div id="spr-plan-title" class="font-bold text-indigo-300"></div>
                     <div id="spr-plan-legs" class="grid grid-cols-1 md:grid-cols-2 gap-1 text-slate-300"></div>
                     <div id="spr-plan-econ" class="flex flex-wrap gap-4 text-slate-300"></div>
-                    <div id="spr-advice" class="pt-3 border-t border-slate-700 space-y-1"></div>
+                    <div class="pt-3 border-t border-slate-700 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <div class="bg-slate-900/60 rounded-lg p-2 border border-slate-700">
+                            <canvas id="spr-payoff-__plan__" height="150"></canvas>
+                        </div>
+                        <div id="spr-advice" class="space-y-1"></div>
+                    </div>
                     <div class="pt-2 border-t border-slate-700">
                         <button onclick="openSpread()" class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition">✅ Открыть спред</button>
                         <span id="spr-plan-err" class="text-rose-400 ml-3"></span>
@@ -1214,6 +1219,7 @@
                     <span>1 пункт = <b>${(p.multiplier||1).toLocaleString('ru-RU')} ₽</b> × ${qty} лот. = <b>${((p.multiplier||1)*qty).toLocaleString('ru-RU')} ₽</b> на пункт</span>`;
                 document.getElementById('spr-plan-econ').innerHTML = econ;
 
+                drawPlanPayoff(p);
                 loadSpreadAdvice(symbol, currentSpreadType, expiry, qty);
             } catch (e) {
                 document.getElementById('spr-plan-title').innerText = '⚠ Ошибка сети';
@@ -1461,7 +1467,7 @@
             box.innerHTML = `
                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     <div>
-                        <div class="text-[10px] text-slate-400 uppercase mb-1 font-mono">Ноги позиции · экспирация ${s.expiry} · множитель ${s.multiplier || 1} × ${s.qty} контр.</div>
+                        <div class="text-[10px] text-slate-400 uppercase mb-1 font-mono">Ноги позиции · экспирация ${s.expiry} · множитель ${s.multiplier || 1} × ${s.qty} контр.${s.central_strike ? ` · <span class="text-cyan-300">центр. страйк ${s.central_strike.toLocaleString('ru-RU')}</span>` : ''}${s.atm_strike_now ? ` · ATM сейчас ${s.atm_strike_now.toLocaleString('ru-RU')}` : ''}</div>
                         <table class="w-full text-left text-[11px] font-mono text-slate-300">
                             <thead class="text-slate-500 border-b border-slate-700 uppercase">
                                 <tr><th class="py-1 pr-3">Сторона</th><th class="py-1 pr-3">Тикер</th><th class="py-1 pr-3">Тип</th><th class="py-1 pr-3 text-right">Страйк</th><th class="py-1 pr-3 text-right">Вход</th><th class="py-1 pr-3 text-right">Сейчас</th><th class="py-1 text-right">IV</th></tr>
@@ -1476,6 +1482,20 @@
                     </div>
                 </div>`;
             drawPayoffChart(s, scale);
+        }
+
+        // Payoff for the builder plan: adapt plan fields to the profile chart.
+        function drawPlanPayoff(p) {
+            const pseudo = {
+                id: '__plan__',
+                legs: (p.legs || []).map(l => ({ ...l, entry_price: l.price, quantity: p.qty || 1 })),
+                spot: p.spot_price,
+                central_strike: p.central_strike,
+                multiplier: p.multiplier || 1,
+                qty: p.qty || 1,
+                max_profit: p.max_profit,
+            };
+            drawPayoffChart(pseudo, (p.multiplier || 1) * (p.qty || 1));
         }
 
         function drawPayoffChart(s, scale) {
@@ -1521,6 +1541,17 @@
                     borderColor: '#f59e0b',
                     borderWidth: 1,
                     borderDash: [4, 4],
+                    pointRadius: 0,
+                    fill: false,
+                });
+            }
+            if (s.central_strike) {
+                const ys2 = pts.map(p => p.y);
+                datasets.push({
+                    label: 'центр. страйк',
+                    data: [{ x: s.central_strike, y: Math.min(...ys2) }, { x: s.central_strike, y: Math.max(...ys2) }],
+                    borderColor: '#22d3ee',
+                    borderWidth: 1.5,
                     pointRadius: 0,
                     fill: false,
                 });

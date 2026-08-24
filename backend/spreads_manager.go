@@ -980,6 +980,7 @@ func createFromPlan(plan *spreadPlan, src *spreadRecord, qty, rollCount int) (*s
 		RollAlpha:        src.RollAlpha,
 		AllowUndefined:   src.AllowUndefined,
 		ViewOverride:     src.ViewOverride,
+		CentralStrike:    plan.CentralStrike,
 	}
 	saveSpreadRecord(rec)
 	return &rec, nil
