@@ -826,7 +826,7 @@ func execSpreadAction(s *spreadRecord, run *managerRun) {
 			return
 		}
 		repricePosition(&pos)
-		quant.AddTrade(quant.Trade{
+		stopTrade := quant.Trade{
 			ID:          fmt.Sprintf("trd-%d", time.Now().Unix()),
 			Strategy:    pos.Strategy,
 			Symbol:      pos.Symbol,
@@ -836,7 +836,9 @@ func execSpreadAction(s *spreadRecord, run *managerRun) {
 			ExitValue:   pos.CurrentValue,
 			RealizedPnL: pos.PnL,
 			PnLPercent:  pos.PnLPercent,
-		})
+		}
+		enrichTradeContext(&stopTrade, s.Symbol, s.Expiry, s.EntrySpot)
+		quant.AddTrade(stopTrade)
 		s.Status = "CLOSED"
 		saveSpreadRecord(*s)
 		run.Live = s.Live
@@ -895,7 +897,7 @@ func closeSpreadPosition(s *spreadRecord) error {
 		return fmt.Errorf("linked position not found")
 	}
 	repricePosition(&pos)
-	quant.AddTrade(quant.Trade{
+	ctxTrade := quant.Trade{
 		ID:          fmt.Sprintf("trd-%d", time.Now().Unix()),
 		Strategy:    pos.Strategy,
 		Symbol:      pos.Symbol,
@@ -905,7 +907,9 @@ func closeSpreadPosition(s *spreadRecord) error {
 		ExitValue:   pos.CurrentValue,
 		RealizedPnL: pos.PnL,
 		PnLPercent:  pos.PnLPercent,
-	})
+	}
+	enrichTradeContext(&ctxTrade, s.Symbol, s.Expiry, s.EntrySpot)
+	quant.AddTrade(ctxTrade)
 	s.Status = "ROLLED"
 	saveSpreadRecord(*s)
 	return nil

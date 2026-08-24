@@ -63,6 +63,8 @@
         <nav class="flex gap-2 border-b border-slate-800 pb-3">
             <button id="tab-btn-dashboard" onclick="switchTab('dashboard')" class="px-4 py-2 text-xs font-bold rounded-lg bg-emerald-600 text-white transition">📊 Дашборд</button>
             <button id="tab-btn-spreads" onclick="switchTab('spreads')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🎯 Вертикальные спреды</button>
+            <button id="tab-btn-stats" onclick="switchTab('stats')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">📈 Статистика</button>
+            <button id="tab-btn-fc" onclick="switchTab('forecast')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🔮 Прогноз</button>
         </nav>
 
         <div id="dashboard-view" class="space-y-4 md:space-y-6">
@@ -1072,6 +1074,69 @@
             </div>
 
         </div><!-- /spreads-view -->
+
+        <!-- Statistics Module -->
+        <div id="stats-view" class="hidden space-y-4 md:space-y-6">
+            <div class="flex justify-between items-center">
+                <h2 class="text-lg font-semibold text-slate-200">📈 Статистика сделок</h2>
+                <span class="text-[10px] text-slate-500 font-mono">полный журнал, включая спреды</span>
+            </div>
+            <div id="st-kpis" class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3"></div>
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                    <div class="text-[11px] text-slate-400 font-mono mb-2">Кривая капитала и просадка, ₽</div>
+                    <canvas id="st-equity" height="180"></canvas>
+                </div>
+                <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                    <div class="text-[11px] text-slate-400 font-mono mb-2">P&L по месяцам, ₽</div>
+                    <canvas id="st-monthly" height="180"></canvas>
+                </div>
+                <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                    <div class="text-[11px] text-slate-400 font-mono mb-2">Распределение результатов сделки, ₽</div>
+                    <canvas id="st-hist" height="160"></canvas>
+                </div>
+                <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                    <div class="flex justify-between items-center mb-2">
+                        <div class="text-[11px] text-slate-400 font-mono">Разрез результатов</div>
+                        <select id="st-dim" onchange="loadStatsBreakdown(this.value)" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-[11px] text-white font-mono">
+                            <option value="strategy">по стратегии</option>
+                            <option value="symbol">по активу</option>
+                            <option value="trend">по тренду на входе</option>
+                            <option value="vol">по режиму волатильности</option>
+                            <option value="dte">по окну DTE</option>
+                        </select>
+                    </div>
+                    <div id="st-breakdown" class="overflow-x-auto"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Forecast Module -->
+        <div id="forecast-view" class="hidden space-y-4 md:space-y-6">
+            <div class="flex justify-between items-center">
+                <h2 class="text-lg font-semibold text-slate-200">🔮 Прогнозирование</h2>
+                <div class="flex items-center gap-2 font-mono text-[11px]">
+                    <span class="text-slate-400">горизонт, сделок</span>
+                    <input id="fc-horizon" type="number" min="10" max="2000" value="100" class="w-20 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white">
+                    <button onclick="loadForecast()" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg transition">Рассчитать</button>
+                </div>
+            </div>
+            <div id="fc-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
+            <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                <div class="text-[11px] text-slate-400 font-mono mb-2">Монте-Карло: траектории капитала (5–95 перцентили), ₽</div>
+                <canvas id="fc-fan" height="200"></canvas>
+            </div>
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                    <div class="text-[11px] text-slate-400 font-mono mb-2">Прогноз по стратегиям</div>
+                    <div id="fc-strategies" class="overflow-x-auto"></div>
+                </div>
+                <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                    <div id="fc-regime"></div>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <button id="pwa-install" class="hidden fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-5 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-2xl border border-emerald-400/40 transition">📲 Установить приложение</button>
@@ -1089,23 +1154,207 @@
         let currentSpreadType = 'bull_put';
         let currentSpreadPlan = null;
 
+        const tabIdle = 'px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition';
+        const tabActive = 'px-4 py-2 text-xs font-bold rounded-lg bg-emerald-600 text-white transition';
+
         function switchTab(tab) {
-            const dash = document.getElementById('dashboard-view');
-            const spr = document.getElementById('spreads-view');
-            const bDash = document.getElementById('tab-btn-dashboard');
-            const bSpr = document.getElementById('tab-btn-spreads');
-            if (tab === 'spreads') {
-                dash.classList.add('hidden');
-                spr.classList.remove('hidden');
-                bDash.className = 'px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition';
-                bSpr.className = 'px-4 py-2 text-xs font-bold rounded-lg bg-emerald-600 text-white transition';
-                updateSpreads();
-            } else {
-                spr.classList.add('hidden');
-                dash.classList.remove('hidden');
-                bSpr.className = 'px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition';
-                bDash.className = 'px-4 py-2 text-xs font-bold rounded-lg bg-emerald-600 text-white transition';
-            }
+            const views = { dashboard: 'dashboard-view', spreads: 'spreads-view', stats: 'stats-view', forecast: 'forecast-view' };
+            const btns = { dashboard: 'tab-btn-dashboard', spreads: 'tab-btn-spreads', stats: 'tab-btn-stats', forecast: 'tab-btn-fc' };
+            Object.values(views).forEach(id => document.getElementById(id).classList.add('hidden'));
+            Object.values(btns).forEach(id => document.getElementById(id).className = tabIdle);
+            document.getElementById(views[tab]).classList.remove('hidden');
+            document.getElementById(btns[tab]).className = tabActive;
+            if (tab === 'spreads') updateSpreads();
+            if (tab === 'stats') loadStats();
+            if (tab === 'forecast') loadForecast();
+        }
+
+        // ---- Statistics module ----
+        const statsCharts = {};
+        let currentStatsDim = 'strategy';
+
+        function kpiCard(title, value, cls) {
+            return `<div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700">
+                <div class="text-[10px] text-slate-400 uppercase font-mono">${title}</div>
+                <div class="text-lg font-bold font-mono ${cls || 'text-slate-100'}">${value}</div>
+            </div>`;
+        }
+
+        function pnlCls(v) { return v > 0 ? 'text-emerald-400' : v < 0 ? 'text-rose-400' : 'text-slate-300'; }
+
+        async function loadStats() {
+            try {
+                const res = await fetch('/api/v2/stats/overview');
+                const o = await res.json();
+                const k = document.getElementById('st-kpis');
+                if (!o.trades) {
+                    k.innerHTML = '<div class="col-span-full text-center text-slate-500 py-6 font-mono">Сделок пока нет — статистика появится после первых закрытых позиций.</div>';
+                    return;
+                }
+                k.innerHTML =
+                    kpiCard('Сделок', o.trades) +
+                    kpiCard('Net P&L ₽', (o.net_pnl >= 0 ? '+' : '') + o.net_pnl.toLocaleString('ru-RU'), pnlCls(o.net_pnl)) +
+                    kpiCard('Win rate', Math.round(o.win_rate * 100) + '%', o.win_rate >= 0.5 ? 'text-emerald-400' : 'text-amber-400') +
+                    kpiCard('Profit factor', o.profit_factor, o.profit_factor >= 1 ? 'text-emerald-400' : 'text-rose-400') +
+                    kpiCard('Ожидание/сделка ₽', (o.expectancy >= 0 ? '+' : '') + o.expectancy, pnlCls(o.expectancy)) +
+                    kpiCard('Max просадка ₽', o.max_drawdown.toLocaleString('ru-RU'), 'text-rose-400') +
+                    kpiCard('Серии W/L', `${o.max_win_streak} / ${o.max_loss_streak}`);
+                drawStatsEquity(o);
+                drawStatsMonthly(o);
+                drawStatsHist(o);
+                loadStatsBreakdown(currentStatsDim);
+            } catch (e) { console.error('Stats failed', e); }
+        }
+
+        function statsLine(canvasId, labels, datasets, bar) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas || typeof Chart === 'undefined') return;
+            const ctx = canvas.getContext('2d');
+            if (statsCharts[canvasId]) statsCharts[canvasId].destroy();
+            statsCharts[canvasId] = new Chart(ctx, {
+                type: bar ? 'bar' : 'line',
+                data: { labels, datasets },
+                options: {
+                    animation: false,
+                    scales: {
+                        x: { ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 10 }, grid: { color: '#1e293b' } },
+                        y: { ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 7 }, grid: { color: '#1e293b' } },
+                    },
+                    plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 9 }, boxWidth: 12 } } },
+                },
+            });
+        }
+
+        function drawStatsEquity(o) {
+            statsLine('st-equity', o.equity.map(p => p.date), [
+                { label: 'Капитал', data: o.equity.map(p => p.equity), borderColor: '#34d399', borderWidth: 2, pointRadius: 0, fill: false },
+                { label: 'Просадка', data: o.equity.map(p => p.drawdown), borderColor: '#fb7185', borderWidth: 1, pointRadius: 0, fill: false },
+            ]);
+        }
+
+        function drawStatsMonthly(o) {
+            statsLine('st-monthly', o.monthly.map(m => m.month), [
+                { label: 'P&L, ₽', data: o.monthly.map(m => m.pnl), backgroundColor: o.monthly.map(m => m.pnl >= 0 ? 'rgba(52,211,153,.7)' : 'rgba(251,113,133,.7)') },
+            ], true);
+        }
+
+        function drawStatsHist(o) {
+            statsLine('st-hist', o.histogram.map(b => b.from.toFixed(0)), [
+                { label: 'Сделок', data: o.histogram.map(b => b.count), backgroundColor: 'rgba(129,140,248,.7)' },
+            ], true);
+        }
+
+        async function loadStatsBreakdown(dim) {
+            currentStatsDim = dim;
+            try {
+                const res = await fetch(`/api/v2/stats/breakdown?dim=${dim}`);
+                const d = await res.json();
+                const box = document.getElementById('st-breakdown');
+                if (!d.rows || !d.rows.length) {
+                    box.innerHTML = '<div class="text-slate-500 text-center py-4 font-mono text-[11px]">Нет данных</div>';
+                    return;
+                }
+                let html = `<table class="w-full text-left text-[11px] font-mono text-slate-300">
+                    <thead class="text-slate-500 border-b border-slate-700 uppercase">
+                        <tr><th class="py-1 pr-2">Ключ</th><th class="py-1 pr-2 text-right">Сделок</th><th class="py-1 pr-2 text-right">Net P&L</th><th class="py-1 pr-2 text-right">Win%</th><th class="py-1 pr-2 text-right">Avg</th><th class="py-1 pr-2 text-right">PF</th><th class="py-1 pr-2 text-right">Best</th><th class="py-1 text-right">Worst</th></tr>
+                    </thead><tbody>`;
+                d.rows.forEach(r => {
+                    html += `<tr class="border-b border-slate-800">
+                        <td class="py-1 pr-2 text-slate-200">${r.key}</td>
+                        <td class="py-1 pr-2 text-right">${r.trades}</td>
+                        <td class="py-1 pr-2 text-right ${pnlCls(r.net_pnl)}">${r.net_pnl >= 0 ? '+' : ''}${r.net_pnl.toLocaleString('ru-RU')}</td>
+                        <td class="py-1 pr-2 text-right">${Math.round(r.win_rate * 100)}%</td>
+                        <td class="py-1 pr-2 text-right ${pnlCls(r.avg_pnl)}">${r.avg_pnl}</td>
+                        <td class="py-1 pr-2 text-right">${r.profit_factor}</td>
+                        <td class="py-1 pr-2 text-right text-emerald-400">${r.best.toLocaleString('ru-RU')}</td>
+                        <td class="py-1 text-right text-rose-400">${r.worst.toLocaleString('ru-RU')}</td>
+                    </tr>`;
+                });
+                html += '</tbody></table>';
+                box.innerHTML = html;
+            } catch (e) { console.error('Breakdown failed', e); }
+        }
+
+        // ---- Forecast module ----
+        let fcChart = null;
+
+        async function loadForecast() {
+            const horizon = parseInt(document.getElementById('fc-horizon').value) || 100;
+            try {
+                const res = await fetch(`/api/v2/forecast?horizon=${horizon}&runs=3000`);
+                const d = await res.json();
+                const k = document.getElementById('fc-kpis');
+                if (!d.fan || !d.fan.length) {
+                    k.innerHTML = `<div class="col-span-full text-center text-slate-500 py-6 font-mono">${d.note || 'Нет данных для прогноза'}</div>`;
+                    document.getElementById('fc-strategies').innerHTML = '';
+                    document.getElementById('fc-regime').innerHTML = '';
+                    if (fcChart) { fcChart.destroy(); fcChart = null; }
+                    return;
+                }
+                const last = d.fan[d.fan.length - 1];
+                k.innerHTML =
+                    kpiCard('Горизонт', `${d.horizon} сд.`) +
+                    kpiCard('Вероятность плюса', Math.round(d.prob_profit * 100) + '%', d.prob_profit >= 0.5 ? 'text-emerald-400' : 'text-rose-400') +
+                    kpiCard('Медиана P&L ₽', (last.p50 >= 0 ? '+' : '') + last.p50.toLocaleString('ru-RU'), pnlCls(last.p50)) +
+                    kpiCard('Коридор 5–95%', `${last.p5.toLocaleString('ru-RU')} … ${last.p95.toLocaleString('ru-RU')}`, 'text-slate-300');
+
+                const canvas = document.getElementById('fc-fan');
+                if (fcChart) fcChart.destroy();
+                const mk = (label, key, color, width, dash) => ({
+                    label, data: d.fan.map(p => ({ x: p.step, y: p[key] })), borderColor: color, borderWidth: width || 2, borderDash: dash || [], pointRadius: 0, fill: false,
+                });
+                fcChart = new Chart(canvas.getContext('2d'), {
+                    type: 'line',
+                    data: { datasets: [mk('P95', 'p95', 'rgba(52,211,153,.5)', 1), mk('P75', 'p75', 'rgba(52,211,153,.8)', 1), mk('Медиана', 'p50', '#e2e8f0', 2), mk('P25', 'p25', 'rgba(251,113,133,.8)', 1), mk('P5', 'p5', 'rgba(251,113,133,.5)', 1)] },
+                    options: {
+                        animation: false,
+                        scales: {
+                            x: { type: 'linear', title: { display: true, text: 'Сделка №', color: '#64748b', font: { size: 9 } }, ticks: { color: '#94a3b8', font: { size: 9 } }, grid: { color: '#1e293b' } },
+                            y: { ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 8 }, grid: { color: '#1e293b' } },
+                        },
+                        plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 9 }, boxWidth: 12 } } },
+                    },
+                });
+
+                const g3 = v => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2));
+                let sh = `<table class="w-full text-left text-[11px] font-mono text-slate-300">
+                    <thead class="text-slate-500 border-b border-slate-700 uppercase">
+                        <tr><th class="py-1 pr-2">Стратегия</th><th class="py-1 pr-2 text-right">Сделок</th><th class="py-1 pr-2 text-right">Net</th><th class="py-1 pr-2 text-right">Avg</th><th class="py-1 pr-2 text-right">Win%</th><th class="py-1 pr-2 text-right">t</th><th class="py-1">Вывод</th></tr>
+                    </thead><tbody>`;
+                (d.strategies || []).forEach(s => {
+                    sh += `<tr class="border-b border-slate-800">
+                        <td class="py-1 pr-2 text-slate-200">${s.key}</td>
+                        <td class="py-1 pr-2 text-right">${s.trades}</td>
+                        <td class="py-1 pr-2 text-right ${pnlCls(s.net_pnl)}">${s.net_pnl >= 0 ? '+' : ''}${s.net_pnl.toLocaleString('ru-RU')}</td>
+                        <td class="py-1 pr-2 text-right ${pnlCls(s.avg_pnl)}">${g3(s.avg_pnl)}</td>
+                        <td class="py-1 pr-2 text-right">${Math.round(s.win_rate * 100)}%</td>
+                        <td class="py-1 pr-2 text-right ${Math.abs(s.t_stat) > 2 ? (s.t_stat > 0 ? 'text-emerald-400' : 'text-rose-400') : 'text-slate-500'}">${s.t_stat}</td>
+                        <td class="py-1 text-slate-400">${s.forecast}</td>
+                    </tr>`;
+                });
+                document.getElementById('fc-strategies').innerHTML = sh + '</tbody></table>';
+
+                const rg = d.current_regime || {};
+                let rh = `<div class="text-[11px] text-slate-400 font-mono mb-2">Сейчас: тренд <b class="text-slate-200">${rg.trend || '—'}</b>${rg.vol ? ` · вола <b class="text-slate-200">${rg.vol}</b>` : ''}</div>`;
+                if (rg.rows && rg.rows.length) {
+                    rh += `<table class="w-full text-left text-[11px] font-mono text-slate-300">
+                        <thead class="text-slate-500 border-b border-slate-700 uppercase">
+                            <tr><th class="py-1 pr-2">В этих условиях</th><th class="py-1 pr-2 text-right">Сделок</th><th class="py-1 pr-2 text-right">Net</th><th class="py-1 pr-2 text-right">Avg</th><th class="py-1 text-right">Win%</th></tr>
+                        </thead><tbody>`;
+                    rg.rows.forEach(r => {
+                        rh += `<tr class="border-b border-slate-800">
+                            <td class="py-1 pr-2 text-slate-200">${r.key}</td>
+                            <td class="py-1 pr-2 text-right">${r.trades}</td>
+                            <td class="py-1 pr-2 text-right ${pnlCls(r.net_pnl)}">${r.net_pnl >= 0 ? '+' : ''}${r.net_pnl.toLocaleString('ru-RU')}</td>
+                            <td class="py-1 pr-2 text-right ${pnlCls(r.avg_pnl)}">${g3(r.avg_pnl)}</td>
+                            <td class="py-1 text-right">${Math.round(r.win_rate * 100)}%</td>
+                        </tr>`;
+                    });
+                    rh += '</tbody></table>';
+                }
+                rh += `<div class="text-[10px] text-slate-500 mt-2">${rg.note || ''}</div>`;
+                document.getElementById('fc-regime').innerHTML = rh;
+            } catch (e) { console.error('Forecast failed', e); }
         }
 
         function setSpreadType(t) {

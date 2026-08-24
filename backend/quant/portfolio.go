@@ -49,6 +49,14 @@ type Trade struct {
 	ExitValue   float64   `json:"exit_value"`
 	RealizedPnL float64   `json:"realized_pnl"`
 	PnLPercent  float64   `json:"pnl_percent"`
+	// Market context at entry, filled by the trading layer so the statistics
+	// and forecast modules can bucket trades by conditions.
+	DTEAtEntry   int     `json:"dte_at_entry,omitempty"`
+	EntrySpot    float64 `json:"entry_spot,omitempty"`
+	ExitSpot     float64 `json:"exit_spot,omitempty"`
+	IvAtEntry    float64 `json:"iv_at_entry,omitempty"`    // percent
+	TrendAtEntry string  `json:"trend_at_entry,omitempty"` // BULLISH / BEARISH / SIDEWAYS
+	VolRegime    string  `json:"vol_regime,omitempty"`     // IV>HV / IV<HV / нейтрально
 }
 
 // Stats aggregates closed-trade statistics.

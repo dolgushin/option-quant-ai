@@ -1722,6 +1722,90 @@ func positionsHandler(w http.ResponseWriter, r *http.Request) {
 		"stats":     stats,
 	})
 }
+// closesUpTo returns daily closes of the underlying ending at `until`
+// (entry context for closed trades).
+func closesUpTo(symbol string, until time.Time, days int) []float64 {
+	from := until.AddDate(0, 0, -days).Format("2006-01-02")
+	till := until.Format("2006-01-02")
+	var closes []float64
+	if _, isEquity := equityOptions[symbol]; isEquity {
+		client := &http.Client{Timeout: 10 * time.Second}
+		url := fmt.Sprintf("http://iss.moex.com/iss/history/engines/stock/markets/shares/boards/TQBR/securities/%s.json?iss.meta=off&iss.only=history&history.columns=TRADEDATE,CLOSE&from=%s&till=%s", symbol, from, till)
+		if resp, err := client.Get(url); err == nil {
+			var data struct {
+				History struct {
+					Data [][]interface{} `json:"data"`
+				} `json:"history"`
+			}
+			err = json.NewDecoder(resp.Body).Decode(&data)
+			resp.Body.Close()
+			if err == nil {
+				for _, row := range data.History.Data {
+					if len(row) >= 2 {
+						if cl, _ := row[1].(float64); cl > 0 {
+							closes = append(closes, cl)
+						}
+					}
+				}
+			}
+		}
+		return closes
+	}
+	code := selectedSeriesFor(symbol)
+	if code == "" || isSyntheticSeriesCode(code) {
+		code = resolveNearestFuturesCode(symbol)
+	}
+	if code == "" {
+		return nil
+	}
+	if candles, err := fetchFutureHistory(code, from, till); err == nil {
+		for _, c := range candles {
+			if c.Close > 0 {
+				closes = append(closes, c.Close)
+			}
+		}
+	}
+	return closes
+}
+
+// enrichTradeContext fills the market-context fields of a closed trade so the
+// statistics and forecast modules can bucket results by entry conditions:
+// DTE at entry, entry/exit spot, historical ATM IV at the entry date, trend
+// regime and IV-vs-HV vol regime measured on history up to the entry.
+func enrichTradeContext(t *quant.Trade, symbol, expiry string, entrySpot float64) {
+	entry := t.OpenedAt
+	if entry.IsZero() || entry.After(time.Now()) {
+		entry = time.Now()
+	}
+	t.DTEAtEntry = dteInDays(expiry, entry)
+	if entrySpot > 0 {
+		t.EntrySpot = math.Round(entrySpot*100) / 100
+	}
+	if s, err := getSpotPrice(symbol); err == nil && s > 0 {
+		t.ExitSpot = math.Round(s*100) / 100
+	}
+	asset := issAssetCode(symbol)
+	if iv := historicalATMIV(asset, entry.Format("2006-01-02")); iv > 0 {
+		t.IvAtEntry = math.Round(iv*10000) / 100
+	}
+	if closes := closesUpTo(symbol, entry, 95); len(closes) >= 55 {
+		if ts := computeTrendStats(closes); ts.Regime != "" {
+			t.TrendAtEntry = ts.Regime
+		}
+		if hv := hvFromCloses(closes[len(closes)-21:], 20); hv > 0 && t.IvAtEntry > 0 {
+			edge := (t.IvAtEntry/100 - hv) * 100
+			switch {
+			case edge >= 5:
+				t.VolRegime = "IV>HV"
+			case edge <= -5:
+				t.VolRegime = "IV<HV"
+			default:
+				t.VolRegime = "нейтрально"
+			}
+		}
+	}
+}
+
 func portfolioHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -1996,6 +2080,7 @@ func closePositionHandler(w http.ResponseWriter, r *http.Request) {
 		RealizedPnL: pos.PnL,
 		PnLPercent:  pos.PnLPercent,
 	}
+	enrichTradeContext(&trade, pos.Symbol, pos.Expiry, 0)
 	quant.AddTrade(trade)
 
 	portfolio := quant.GetPortfolio()
@@ -3275,6 +3360,9 @@ func main() {
 
 	// Vertical Spreads console
 	http.HandleFunc("/api/v1/spreads/plan", spreadPlanHandler)
+	http.HandleFunc("/api/v2/stats/overview", statsOverviewHandler)
+	http.HandleFunc("/api/v2/stats/breakdown", statsBreakdownHandler)
+	http.HandleFunc("/api/v2/forecast", forecastHandler)
 	http.HandleFunc("/api/v1/spreads/analytics", spreadAnalyticsHandler)
 	http.HandleFunc("/api/v1/spreads/advice", spreadAdviceHandler)
 	http.HandleFunc("/api/v1/spreads/open", spreadOpenHandler)
