@@ -23,9 +23,8 @@ func TestDTEInDays(t *testing.T) {
 
 func TestContractMultiplier(t *testing.T) {
 	cases := map[string]float64{
-		"Si":   1000,
-		"RI":   100,
-		"CR":   1000,
+		"Si":   1,    // 1 premium point = 1 ₽ (ISS: MINSTEP 1, STEPPRICE 1)
+		"CR":   1000, // MINSTEP 0.001, STEPPRICE 1
 		"BTC":  1,
 		"XXXX": 1,
 	}
@@ -33,6 +32,10 @@ func TestContractMultiplier(t *testing.T) {
 		if got := contractMultiplier(sym); got != want {
 			t.Fatalf("contractMultiplier(%q)=%v, want %v", sym, got, want)
 		}
+	}
+	// RI floats with USD/RUB: live value ≈ 1.66 ₽/point.
+	if ri := contractMultiplier("RI"); ri <= 0 || ri > 10 {
+		t.Fatalf("contractMultiplier(RI)=%v out of sane range", ri)
 	}
 }
 

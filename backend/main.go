@@ -583,23 +583,95 @@ func cachedOptionQuote(secid string) (last, bid, offer float64) {
 	return last, bid, offer
 }
 
-// contractMultiplier returns the point value (₽ per 1 price point) for a FORTS
-// contract symbol. Option premiums are quoted in the same points as the futures.
-// For premium options on shares (SBER/SBERP) the multiplier is the contract
-// lot (100 shares per contract); the premium is quoted per share.
+// contractMultiplier returns the point value (₽ per 1 price point) for a
+// FORTS contract symbol. Option premiums are quoted in the same points as the
+// futures. Values verified against MOEX ISS (STEPPRICE/MINSTEP and trade
+// history VALUE/VOLUME):
+//   - Si: 1 point = 1 ₽ (e.g. Si84000BI6: MINSTEP 1, STEPPRICE 1);
+//   - RI: 1 point = 0.02 USD ≈ 1.66 ₽ — floats with USD/RUB, fetched live
+//     from any RI option spec (STEPPRICE/MINSTEP, e.g. 16.584/10);
+//   - CR: 1 point = 1000 ₽ (MINSTEP 0.001, STEPPRICE 1);
+//   - SBER/SBERP premium options: lot 100 shares, premium quoted per share.
 func contractMultiplier(symbol string) float64 {
 	switch symbol {
-	case "Si":
-		return 1000.0
 	case "RI":
-		return 100.0
+		if v := riPointValue(); v > 0 {
+			return v
+		}
+		return 1.66
 	case "CR":
 		return 1000.0
 	case "SBER", "SBERP":
 		return 100.0
-	default:
+	default: // Si and everything else: premium point = 1 ₽
 		return 1.0
 	}
+}
+
+var (
+	riPointValCache   float64
+	riPointValTime    time.Time
+	riPointValMu      sync.Mutex
+)
+
+// riPointValue resolves the RI point value in rubles from the STEPPRICE and
+// MINSTEP of a live RI (RTS) option, cached for an hour.
+func riPointValue() float64 {
+	riPointValMu.Lock()
+	defer riPointValMu.Unlock()
+	if riPointValCache > 0 && time.Since(riPointValTime) < time.Hour {
+		return riPointValCache
+	}
+	opts, err := moexOptionContracts()
+	if err != nil {
+		return 0
+	}
+	secid := ""
+	for _, o := range opts {
+		if strings.EqualFold(o.AssetCode, "RTS") && o.PrevPrice > 0 {
+			secid = o.SecID
+			break
+		}
+	}
+	if secid == "" {
+		return 0
+	}
+	resp, err := http.Get("http://iss.moex.com/iss/engines/futures/markets/options/securities/" + secid + ".json?iss.meta=off")
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	var data struct {
+		Securities struct {
+			Columns []string        `json:"columns"`
+			Data    [][]interface{} `json:"data"`
+		} `json:"securities"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil || len(data.Securities.Data) == 0 {
+		return 0
+	}
+	col := func(name string) int {
+		for i, c := range data.Securities.Columns {
+			if c == name {
+				return i
+			}
+		}
+		return -1
+	}
+	iMin, iStep := col("MINSTEP"), col("STEPPRICE")
+	if iMin < 0 || iStep < 0 {
+		return 0
+	}
+	row := data.Securities.Data[0]
+	minStep, _ := row[iMin].(float64)
+	stepPrice, _ := row[iStep].(float64)
+	if minStep <= 0 || stepPrice <= 0 {
+		return 0
+	}
+	v := stepPrice / minStep
+	riPointValCache = v
+	riPointValTime = time.Now()
+	return v
 }
 
 // contractExpiry returns the option expiry date (YYYY-MM-DD) for a symbol by

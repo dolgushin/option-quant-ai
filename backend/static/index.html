@@ -1202,7 +1202,8 @@
                     <span>Макс. убыток: <b class="text-rose-300">${p.max_loss.toLocaleString('ru-RU')}₽</b></span>
                     <span>ГО: <b>${p.margin_short.toLocaleString('ru-RU')}₽</b></span>
                     <span>Θ/контракт: <b>${p.theta_per_contract}</b></span>
-                    <span>Δ/контракт: <b>${p.delta_per_contract}</b></span>`;
+                    <span>Δ/контракт: <b>${p.delta_per_contract}</b></span>
+                    <span>1 пункт = <b>${(p.multiplier||1).toLocaleString('ru-RU')} ₽</b> × ${qty} лот. = <b>${((p.multiplier||1)*qty).toLocaleString('ru-RU')} ₽</b> на пункт</span>`;
                 document.getElementById('spr-plan-econ').innerHTML = econ;
 
                 loadSpreadAdvice(symbol, currentSpreadType, expiry, qty);

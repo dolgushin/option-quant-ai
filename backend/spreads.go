@@ -80,6 +80,7 @@ type spreadPlan struct {
 	ThetaPerCtr   float64     `json:"theta_per_contract"`
 	DeltaPerCtr   float64     `json:"delta_per_contract"`
 	CentralStrike float64     `json:"central_strike"`
+	Multiplier    float64     `json:"multiplier"`
 	IsDebit       bool        `json:"is_debit"`
 }
 
@@ -405,6 +406,7 @@ func buildVerticalSpread(symbol, spreadType, expiry string, qty int) (*spreadPla
 	plan.ThetaPerCtr = math.Round(thetaTotal*100) / 100
 	plan.DeltaPerCtr = math.Round(deltaTotal*100) / 100
 	plan.CentralStrike = atmStrike
+	plan.Multiplier = contractMultiplier(symbol)
 	return plan, nil
 }
 
