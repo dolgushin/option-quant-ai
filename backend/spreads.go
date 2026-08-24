@@ -336,6 +336,11 @@ func buildVerticalSpread(symbol, spreadType, expiry string, qty int) (*spreadPla
 		if last <= 0 {
 			last = opt.PrevPrice
 		}
+		if last <= 0 {
+			// Opening or rolling into a leg with no market price would record
+			// entry=0 and corrupt the P&L — refuse instead.
+			return nil, fmt.Errorf("нет рыночной цены для %s — операция отменена", opt.SecID)
+		}
 		iv := quant.ImpliedVolatility(sp.isCall, last, spot, strike, t, rRate)
 		if iv <= 0 {
 			iv = 0.30
@@ -634,6 +639,7 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 						"quantity":      l.Quantity,
 						"entry_price":   math.Round(l.EntryPrice*100) / 100,
 						"current_price": math.Round(l.CurrentPrice*100) / 100,
+						"entry_zero":    l.Kind == "OPTION" && l.EntryPrice <= 0,
 					}
 					if l.Kind == "OPTION" && spot > 0 && l.CurrentPrice > 0 {
 						if iv := quant.ImpliedVolatility(l.IsCall, l.CurrentPrice, spot, l.Strike, tYears, 0.16); iv > 0 {

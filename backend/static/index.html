@@ -1449,9 +1449,10 @@
 
             // Net cross-check: legs must reconcile with the table numbers.
             const mult = s.multiplier || 1;
-            let entryNet = 0, curNet = 0;
+            let entryNet = 0, curNet = 0, entryBroken = false;
             (s.legs || []).forEach(l => {
                 if (l.kind === 'FUTURES') return;
+                if (l.entry_zero) { entryBroken = true; return; }
                 const dir = l.side === 'SELL' ? -1 : 1;
                 entryNet += dir * (l.entry_price || 0) * (l.quantity || 1);
                 curNet += dir * (l.current_price || 0) * (l.quantity || 1);
@@ -1460,9 +1461,10 @@
             curNet = Math.round(curNet * mult * 100) / 100;
             const netPnl = Math.round((curNet - entryNet) * 100) / 100;
             const netLine = `<div class="text-[11px] font-mono text-slate-300 mt-2 bg-slate-900/60 border border-slate-700 rounded p-2">
+                ${entryBroken ? '<div class="text-amber-400 mb-1">⚠ У ноги не зафиксирован вход (0) — P&L позиции недостоверен, закройте и переоткройте спред.</div>' : ''}
                 Нетто: вход ${entryNet.toLocaleString('ru-RU')} ₽ → сейчас ${curNet.toLocaleString('ru-RU')} ₽ ·
                 P&L <b class="${netPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${netPnl >= 0 ? '+' : ''}${netPnl.toLocaleString('ru-RU')} ₽</b>
-                ${s.max_profit ? ` · ${(Math.round(netPnl / (s.max_profit * mult * (s.qty || 1)) * 1000) / 10)}% макс. прибыли` : ''}
+                ${!entryBroken && s.max_profit ? ` · ${(Math.round(netPnl / (s.max_profit * mult * (s.qty || 1)) * 1000) / 10)}% макс. прибыли` : ''}
             </div>`;
 
             box.innerHTML = `
@@ -1560,6 +1562,7 @@
                 const dirCls = l.side === 'SELL' ? 'text-rose-300' : 'text-emerald-300';
                 const kindTag = l.kind === 'FUTURES' ? 'хедж' : (l.is_call ? 'CALL' : 'PUT');
                 const q = srcById[l.secid] || {};
+                const entryCell = q.entry_zero ? '<span class="text-amber-400" title="Вход не зафиксирован при открытии/ролле">⚠ 0</span>' : g2(l.entry);
                 const srcTag = q.quote_src === 'mid' ? 'стакан' : q.quote_src === 'last' ? 'сделка' : q.quote_src === 'settle' ? 'клиринг' : '';
                 const qBadge = srcTag ? `<div class="text-[10px] ${q.quote_stale ? 'text-amber-400' : 'text-slate-500'}">${srcTag}${q.quote_time ? ' ' + q.quote_time.slice(0, 5) : ''}${q.quote_stale ? ' ⚠' : ''}</div>` : '';
                 legRows += `<tr class="border-b border-slate-800">
@@ -1567,7 +1570,7 @@
                     <td class="py-1 pr-2">${l.secid || '—'}</td>
                     <td class="py-1 pr-2 text-slate-400">${kindTag}</td>
                     <td class="py-1 pr-2 text-right">${l.strike != null ? l.strike.toLocaleString('ru-RU') : '—'}</td>
-                    <td class="py-1 pr-2 text-right">${g2(l.entry)}</td>
+                    <td class="py-1 pr-2 text-right">${entryCell}</td>
                     <td class="py-1 pr-2 text-right">${g2(l.current)}${qBadge}</td>
                     <td class="py-1 pr-2 text-right text-slate-400">${g2(l.theo)}</td>
                     <td class="py-1 pr-2 text-right ${l.pnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}">${l.pnl >= 0 ? '+' : ''}${g2(l.pnl)}</td>

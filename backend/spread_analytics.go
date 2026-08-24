@@ -94,14 +94,21 @@ func buildSpreadAnalytics(symbol, expiry string, spot float64, dte int, mult flo
 			continue
 		}
 		iv := quant.ImpliedVolatility(l.IsCall, l.Current, spot, l.Strike, t, r)
-		if iv <= 0 {
+		shown := iv
+		if iv < 0.02 {
+			// Price below intrinsic (stale/crossed quote) — inversion is
+			// meaningless; keep greeks on a 30% proxy and hide the IV.
 			iv = 0.30
+			shown = 0
 		}
 		if iv > 3 {
 			iv = 3
+			shown = 300
 		}
 		ivs[i] = iv
-		l.Iv = math.Round(iv*1000) / 10
+		if shown > 0 {
+			l.Iv = math.Round(shown*1000) / 10
+		}
 	}
 
 	// Per-leg statics at the current spot (greeks per underlying unit,
