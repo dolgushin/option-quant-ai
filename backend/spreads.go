@@ -676,6 +676,26 @@ func quoteIsStale(updated, src string) bool {
 	return now.Sub(t) > 30*time.Minute || now.Sub(t) < -time.Hour
 }
 
+// isSpreadPositionID reports whether the position belongs to a managed
+// vertical spread. Spread positions are shown on the Spreads tab only and are
+// hidden from the central dashboard lists.
+func isSpreadPositionID(id string) bool {
+	spreadsMu.Lock()
+	defer spreadsMu.Unlock()
+	for _, s := range spreadStore {
+		if s.PositionID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// isSpreadTrade reports whether a closed trade originated from a vertical
+// spread strategy (their display names all end with "Spread").
+func isSpreadTrade(strategy string) bool {
+	return strings.Contains(strategy, "Spread")
+}
+
 // countHedgeLegs returns how many FUTURES hedge legs the position has.
 func countHedgeLegs(p *quant.Position) int {
 	n := 0

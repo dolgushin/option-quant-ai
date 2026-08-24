@@ -1705,10 +1705,19 @@ func positionsHandler(w http.ResponseWriter, r *http.Request) {
 		quant.SavePosition(positions[i])
 	}
 
+	// Spread positions are managed on the Spreads tab — keep the central
+	// dashboard list clean.
+	visible := make([]quant.Position, 0, len(positions))
+	for _, p := range positions {
+		if !isSpreadPositionID(p.ID) {
+			visible = append(visible, p)
+		}
+	}
+
 	portfolio := quant.GetPortfolio()
 	stats := quant.ComputeStats()
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"positions": positions,
+		"positions": visible,
 		"portfolio": portfolio,
 		"stats":     stats,
 	})
@@ -2037,7 +2046,15 @@ func tradesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	trades := quant.GetTrades()
+	allTrades := quant.GetTrades()
+	// Spread trades live in the Spreads tab journal — hide them from the
+	// central dashboard list (stats still count the whole account).
+	trades := make([]quant.Trade, 0, len(allTrades))
+	for _, t := range allTrades {
+		if !isSpreadTrade(t.Strategy) {
+			trades = append(trades, t)
+		}
+	}
 	stats := quant.ComputeStats()
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"trades": trades,
