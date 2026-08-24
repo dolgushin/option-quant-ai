@@ -557,30 +557,109 @@ var (
 	optionMu        sync.Mutex
 )
 
-// quoteCache caches recent option LAST quotes so mark-to-market repricing of a
+// quoteCache caches recent option quotes so mark-to-market repricing of a
 // multi-leg portfolio does not hammer ISS with one HTTP call per leg per tick.
+type optionQuoteEx struct {
+	Price   float64 // best available mark: mid > last > settle
+	Bid     float64
+	Offer   float64
+	Settle  float64 // evening clearing mark (fresher than stale trades)
+	Updated string  // ISS UPDATETIME (HH:MM:SS) of the marketdata row
+	Src     string  // mid | last | settle | none
+}
+
 var (
-	quoteCache     = map[string]struct{ last, bid, offer, ts float64 }{}
-	quoteCacheTime time.Time
-	quoteMu        sync.Mutex
+	quoteCache = map[string]optionQuoteEx{}
+	quoteMu    sync.Mutex
 )
 
+const quoteTTL = 5 * time.Second
+
 func cachedOptionQuote(secid string) (last, bid, offer float64) {
+	q, ok := cachedOptionQuoteEx(secid)
+	if !ok {
+		return 0, 0, 0
+	}
+	return q.Price, q.Bid, q.Offer
+}
+
+func cachedOptionQuoteEx(secid string) (optionQuoteEx, bool) {
 	quoteMu.Lock()
-	if q, ok := quoteCache[secid]; ok && time.Since(time.Unix(int64(q.ts), 0)) < 5*time.Second {
+	if q, ok := quoteCache[secid]; ok && q.Src != "" {
 		quoteMu.Unlock()
-		return q.last, q.bid, q.offer
+		return q, true
 	}
 	quoteMu.Unlock()
 
-	last, bid, offer, err := moexOptionQuote(secid)
+	q, err := moexOptionQuoteEx(secid)
 	if err != nil {
-		return 0, 0, 0
+		return optionQuoteEx{}, false
 	}
 	quoteMu.Lock()
-	quoteCache[secid] = struct{ last, bid, offer, ts float64 }{last, bid, offer, float64(time.Now().Unix())}
+	quoteCache[secid] = q
 	quoteMu.Unlock()
-	return last, bid, offer
+	return q, true
+}
+
+// moexOptionQuoteEx fetches the live marketdata row of an option and picks the
+// most representative mark price: bid/ask mid when both sides exist, else the
+// last trade, else the evening clearing settle (much fresher than a stale
+// trade for illiquid series). UPDATETIME is returned so the UI can show the
+// data age.
+func moexOptionQuoteEx(secid string) (optionQuoteEx, error) {
+	board := "RFUD"
+	if opt := findOptionBySecID(secid); opt != nil && opt.Board != "" {
+		board = opt.Board
+	}
+	url := fmt.Sprintf("http://iss.moex.com/iss/engines/futures/markets/options/boards/%s/securities/%s.json?iss.meta=off&iss.only=marketdata&marketdata.columns=SECID,LAST,BID,OFFER,SETTLEPRICE,UPDATETIME", board, secid)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return optionQuoteEx{}, fmt.Errorf("moex iss option request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return optionQuoteEx{}, fmt.Errorf("moex iss option status: %d", resp.StatusCode)
+	}
+
+	var issResp struct {
+		Marketdata struct {
+			Data [][]interface{} `json:"data"`
+		} `json:"marketdata"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&issResp); err != nil {
+		return optionQuoteEx{}, fmt.Errorf("moex iss option decode failed: %w", err)
+	}
+	if len(issResp.Marketdata.Data) == 0 || len(issResp.Marketdata.Data[0]) < 6 {
+		return optionQuoteEx{}, fmt.Errorf("moex iss: no option data for %s", secid)
+	}
+
+	row := issResp.Marketdata.Data[0]
+	q := optionQuoteEx{}
+	q.Bid, _ = row[2].(float64)
+	q.Offer, _ = row[3].(float64)
+	last, _ := row[1].(float64)
+	q.Settle, _ = row[4].(float64)
+	if s, ok := row[5].(string); ok {
+		q.Updated = s
+	}
+
+	switch {
+	case q.Bid > 0 && q.Offer >= q.Bid:
+		q.Price = (q.Bid + q.Offer) / 2
+		q.Src = "mid"
+	case last > 0:
+		q.Price = last
+		q.Src = "last"
+	case q.Settle > 0:
+		q.Price = q.Settle
+		q.Src = "settle"
+	default:
+		q.Src = "none"
+	}
+	return q, nil
 }
 
 // contractMultiplier returns the point value (₽ per 1 price point) for a
@@ -918,45 +997,14 @@ func findOptionBySecID(secid string) *optionContract {
 
 // moexOptionQuote fetches the live LAST/BID/OFFER for an option SECID on the
 // correct board (RFUD for futures options, ROPD for premium share options).
+// moexOptionQuote returns the best available option mark price (bid/ask mid,
+// else last trade, else clearing settle) plus the raw bid/offer.
 func moexOptionQuote(secid string) (last, bid, offer float64, err error) {
-	board := "RFUD"
-	if opt := findOptionBySecID(secid); opt != nil && opt.Board != "" {
-		board = opt.Board
-	}
-	url := fmt.Sprintf("http://iss.moex.com/iss/engines/futures/markets/options/boards/%s/securities/%s.json?iss.meta=off&iss.only=marketdata&marketdata.columns=SECID,LAST,BID,OFFER", board, secid)
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(url)
+	q, err := moexOptionQuoteEx(secid)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("moex iss option request failed: %w", err)
+		return 0, 0, 0, err
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return 0, 0, 0, fmt.Errorf("moex iss option status: %d", resp.StatusCode)
-	}
-
-	var issResp struct {
-		Marketdata struct {
-			Data [][]interface{} `json:"data"`
-		} `json:"marketdata"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&issResp); err != nil {
-		return 0, 0, 0, fmt.Errorf("moex iss option decode failed: %w", err)
-	}
-
-	if len(issResp.Marketdata.Data) == 0 || len(issResp.Marketdata.Data[0]) < 4 {
-		return 0, 0, 0, fmt.Errorf("moex iss: no option data for %s", secid)
-	}
-
-	row := issResp.Marketdata.Data[0]
-	last, _ = row[1].(float64)
-	bid, _ = row[2].(float64)
-	offer, _ = row[3].(float64)
-	if last <= 0 {
-		last = bid
-	}
-	return last, bid, offer, nil
+	return q.Price, q.Bid, q.Offer, nil
 }
 
 // nearestStrike returns the option strike closest to the spot price from the

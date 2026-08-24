@@ -634,6 +634,12 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 							lm["iv_pct"] = math.Round(iv*1000) / 10
 						}
 					}
+					// Quote freshness: source (mid/last/settle) and ISS row time.
+					if q, ok := cachedOptionQuoteEx(l.SecID); ok {
+						lm["quote_src"] = q.Src
+						lm["quote_time"] = q.Updated
+						lm["quote_stale"] = quoteIsStale(q.Updated, q.Src)
+					}
 					legs = append(legs, lm)
 				}
 				item["legs"] = legs
@@ -647,6 +653,21 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 		"spreads": out,
 		"note":    "Вертикальные спреды: Bull Put / Bear Call (кредитные), Bull Call / Bear Put (дебетовые).",
 	})
+}
+
+// quoteIsStale reports whether the ISS marketdata row looks outdated: no
+// update time at all, a settle-only mark, or an update more than 30 minutes
+// behind the current time of day.
+func quoteIsStale(updated, src string) bool {
+	if src == "settle" || src == "none" || updated == "" {
+		return true
+	}
+	t, err := time.Parse("15:04:05", updated)
+	if err != nil {
+		return true
+	}
+	now, _ := time.Parse("15:04:05", time.Now().Format("15:04:05"))
+	return now.Sub(t) > 30*time.Minute || now.Sub(t) < -time.Hour
 }
 
 // countHedgeLegs returns how many FUTURES hedge legs the position has.

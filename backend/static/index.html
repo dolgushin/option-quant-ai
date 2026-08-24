@@ -14,6 +14,14 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="/vendor/chart.umd.min.js"></script>
     <script>window.Chart || document.write('<script src="https://cdn.jsdelivr.net/npm/chart.js"><\/script>');</script>
+    <style>
+        /* Readability: scale up the small utility sizes used across the SPA */
+        .text-\[9px\] { font-size: 12px !important; line-height: 1.45 !important; }
+        .text-\[10px\] { font-size: 13px !important; line-height: 1.45 !important; }
+        .text-\[11px\] { font-size: 14px !important; line-height: 1.5 !important; }
+        .text-xs { font-size: 14px !important; }
+        .text-sm { font-size: 15px !important; }
+    </style>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen p-3 md:p-6 font-sans">
     <div class="max-w-7xl mx-auto space-y-4 md:space-y-6">
@@ -1043,9 +1051,9 @@
                                 <th class="p-2">Спред</th>
                                 <th class="p-2">Страйки</th>
                                 <th class="p-2">DTE</th>
-                                <th class="p-2">Вход / Сейчас</th>
-                                <th class="p-2">P&L ₽</th>
-                                <th class="p-2">P&L %</th>
+                                <th class="p-2" title="Стоимость позиции: вход → текущая. Минус у входа = полученный кредит (для кредитных спредов).">Стоимость, ₽</th>
+                                <th class="p-2" title="P&L = текущая стоимость − вход.">P&L ₽</th>
+                                <th class="p-2" title="Доля от максимальной прибыли структуры.">P&L %</th>
                                 <th class="p-2">Δ / Θ</th>
                                 <th class="p-2">Хедж</th>
                                 <th class="p-2">Действия</th>
@@ -1375,7 +1383,7 @@
                             <div class="text-[9px] text-slate-500">${spreadRuleBadge(s)}</div></td>
                         <td class="p-2">S ${s.short_strike.toLocaleString('ru-RU')} / L ${s.long_strike.toLocaleString('ru-RU')}</td>
                         <td class="p-2">${s.dte}</td>
-                        <td class="p-2">${(s.entry_value||0).toLocaleString('ru-RU')} / ${(s.current_value||0).toLocaleString('ru-RU')}</td>
+                        <td class="p-2">${(s.entry_value||0).toLocaleString('ru-RU')}${s.net_credit > 0 ? ' <span class="text-[9px] text-sky-400" title="Отрицательная стоимость входа = полученный кредит">кредит</span>' : ''} / ${(s.current_value||0).toLocaleString('ru-RU')}</td>
                         <td class="p-2 ${pnlCls}">${s.pnl >= 0 ? '+' : ''}${(s.pnl||0).toLocaleString('ru-RU')}</td>
                         <td class="p-2 ${pnlCls}">${(s.pnl_percent||0).toFixed(1)}%</td>
                         <td class="p-2">${(s.net_delta||0).toFixed(1)} / ${(s.net_theta||0).toFixed(1)}</td>
@@ -1419,16 +1427,36 @@
             (s.legs || []).forEach(l => {
                 const dirCls = l.side === 'SELL' ? 'text-rose-300' : 'text-emerald-300';
                 const kindTag = l.kind === 'FUTURES' ? 'хедж' : (l.is_call ? 'CALL' : 'PUT');
+                const srcTag = l.quote_src === 'mid' ? 'стакан' : l.quote_src === 'last' ? 'сделка' : l.quote_src === 'settle' ? 'клиринг' : '';
+                const qBadge = srcTag ? `<div class="text-[10px] ${l.quote_stale ? 'text-amber-400' : 'text-slate-500'}">${srcTag}${l.quote_time ? ' ' + l.quote_time.slice(0, 5) : ''}${l.quote_stale ? ' ⚠' : ''}</div>` : '';
                 legRows += `<tr class="border-b border-slate-800">
                     <td class="py-1 pr-3 ${dirCls}">${l.side}</td>
                     <td class="py-1 pr-3">${l.secid || '—'}</td>
                     <td class="py-1 pr-3 text-slate-400">${kindTag}</td>
                     <td class="py-1 pr-3 text-right">${l.strike != null ? l.strike.toLocaleString('ru-RU') : '—'}</td>
                     <td class="py-1 pr-3 text-right">${l.entry_price != null ? l.entry_price.toLocaleString('ru-RU') : '—'}</td>
-                    <td class="py-1 pr-3 text-right">${l.current_price != null ? l.current_price.toLocaleString('ru-RU') : '—'}</td>
+                    <td class="py-1 pr-3 text-right">${l.current_price != null ? l.current_price.toLocaleString('ru-RU') : '—'}${qBadge}</td>
                     <td class="py-1 text-right ${l.iv_pct != null ? '' : 'text-slate-600'}">${l.iv_pct != null ? l.iv_pct.toFixed(1) + '%' : '—'}</td>
                 </tr>`;
             });
+
+            // Net cross-check: legs must reconcile with the table numbers.
+            const mult = s.multiplier || 1;
+            let entryNet = 0, curNet = 0;
+            (s.legs || []).forEach(l => {
+                if (l.kind === 'FUTURES') return;
+                const dir = l.side === 'SELL' ? -1 : 1;
+                entryNet += dir * (l.entry_price || 0) * (l.quantity || 1);
+                curNet += dir * (l.current_price || 0) * (l.quantity || 1);
+            });
+            entryNet = Math.round(entryNet * mult * 100) / 100;
+            curNet = Math.round(curNet * mult * 100) / 100;
+            const netPnl = Math.round((curNet - entryNet) * 100) / 100;
+            const netLine = `<div class="text-[11px] font-mono text-slate-300 mt-2 bg-slate-900/60 border border-slate-700 rounded p-2">
+                Нетто: вход ${entryNet.toLocaleString('ru-RU')} ₽ → сейчас ${curNet.toLocaleString('ru-RU')} ₽ ·
+                P&L <b class="${netPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${netPnl >= 0 ? '+' : ''}${netPnl.toLocaleString('ru-RU')} ₽</b>
+                ${s.max_profit ? ` · ${(Math.round(netPnl / (s.max_profit * mult * (s.qty || 1)) * 1000) / 10)}% макс. прибыли` : ''}
+            </div>`;
 
             box.innerHTML = `
                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -1440,7 +1468,8 @@
                             </thead>
                             <tbody>${legRows}</tbody>
                         </table>
-                        <div class="text-[10px] text-slate-500 mt-1 font-mono">Премии — в рублях за единицу актива${s.spot ? ` · спот сейчас: ${s.spot.toLocaleString('ru-RU')}` : ''}</div>
+                        ${netLine}
+                        <div class="text-[10px] text-slate-500 mt-1 font-mono">Премии — в рублях за единицу актива${s.spot ? ` · спот сейчас: ${s.spot.toLocaleString('ru-RU')}` : ''} · метка у цены — источник и время котировки</div>
                     </div>
                     <div class="bg-slate-900/60 rounded-lg p-2 border border-slate-700">
                         <canvas id="spr-payoff-${s.id}" height="150"></canvas>
