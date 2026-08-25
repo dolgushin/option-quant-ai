@@ -144,7 +144,11 @@ func initSpreads(dataDir string) {
 	spreadsFile = filepath.Join(dataDir, "spreads.json")
 	b, err := os.ReadFile(spreadsFile)
 	if err == nil {
-		_ = json.Unmarshal(b, &spreadStore)
+		if uerr := json.Unmarshal(b, &spreadStore); uerr != nil {
+			// Never wipe a corrupt registry — keep a recovery copy.
+			_ = os.Rename(spreadsFile, fmt.Sprintf("%s.broken-%d", spreadsFile, time.Now().Unix()))
+			spreadStore = []spreadRecord{}
+		}
 	}
 	if spreadStore == nil {
 		spreadStore = []spreadRecord{}
@@ -191,8 +195,15 @@ func persistSpreadsLocked() {
 	if spreadsFile == "" {
 		return
 	}
-	b, _ := json.MarshalIndent(spreadStore, "", "  ")
-	_ = os.WriteFile(spreadsFile, b, 0600)
+	b, err := json.MarshalIndent(spreadStore, "", "  ")
+	if err != nil {
+		return
+	}
+	tmp := spreadsFile + ".tmp"
+	if err := os.WriteFile(tmp, b, 0600); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, spreadsFile)
 }
 
 // openSpreads returns records with status OPEN.
@@ -602,8 +613,10 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Live telemetry from the linked position.
 		positions := quant.GetActivePositions()
+		foundPos := false
 		for i := range positions {
 			if positions[i].ID == s.PositionID {
+				foundPos = true
 				p := &positions[i]
 				repricePosition(p)
 				quant.SavePosition(*p)
@@ -658,6 +671,7 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
+		item["position_found"] = foundPos
 		out = append(out, item)
 	}
 
@@ -738,7 +752,15 @@ func spreadCloseHandler(w http.ResponseWriter, r *http.Request) {
 
 	pos, found := quant.RemovePosition(s.PositionID)
 	if !found {
-		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "linked position not found"})
+		// Orphaned spread (position storage was reset or wiped): there is
+		// nothing to settle — just mark the record closed so the UI unsticks.
+		s.Status = "CLOSED"
+		saveSpreadRecord(s)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"spread":  s,
+			"note":    "позиция не найдена в хранилище — спред помечен закрытым без записи сделки.",
+		})
 		return
 	}
 	repricePosition(&pos)

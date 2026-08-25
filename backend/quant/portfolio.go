@@ -2,6 +2,7 @@ package quant
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -97,10 +98,15 @@ func SetDataFile(path string) {
 	dataFile = path
 }
 
+// LastStoreError describes the last storage problem (corrupt file etc.) for
+// diagnostics; empty when everything is fine.
+var LastStoreError string
+
 // Load reads positions, trades and capital from the persisted JSON file.
 func Load() {
 	positionsMu.Lock()
 	defer positionsMu.Unlock()
+	LastStoreError = ""
 	if dataFile == "" {
 		return
 	}
@@ -114,6 +120,10 @@ func Load() {
 		Trades         []Trade    `json:"trades"`
 	}
 	if err := json.Unmarshal(b, &state); err != nil {
+		// A corrupt file must never be silently wiped by the next Persist —
+		// keep a copy for manual recovery.
+		LastStoreError = fmt.Sprintf("хранилище повреждено (%v), файл сохранён как .broken", err)
+		_ = os.Rename(dataFile, fmt.Sprintf("%s.broken-%d", dataFile, time.Now().Unix()))
 		return
 	}
 	if state.InitialCapital > 0 {
@@ -127,7 +137,8 @@ func Load() {
 	}
 }
 
-// Persist writes the current state to disk. Callers should not hold positionsMu.
+// Persist writes the current state to disk atomically (tmp file + rename).
+// Callers should not hold positionsMu.
 func Persist() {
 	positionsMu.Lock()
 	state := struct {
@@ -151,7 +162,11 @@ func Persist() {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(dataFile, b, 0644)
+	tmp := dataFile + ".tmp"
+	if err := os.WriteFile(tmp, b, 0644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, dataFile)
 }
 
 func GetPortfolio() PortfolioState {
