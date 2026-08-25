@@ -36,6 +36,7 @@ type coreInstrument struct {
 	ExpiryFront  string  `json:"expiry_front"`
 	DTEFront     int     `json:"dte_front"`
 	Err          string  `json:"err,omitempty"`
+	ATR14        float64 `json:"atr14"` // average true range proxy: avg |Δclose| over 14 sessions
 }
 
 type coreCandidate struct {
@@ -108,6 +109,20 @@ func approxADX14(closes []float64) float64 {
 	return math.Round(dx*10) / 10
 }
 
+// computeATR14 computes a simple ATR proxy: average of absolute close changes
+// over the last `period` sessions.  Good enough for the core brief because we
+// only have closing prices from ISS.
+func computeATR14(closes []float64, period int) float64 {
+	if len(closes) < period+1 {
+		return 0
+	}
+	var s float64
+	for i := len(closes) - period - 1; i < len(closes)-1; i++ {
+		s += math.Abs(closes[i+1] - closes[i])
+	}
+	return math.Round(s/float64(period)*100) / 100
+}
+
 // collectCoreInstrument builds the market brief for one instrument.
 func collectCoreInstrument(symbol string) coreInstrument {
 	in := coreInstrument{Symbol: symbol}
@@ -133,6 +148,10 @@ func collectCoreInstrument(symbol string) coreInstrument {
 		if s, err := getSpotPrice(symbol); err == nil {
 			in.Spot = s
 		}
+	}
+	// ATR14 proxy (average |Δclose| over last 14 sessions).
+	if len(closes) >= 21 {
+		in.ATR14 = computeATR14(closes, 14)
 	}
 
 	// Option surface: two nearest live expiries.
@@ -285,6 +304,7 @@ func collectCoreBrief(force bool) *coreBrief {
 		"Ролл только за нет-кредит; дебетовый ролл запрещён — держим до экспирации.",
 		"TPR по 1σ: против позиции → новый прогноз: рост→лестница, боковик→ratio, падение→ATM put.",
 		"Не держать короткие путы SBER через дивидендный гэп; короткая гамма у экспирации — time-stop.",
+		"Используйте ATR14 (средний диапазон закрытий за 14 сессий) как ориентир стопа: стоп umístьте на 1–1.5× ATR14 от входа, чтобы отсечь шум.",
 	}
 
 	coreBriefMu.Lock()
@@ -366,6 +386,17 @@ func coreBuildCandidates(instruments []coreInstrument) []coreCandidate {
 			cand := candidateFromPlan(plan, in2)
 			if cand.Score < 45 {
 				continue
+			}
+			// Risk‑adjusted score: penalise candidates whose max loss is large
+			// relative to the recent ATR14 (proxy for expected daily move in %).
+			if in.ATR14 > 0 {
+				riskRatio := cand.MaxLoss / (in.ATR14 * 100) // ATR14 is percent, MaxLoss is rubles per contract; scale factor 100 normalises.
+				if riskRatio > 3.0 {
+					cand.Score = int(float64(cand.Score) * 0.7) // down‑weight
+				}
+				if riskRatio < 1.0 {
+					cand.Score = int(float64(cand.Score) * 1.1) // small‑risk bonus
+				}
 			}
 			out = append(out, cand)
 		}
