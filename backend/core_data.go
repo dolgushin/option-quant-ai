@@ -499,18 +499,6 @@ func candidateFromPlan(plan *spreadPlan, in coreInstrument) coreCandidate {
 			reasons = append(reasons, "✗ "+c.Title+": "+c.Detail)
 		}
 	}
-	// Dynamic stop / take‑profit based on ATR14 (percentage of spot).
-	stopPrice := 0.0
-	takeProfit := 0.0
-	if in.ATR14 > 0 {
-		// stop 1.3 × ATR14 from the short strike direction (simplified: credit ± 1.3*ATR)
-		// Here we just set stop as credit minus 1.3*ATR, take profit as credit plus 0.5*MaxProfit.
-		stopPrice = plan.NetCredit - 1.3*in.ATR14
-		takeProfit = plan.NetCredit + 0.5*plan.MaxProfit
-		if stopPrice < 0 {
-			stopPrice = 0
-		}
-	}
 	// Monte Carlo probability of profit (PoP).
 	var pop int
 	if plan.DaysToExp > 0 && plan.NetCredit != 0 {
@@ -522,6 +510,32 @@ func candidateFromPlan(plan *spreadPlan, in coreInstrument) coreCandidate {
 			plan.ShortStrike, plan.LongStrike, plan.DaysToExp, 2000)
 	} else {
 		pop = 0
+	}
+	// Dynamic stop / take‑profit based on ATR14 and Monte‑Carlo PoP.
+	stopPrice := 0.0
+	takeProfit := 0.0
+	if in.ATR14 > 0 {
+		// base levels (from earlier implementation)
+		baseStop := plan.NetCredit - 1.3*in.ATR14
+		baseTP   := plan.NetCredit + 0.5*plan.MaxProfit
+
+		// adjust according to PoP
+		if pop >= 70 {
+			// high confidence → tighten stop, raise target
+			stopPrice = plan.NetCredit - 0.9*in.ATR14
+			takeProfit = plan.NetCredit + 0.7*plan.MaxProfit
+		} else if pop < 30 {
+			// low confidence → widen stop, lower target
+			stopPrice = plan.NetCredit - 1.5*in.ATR14
+			takeProfit = plan.NetCredit + 0.3*plan.MaxProfit
+		} else {
+			// medium → use base
+			stopPrice = baseStop
+			takeProfit = baseTP
+		}
+		if stopPrice < 0 {
+			stopPrice = 0
+		}
 	}
 	return coreCandidate{
 		Symbol: plan.Symbol, Strategy: plan.Type, DisplayName: plan.DisplayName,
