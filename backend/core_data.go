@@ -52,6 +52,8 @@ type coreCandidate struct {
 	MaxLoss     float64  `json:"max_loss"`
 	Score       int      `json:"score"`
 	Reasons     []string `json:"reasons"`
+	StopLoss    float64  `json:"stop_loss"`
+	TakeProfit  float64  `json:"take_profit"`
 }
 
 type coreBrief struct {
@@ -440,11 +442,24 @@ func candidateFromPlan(plan *spreadPlan, in coreInstrument) coreCandidate {
 			reasons = append(reasons, "✗ "+c.Title+": "+c.Detail)
 		}
 	}
+	// Dynamic stop / take‑profit based on ATR14 (percentage of spot).
+	stopPrice := 0.0
+	takeProfit := 0.0
+	if in.ATR14 > 0 {
+		// stop 1.3 × ATR14 from the short strike direction (simplified: credit ± 1.3*ATR)
+		// Here we just set stop as credit minus 1.3*ATR, take profit as credit plus 0.5*MaxProfit.
+		stopPrice = plan.NetCredit - 1.3*in.ATR14
+		takeProfit = plan.NetCredit + 0.5*plan.MaxProfit
+		if stopPrice < 0 {
+			stopPrice = 0
+		}
+	}
 	return coreCandidate{
 		Symbol: plan.Symbol, Strategy: plan.Type, DisplayName: plan.DisplayName,
 		Expiry: plan.Expiry, DTE: plan.DaysToExp,
 		ShortStrike: plan.ShortStrike, LongStrike: plan.LongStrike,
 		NetCredit: plan.NetCredit, MaxProfit: plan.MaxProfit, MaxLoss: plan.MaxLoss,
 		Score: total, Reasons: reasons,
+		StopLoss: stopPrice, TakeProfit: takeProfit,
 	}
 }

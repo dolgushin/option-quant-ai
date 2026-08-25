@@ -672,6 +672,9 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		item["position_found"] = foundPos
+		// Dynamic stop / take‑profit (populated later from core candidate; here a placeholder).
+		item["stop_loss"] = 0
+		item["take_profit"] = 0
 		out = append(out, item)
 	}
 
