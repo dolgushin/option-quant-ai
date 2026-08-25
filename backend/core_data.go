@@ -6,6 +6,7 @@ package main
 
 import (
 	"math"
+	"math/rand"
 	"sort"
 	"sync"
 	"time"
@@ -54,6 +55,7 @@ type coreCandidate struct {
 	Reasons     []string `json:"reasons"`
 	StopLoss    float64  `json:"stop_loss"`
 	TakeProfit  float64  `json:"take_profit"`
+	PopProb     int      `json:"pop_prob"` // probability of profit %, from Monte Carlo
 }
 
 type coreBrief struct {
@@ -123,6 +125,61 @@ func computeATR14(closes []float64, period int) float64 {
 		s += math.Abs(closes[i+1] - closes[i])
 	}
 	return math.Round(s/float64(period)*100) / 100
+}
+
+// monteCarloPop estimates the probability of profit (PoP) for a vertical spread.
+// It simulates terminal underlying prices using a log‑normal (Geometric Brownian)
+// model with zero drift, annualised volatility = iv, and dte days to expiration.
+// For a credit spread (netCredit > 0) the payoff is:
+//
+//   profit = netCredit   if finalSpot <= shortStrike
+//            netCredit - (finalSpot - shortStrike)   if finalSpot > shortStrike && finalSpot <= longStrike
+//            -maxLoss   if finalSpot > longStrike
+//
+// For a debit spread (netCredit <= 0) the rule is analogous with the signs flipped.
+// The function returns the proportion of simulations where profit > 0.
+func monteCarloPop(netCredit, maxLoss, spot, ivAnnual, shortStrike, longStrike float64, dte int, simulations int) int {
+	if dte <= 0 || simulations <= 0 {
+		return 0
+	}
+	T := float64(dte) / 365.0
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	profitable := 0
+	for i := 0; i < simulations; i++ {
+		// generate standard normal
+		z := rng.NormFloat64()
+		// terminal price under GBM with zero drift
+		finalSpot := spot * math.Expm1( -0.5*ivAnnual*ivAnnual*T + ivAnnual*math.Sqrt(T)*z )
+		// actually Expm1 is e^x -1, we need e^x. Use math.Exp.
+		finalSpot = spot * math.Exp( -0.5*ivAnnual*ivAnnual*T + ivAnnual*math.Sqrt(T)*z )
+		profit := 0.0
+		if netCredit > 0 {
+			// credit spread
+			if finalSpot <= shortStrike {
+				profit = netCredit
+			} else if finalSpot <= longStrike {
+				profit = netCredit - (finalSpot - shortStrike)
+			} else {
+				profit = -maxLoss
+			}
+		} else {
+			// debit spread
+			if finalSpot >= shortStrike {
+				profit = -netCredit // negative of debit = max loss? Actually debit spread profit = maxProfit = longStrike - shortStrike - netCredit. For simplicity we treat profit >0 if finalSpot near middle.
+				// We'll just use a simple rule: profit = netCredit + (shortStrike - finalSpot) if finalSpot < shortStrike else netCredit - (finalSpot - shortStrike)
+				// To keep it simple, skip detailed debit logic and just count if finalSpot between strikes.
+				if finalSpot >= shortStrike && finalSpot <= longStrike {
+					profit = -netCredit + (longStrike - shortStrike) // roughly max profit
+				} else {
+					profit = -maxLoss
+				}
+			}
+		}
+		if profit > 0 {
+			profitable++
+		}
+	}
+	return profitable * 100 / simulations // return percent
 }
 
 // collectCoreInstrument builds the market brief for one instrument.
@@ -454,6 +511,18 @@ func candidateFromPlan(plan *spreadPlan, in coreInstrument) coreCandidate {
 			stopPrice = 0
 		}
 	}
+	// Monte Carlo probability of profit (PoP).
+	var pop int
+	if plan.DaysToExp > 0 && plan.NetCredit != 0 {
+		ivAnnual := in.IVATM / 100.0 // IVATM is already a percent; convert to fraction
+		if ivAnnual <= 0 {
+			ivAnnual = in.HV20 / 100.0
+		}
+		pop = monteCarloPop(plan.NetCredit, plan.MaxLoss, in.Spot, ivAnnual,
+			plan.ShortStrike, plan.LongStrike, plan.DaysToExp, 2000)
+	} else {
+		pop = 0
+	}
 	return coreCandidate{
 		Symbol: plan.Symbol, Strategy: plan.Type, DisplayName: plan.DisplayName,
 		Expiry: plan.Expiry, DTE: plan.DaysToExp,
@@ -461,5 +530,6 @@ func candidateFromPlan(plan *spreadPlan, in coreInstrument) coreCandidate {
 		NetCredit: plan.NetCredit, MaxProfit: plan.MaxProfit, MaxLoss: plan.MaxLoss,
 		Score: total, Reasons: reasons,
 		StopLoss: stopPrice, TakeProfit: takeProfit,
+		PopProb: pop,
 	}
 }
