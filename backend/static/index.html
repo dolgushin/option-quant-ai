@@ -290,63 +290,12 @@
                     <label class="text-xs text-slate-400 block mb-1">Целевая HV, %</label>
                     <input id="bt-targethv" type="number" step="5" min="5" max="100" value="25" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-20 focus:outline-none focus:border-amber-500" title="Волатильность, при которой позиция размером 1:1. Выше — контрактов меньше">
                 </div>
-                <button onclick="runBacktest()" class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-md transition">▶ Запустить бэктест</button>
-            </div>
+<button onclick="runBacktest()" class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-md transition">▶ Запустить бэктест</button>
+             </div>
 
-            <div id="backtest-result" class="hidden font-mono">
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
-                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span class="text-xs text-slate-500 block">СДЕЛОК</span>
-                        <span id="bt-stat-trades" class="text-lg font-bold text-white">0</span>
-                    </div>
-                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span class="text-xs text-slate-500 block">WIN RATE</span>
-                        <span id="bt-stat-winrate" class="text-lg font-bold text-emerald-400">0%</span>
-                    </div>
-                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span class="text-xs text-slate-500 block">СУММ. P&L</span>
-                        <span id="bt-stat-pnl" class="text-lg font-bold text-indigo-400">₽0</span>
-                    </div>
-                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span class="text-xs text-slate-500 block">MAX DRAWDOWN</span>
-                        <span id="bt-stat-dd" class="text-lg font-bold text-rose-400">₽0</span>
-                    </div>
-                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span class="text-xs text-slate-500 block">PROFIT FACTOR</span>
-                        <span id="bt-stat-pf" class="text-lg font-bold text-amber-400">—</span>
-                    </div>
-                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span class="text-xs text-slate-500 block">СРЕДНИЙ ВЫИГРЫШ</span>
-                        <span id="bt-stat-avgwin" class="text-lg font-bold text-emerald-400">₽0</span>
-                    </div>
-                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span class="text-xs text-slate-500 block">СРЕДНИЙ УБЫТОК</span>
-                        <span id="bt-stat-avgloss" class="text-lg font-bold text-rose-400">₽0</span>
-                    </div>
-                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span class="text-xs text-slate-500 block">IV ИСПОЛЬЗОВАНО</span>
-                        <span id="bt-stat-iv" class="text-lg font-bold text-slate-200">—</span>
-                    </div>
-                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span class="text-xs text-slate-500 block">КОМИССИИ ВСЕГО</span>
-                        <span id="bt-stat-comm" class="text-lg font-bold text-slate-200">₽0</span>
-                    </div>
-                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span class="text-xs text-slate-500 block">ВХОД: РЕАЛИЗ. ВОЛАТ.</span>
-                        <span id="bt-stat-hv" class="text-lg font-bold text-slate-200">—</span>
-                    </div>
-                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span class="text-xs text-slate-500 block">СРЕДНИЙ РАЗМЕР (VOL-SCALE)</span>
-                        <span id="bt-stat-contracts" class="text-lg font-bold text-indigo-400">1</span>
-                    </div>
-                </div>
-
-                <div class="relative h-56 w-full mt-3">
-                    <canvas id="backtestChart"></canvas>
-                </div>
-                <p id="backtest-note" class="text-[10px] text-slate-500 mt-2 font-mono"></p>
-            </div>
-            <div id="backtest-loading" class="hidden text-xs text-amber-400 font-mono">Загружаю историю и считаю модель...</div>
+             <div class="bg-slate-800/80 p-6 rounded-xl border border-slate-700 space-y-4">
+                 <h2 class="text-lg font-semibold text-slate-200">Position Sizing — риск-бюджет и размер позиции</h2>
+                 <span class="px-3 py-1 text-xs font-bold rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-mono">Risk Budget</span>
         </div>
 
         <!-- 3.5 Position Sizing -->
