@@ -416,10 +416,10 @@ func buildVerticalSpread(symbol, spreadType, expiry string, qty int) (*spreadPla
 	plan.ShortStrike = shortStrike
 	plan.LongStrike = longStrike
 	plan.WingWidth = math.Round(wing*10000) / 10000
-	plan.NetCredit = math.Round(netCredit*100) / 100
-	plan.MaxProfit = math.Round(maxProfit*100) / 100
-	plan.MaxLoss = math.Round(maxLoss*100) / 100
-	plan.MarginShort = math.Round(marginShort*100) / 100
+	plan.NetCredit = math.Round(netCredit*float64(qty)*100) / 100
+	plan.MaxProfit = math.Round(maxProfit*float64(qty)*100) / 100
+	plan.MaxLoss = math.Round(maxLoss*float64(qty)*100) / 100
+	plan.MarginShort = math.Round(marginShort*float64(qty)*100) / 100
 	plan.ThetaPerCtr = math.Round(thetaTotal*100) / 100
 	plan.DeltaPerCtr = math.Round(deltaTotal*100) / 100
 	plan.CentralStrike = atmStrike
