@@ -1294,7 +1294,7 @@
             const inst = document.getElementById('core-instruments');
             let ih = `<table class="w-full text-left text-[11px] font-mono text-slate-300">
                 <thead class="text-slate-500 border-b border-slate-700 uppercase">
-                    <tr><th class="py-1 pr-2">Инстр.</th><th class="py-1 pr-2 text-right">Спот</th><th class="py-1 pr-2">Режим</th><th class="py-1 pr-2 text-right">SMA200</th><th class="py-1 pr-2 text-right">ADX</th><th class="py-1 pr-2 text-right">RSI</th><th class="py-1 pr-2 text-right">IV</th><th class="py-1 pr-2 text-right">HV20</th><th class="py-1 pr-2 text-right">Rank</th><th class="py-1 pr-2 text-right">Skew</th><th class="py-1 text-right">Ликв.%</th></tr>
+                    <tr><th class="py-1 pr-2">Инстр.</th><th class="py-1 pr-2 text-right">Спот</th><th class="py-1 pr-2">Режим</th><th class="py-1 pr-2 text-right">ATR14</th><th class="py-1 pr-2 text-right">ADX</th><th class="py-1 pr-2 text-right">RSI</th><th class="py-1 pr-2 text-right">IV</th><th class="py-1 pr-2 text-right">HV20</th><th class="py-1 pr-2 text-right">Rank</th><th class="py-1 pr-2 text-right">Skew</th><th class="py-1 text-right">Ликв.%</th></tr>
                 </thead><tbody>`;
             (v.brief.instruments || []).forEach(i => {
                 const reg = i.regime === 'BULLISH' ? '<span class="text-emerald-400">бычий</span>' : i.regime === 'BEARISH' ? '<span class="text-rose-400">медвежий</span>' : '<span class="text-slate-400">боковик</span>';
@@ -1302,7 +1302,7 @@
                     <td class="py-1 pr-2 text-slate-100 font-bold">${i.symbol}</td>
                     <td class="py-1 pr-2 text-right">${i.spot ? i.spot.toLocaleString('ru-RU') : '—'}</td>
                     <td class="py-1 pr-2">${reg}${i.above_sma200 ? ' <span class="text-[9px] text-emerald-500">↑200</span>' : (i.sma200 ? ' <span class="text-[9px] text-rose-500">↓200</span>' : '')}</td>
-                    <td class="py-1 pr-2 text-right">${i.sma200 ? i.sma200.toLocaleString('ru-RU') : '—'}</td>
+                    <td class="py-1 pr-2 text-right">${i.atr14 ? i.atr14.toFixed(1) : '—'}</td>
                     <td class="py-1 pr-2 text-right">${i.adx14 || '—'}</td>
                     <td class="py-1 pr-2 text-right">${i.rsi14 || '—'}</td>
                     <td class="py-1 pr-2 text-right">${i.iv_atm ? i.iv_atm + '%' : '—'}</td>
@@ -1320,7 +1320,7 @@
             } else {
                 let ch = `<table class="w-full text-left text-[11px] font-mono text-slate-300">
                     <thead class="text-slate-500 border-b border-slate-700 uppercase">
-                        <tr><th class="py-1 pr-2">Счёт</th><th class="py-1 pr-2">Инстр.</th><th class="py-1 pr-2">Конструкция</th><th class="py-1 pr-2 text-right">Страйки</th><th class="py-1 pr-2 text-right">Эксп.</th><th class="py-1 pr-2 text-right">Кредит</th><th class="py-1 pr-2 text-right">Макс.уб.</th><th class="py-1">Почему</th><th class="py-1"></th></tr>
+                        <tr><th class="py-1 pr-2">Счёт</th><th class="py-1 pr-2">Инстр.</th><th class="py-1 pr-2">Конструкция</th><th class="py-1 pr-2 text-right">Страйки</th><th class="py-1 pr-2 text-right">Эксп.</th><th class="py-1 pr-2 text-right">Кредит</th><th class="py-1 pr-2 text-right">Макс.уб.</th><th class="py-1 pr-2 text-right">PoP%</th><th class="py-1 pr-2 text-right">Стоп₽</th><th class="py-1 pr-2 text-right">Тейк₽</th><th class="py-1">Почему</th><th class="py-1"></th></tr>
                     </thead><tbody>`;
                 v.brief.candidates.forEach((c, idx) => {
                     const cls = c.score >= 70 ? 'text-emerald-400' : c.score >= 45 ? 'text-amber-400' : 'text-rose-400';
@@ -1332,6 +1332,9 @@
                         <td class="py-1 pr-2 text-right">${c.expiry} (${c.dte}д)</td>
                         <td class="py-1 pr-2 text-right ${c.net_credit >= 0 ? 'text-sky-300' : 'text-amber-300'}">${c.net_credit}</td>
                         <td class="py-1 pr-2 text-right text-rose-300">${c.max_loss.toLocaleString('ru-RU')}</td>
+                        <td class="py-1 pr-2 text-right">${c.pop_prob ? c.pop_prob + '%' : '—'}</td>
+                        <td class="py-1 pr-2 text-right text-amber-300">${c.stop_loss ? Math.round(c.stop_loss).toLocaleString('ru-RU') : '—'}</td>
+                        <td class="py-1 pr-2 text-right text-emerald-300">${c.take_profit ? Math.round(c.take_profit).toLocaleString('ru-RU') : '—'}</td>
                         <td class="py-1 text-slate-500 text-[10px]">${(c.reasons || []).slice(0, 2).join(' · ')}</td>
                         <td class="py-1">${idx === 0 ? `<button onclick="candidateToBuilder('${c.symbol}','${c.strategy}','${c.expiry}')" class="px-2 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded text-[10px]">→ конструктор</button>` : ''}</td>
                     </tr>`;
