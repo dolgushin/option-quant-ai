@@ -849,7 +849,7 @@
                     </div>
                     <div>
                         <span class="text-xs text-slate-400 block font-mono mb-1">ЛОТЫ</span>
-                        <input id="spr-qty" type="number" min="1" value="1" class="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm font-mono">
+                        <input id="spr-qty" type="number" min="1" value="1" class="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm font-mono" oninput="onSprQtyChange()">
                     </div>
                     <div>
                         <span class="text-xs text-slate-400 block font-mono mb-1">ЭКСПИРАЦИЯ</span>
@@ -1758,6 +1758,16 @@
                 console.error('Advice failed', e);
                 box.innerHTML = '';
             }
+        }
+
+        let _sprQtyTimer = null;
+        function onSprQtyChange() {
+            clearTimeout(_sprQtyTimer);
+            _sprQtyTimer = setTimeout(() => {
+                if (document.getElementById('spr-plan-box') && !document.getElementById('spr-plan-box').classList.contains('hidden')) {
+                    buildSpreadPlan();
+                }
+            }, 400);
         }
 
         async function buildSpreadPlan() {
