@@ -58,6 +58,7 @@ type statsOverview struct {
 	MaxWinStreak  int                `json:"max_win_streak"`
 	MaxLossStreak int                `json:"max_loss_streak"`
 	SharpeTrade   float64            `json:"sharpe_trade"`
+	AvgRMultiple  float64            `json:"avg_r_multiple"` // avg win / avg loss
 	Equity        []statsEquityPoint `json:"equity"`
 	Monthly       []monthPnl         `json:"monthly"`
 	Histogram     []histBucket       `json:"histogram"`
@@ -126,6 +127,9 @@ func computeStatsOverview(trades []quant.Trade) *statsOverview {
 		o.ProfitFactor = round2(sumWin / sumLoss)
 	} else if sumWin > 0 {
 		o.ProfitFactor = 99
+	}
+	if o.AvgLoss > 0 {
+		o.AvgRMultiple = round2(o.AvgWin / o.AvgLoss)
 	}
 	mean := sumPnl / float64(o.Trades)
 	variance := sumSq/float64(o.Trades) - mean*mean

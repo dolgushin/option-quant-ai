@@ -537,6 +537,37 @@ func moexISSSpotPrice(secid string) (float64, error) {
 	return last, nil
 }
 
+// moexISSVolume fetches the LASTVOLUME (last trade volume) of a FORTS futures
+// contract from the public MOEX ISS API.
+func moexISSVolume(secid string) (int, error) {
+	url := fmt.Sprintf("http://iss.moex.com/iss/engines/futures/markets/forts/boards/RFUD/securities/%s.json?iss.meta=off&iss.only=marketdata&marketdata.columns=SECID,LASTVOLUME", secid)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("iss status %d", resp.StatusCode)
+	}
+	var r struct {
+		Marketdata struct {
+			Data [][]interface{} `json:"data"`
+		} `json:"marketdata"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return 0, err
+	}
+	if len(r.Marketdata.Data) == 0 || len(r.Marketdata.Data[0]) < 2 {
+		return 0, fmt.Errorf("no volume data for %s", secid)
+	}
+	v, ok := r.Marketdata.Data[0][1].(float64)
+	if !ok {
+		return 0, nil
+	}
+	return int(v), nil
+}
+
 // optionContract describes a MOEX option: SECID, underlying asset code,
 // strike, call/put flag, expiry date, exchange margin (GO) figures and board.
 type optionContract struct {
@@ -3406,6 +3437,9 @@ func main() {
 	http.HandleFunc("/api/v1/options/vertical-spread", verticalSpreadHandler)
 	http.HandleFunc("/api/v1/options/rolling-advice", rollingAdviceHandler)
 	http.HandleFunc("/api/v1/backtest", backtestHandler)
+	http.HandleFunc("/api/v1/vol-surface", volSurfaceHandler)
+	http.HandleFunc("/api/v1/calendar", calendarHandler)
+	http.HandleFunc("/api/v1/mc-pnl", mcPLHandler)
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

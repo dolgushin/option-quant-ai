@@ -66,6 +66,7 @@
             <button id="tab-btn-stats" onclick="switchTab('stats')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">📈 Статистика</button>
             <button id="tab-btn-fc" onclick="switchTab('forecast')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🔮 Прогноз</button>
             <button id="tab-btn-core" onclick="switchTab('core')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🧠 Ядро</button>
+            <button id="tab-btn-mcpnl" onclick="switchTab('mcpnl')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🎲 MC P&L</button>
         </nav>
 
         <div id="dashboard-view" class="space-y-4 md:space-y-6">
@@ -971,6 +972,37 @@
             </div>
         </div>
 
+        <!-- MC P&L Distribution Simulator -->
+        <div id="mcpnl-view" class="hidden space-y-4 md:space-y-6">
+            <h2 class="text-lg font-semibold text-slate-200">🎲 Монте-Карло: распределение P&L</h2>
+            <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                <div class="flex flex-wrap items-end gap-3 font-mono text-[11px]">
+                    <label class="block text-slate-400">Премия (кредит), ₽
+                        <input id="mc-credit" type="number" value="500" class="w-24 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="block text-rose-400">Макс. убыток, ₽
+                        <input id="mc-maxloss" type="number" value="2000" class="w-24 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="block text-slate-400">Спот
+                        <input id="mc-spot" type="number" value="85000" class="w-28 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="block text-slate-400">IV (доля)
+                        <input id="mc-iv" type="number" step="0.01" value="0.15" class="w-20 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="block text-slate-400">Страйк (short)
+                        <input id="mc-short" type="number" value="85000" class="w-28 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="block text-slate-400">Страйк (long)
+                        <input id="mc-long" type="number" value="84500" class="w-28 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="block text-slate-400">DTE
+                        <input id="mc-dte" type="number" min="1" max="365" value="14" class="w-16 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="block text-slate-400">Симуляций
+                        <input id="mc-n" type="number" min="100" max="50000" value="5000" class="w-20 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <button onclick="runMCPnL()" class="px-4 py-1.5 bg-violet-600 hover:bg-violet-500 text-white font-bold rounded-lg transition">🎲 Симуляция</button>
+                </div>
+            </div>
+            <div id="mc-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
+            <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                <div class="text-[11px] text-slate-400 font-mono mb-2">Распределение P&L (гистограмма), ₽</div>
+                <canvas id="mc-hist" height="200"></canvas>
+            </div>
+        </div>
+
         <!-- Analytics Core -->
         <div id="core-view" class="hidden space-y-4 md:space-y-6">
             <div class="flex justify-between items-center flex-wrap gap-2">
@@ -993,6 +1025,19 @@
                         <input id="core-autopaper" type="checkbox" class="w-4 h-4 accent-rose-500">
                         Авто-бумажные сделки при вердикте ИИ (соглашение кванта и ИИ, скоринг ≥ 70)
                     </label>
+                    <div class="border-t border-slate-700 pt-2 mt-1 space-y-2">
+                        <div class="text-[11px] text-slate-400 font-mono uppercase">Баланс квант / ИИ</div>
+                        <label class="block text-[11px] font-mono text-slate-400">
+                            Вес кванта: <span id="core-qw-val" class="text-indigo-300 font-bold">70%</span>
+                            <input id="core-quantweight" type="range" min="0" max="100" step="5" value="70"
+                                   class="w-full mt-1 accent-indigo-500" oninput="syncWeights('quant')">
+                        </label>
+                        <label class="block text-[11px] font-mono text-slate-400">
+                            Вес ИИ: <span id="core-aw-val" class="text-amber-300 font-bold">30%</span>
+                            <input id="core-aiweight" type="range" min="0" max="100" step="5" value="30"
+                                   class="w-full mt-1 accent-amber-500" oninput="syncWeights('ai')">
+                        </label>
+                    </div>
                     <button onclick="saveCoreSettings()" class="w-full py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-lg transition text-xs">💾 Сохранить настройки</button>
                 </div>
 
@@ -1005,6 +1050,21 @@
             <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
                 <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">Кандидаты (квантовый скоринг, фильтры базы знаний)</div>
                 <div id="core-candidates" class="overflow-x-auto"></div>
+            </div>
+
+            <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                <div class="flex justify-between items-center mb-2">
+                    <div class="text-[11px] text-slate-400 font-mono uppercase">Поверхность волатильности (Skew / Term Structure)</div>
+                    <div class="flex gap-2 items-center">
+                        <select id="volsurf-symbol" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white text-[11px]">
+                            <option value="Si">Si</option><option value="RI">RI</option><option value="CR">CR</option>
+                            <option value="NG">NG</option><option value="SBER">SBER</option><option value="SBERP">SBERP</option>
+                        </select>
+                        <button onclick="loadVolSurface()" class="px-3 py-1 bg-violet-600 hover:bg-violet-500 text-white text-[11px] font-bold rounded transition">📈 Показать</button>
+                    </div>
+                </div>
+                <div id="volsurf-info" class="text-[10px] text-slate-500 font-mono mb-1"></div>
+                <div class="relative" style="height:320px"><canvas id="volsurf-chart"></canvas></div>
             </div>
 
             <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
@@ -1039,8 +1099,8 @@
         const tabActive = 'px-4 py-2 text-xs font-bold rounded-lg bg-emerald-600 text-white transition';
 
         function switchTab(tab) {
-            const views = { dashboard: 'dashboard-view', spreads: 'spreads-view', stats: 'stats-view', forecast: 'forecast-view', core: 'core-view' };
-            const btns = { dashboard: 'tab-btn-dashboard', spreads: 'tab-btn-spreads', stats: 'tab-btn-stats', forecast: 'tab-btn-fc', core: 'tab-btn-core' };
+            const views = { dashboard: 'dashboard-view', spreads: 'spreads-view', stats: 'stats-view', forecast: 'forecast-view', core: 'core-view', mcpnl: 'mcpnl-view' };
+            const btns = { dashboard: 'tab-btn-dashboard', spreads: 'tab-btn-spreads', stats: 'tab-btn-stats', forecast: 'tab-btn-fc', core: 'tab-btn-core', mcpnl: 'tab-btn-mcpnl' };
             Object.values(views).forEach(id => document.getElementById(id).classList.add('hidden'));
             Object.values(btns).forEach(id => document.getElementById(id).className = tabIdle);
             document.getElementById(views[tab]).classList.remove('hidden');
@@ -1080,7 +1140,8 @@
                     kpiCard('Profit factor', o.profit_factor, o.profit_factor >= 1 ? 'text-emerald-400' : 'text-rose-400') +
                     kpiCard('Ожидание/сделка ₽', (o.expectancy >= 0 ? '+' : '') + o.expectancy, pnlCls(o.expectancy)) +
                     kpiCard('Max просадка ₽', o.max_drawdown.toLocaleString('ru-RU'), 'text-rose-400') +
-                    kpiCard('Серии W/L', `${o.max_win_streak} / ${o.max_loss_streak}`);
+                    kpiCard('Серии W/L', `${o.max_win_streak} / ${o.max_loss_streak}`) +
+                    kpiCard('R-multiple', o.avg_r_multiple ? o.avg_r_multiple.toFixed(2) : '—', o.avg_r_multiple >= 1 ? 'text-emerald-400' : 'text-amber-400');
                 drawStatsEquity(o);
                 drawStatsMonthly(o);
                 drawStatsHist(o);
@@ -1240,6 +1301,18 @@
         }
 
         // ---- Analytics Core ----
+        function syncWeights(src) {
+            const qw = document.getElementById('core-quantweight');
+            const aw = document.getElementById('core-aiweight');
+            if (src === 'quant') {
+                aw.value = Math.max(0, 100 - parseInt(qw.value));
+            } else {
+                qw.value = Math.max(0, 100 - parseInt(aw.value));
+            }
+            document.getElementById('core-qw-val').textContent = qw.value + '%';
+            document.getElementById('core-aw-val').textContent = aw.value + '%';
+        }
+
         async function loadCoreTab() {
             try {
                 const res = await fetch('/api/v2/core/settings');
@@ -1250,17 +1323,27 @@
                 document.getElementById('core-interval').value = s.interval_min || 0;
                 document.getElementById('core-autopaper').checked = !!s.auto_paper;
                 document.getElementById('core-key').placeholder = s.api_key ? `сохранён (${s.api_key})` : 'sk-...';
+                const qw = Math.round((s.quant_weight || 0.7) * 100);
+                const aw = Math.round((s.ai_weight || 0.3) * 100);
+                document.getElementById('core-quantweight').value = qw;
+                document.getElementById('core-aiweight').value = aw;
+                document.getElementById('core-qw-val').textContent = qw + '%';
+                document.getElementById('core-aw-val').textContent = aw + '%';
             } catch (e) { console.error(e); }
             loadCoreHistory();
         }
 
         async function saveCoreSettings() {
+            const qw = parseInt(document.getElementById('core-quantweight').value) / 100;
+            const aw = parseInt(document.getElementById('core-aiweight').value) / 100;
             const body = JSON.stringify({
                 base_url: document.getElementById('core-url').value.trim(),
                 api_key: document.getElementById('core-key').value.trim(),
                 model: document.getElementById('core-model').value.trim(),
                 interval_min: parseInt(document.getElementById('core-interval').value) || 0,
                 auto_paper: document.getElementById('core-autopaper').checked,
+                quant_weight: qw,
+                ai_weight: aw,
             });
             const res = await fetch('/api/v2/core/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
             const d = await res.json();
@@ -1290,11 +1373,105 @@
             }
         }
 
+        let mcHistChartInstance = null;
+        async function runMCPnL() {
+            const credit = document.getElementById('mc-credit').value;
+            const maxloss = document.getElementById('mc-maxloss').value;
+            const spot = document.getElementById('mc-spot').value;
+            const iv = document.getElementById('mc-iv').value;
+            const shortK = document.getElementById('mc-short').value;
+            const longK = document.getElementById('mc-long').value;
+            const dte = document.getElementById('mc-dte').value;
+            const n = document.getElementById('mc-n').value;
+            const k = document.getElementById('mc-kpis');
+            k.innerHTML = '<div class="col-span-full text-center text-slate-500 py-4 font-mono">Симуляция...</div>';
+            try {
+                const res = await fetch(`/api/v1/mc-pnl?credit=${credit}&maxloss=${maxloss}&spot=${spot}&iv=${iv}&short=${shortK}&long=${longK}&dte=${dte}&n=${n}`);
+                const d = await res.json();
+                if (d.error) { k.innerHTML = `<div class="col-span-full text-center text-rose-400 py-4 font-mono">❌ ${d.error}</div>`; return; }
+                const ppCls = d.prob_profit >= 60 ? 'text-emerald-400' : d.prob_profit >= 40 ? 'text-amber-400' : 'text-rose-400';
+                k.innerHTML =
+                    kpiCard('Prob Profit', d.prob_profit + '%', ppCls) +
+                    kpiCard('Медиана P&L ₽', (d.p50 >= 0 ? '+' : '') + d.p50.toLocaleString('ru-RU'), pnlCls(d.p50)) +
+                    kpiCard('Средний P&L ₽', (d.avg_pnl >= 0 ? '+' : '') + d.avg_pnl.toLocaleString('ru-RU'), pnlCls(d.avg_pnl)) +
+                    kpiCard('5%-95% перцентиль', `${d.p5.toLocaleString('ru-RU')} / ${d.p95.toLocaleString('ru-RU')}`, 'text-slate-300');
+                drawMCHist(d);
+            } catch (e) { k.innerHTML = `<div class="col-span-full text-center text-rose-400 py-4 font-mono">❌ ${e.message}</div>`; }
+        }
+
+        function drawMCHist(d) {
+            const ctx = document.getElementById('mc-hist');
+            if (!ctx || typeof Chart === 'undefined') return;
+            if (mcHistChartInstance) mcHistChartInstance.destroy();
+            if (!d.histogram || !d.histogram.length) return;
+            mcHistChartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: d.histogram.map(b => `${Math.round(b.from)}–${Math.round(b.to)}`),
+                    datasets: [{ label: 'Частота', data: d.histogram.map(b => b.count), backgroundColor: d.histogram.map(b => b.to <= 0 ? 'rgba(239,68,68,0.6)' : 'rgba(16,185,129,0.6)'), borderWidth: 0 }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { ticks: { color: '#94a3b8', font: { family: 'monospace', size: 9 }, maxRotation: 45 }, grid: { display: false } },
+                        y: { ticks: { color: '#94a3b8', font: { family: 'monospace' } }, grid: { color: '#1e293b' } }
+                    }
+                }
+            });
+        }
+
+        let volSurfChartInstance = null;
+        async function loadVolSurface() {
+            const sym = document.getElementById('volsurf-symbol').value;
+            const info = document.getElementById('volsurf-info');
+            info.textContent = 'Загрузка...';
+            try {
+                const res = await fetch(`/api/v1/vol-surface?symbol=${sym}&expiries=3`);
+                const d = await res.json();
+                if (!d.points || !d.points.length) { info.textContent = 'Нет данных'; return; }
+                info.textContent = `Спот: ${d.spot.toLocaleString('ru-RU')} · Экспирации: ${d.expiries.join(', ')} · Точек: ${d.points.length}`;
+                drawVolSurface(d);
+            } catch (e) { info.textContent = 'Ошибка: ' + e.message; }
+        }
+
+        function drawVolSurface(data) {
+            const ctx = document.getElementById('volsurf-chart');
+            if (!ctx || typeof Chart === 'undefined') return;
+            if (volSurfChartInstance) volSurfChartInstance.destroy();
+            const colors = ['#8b5cf6','#f59e0b','#10b981','#ef4444','#3b82f6','#ec4899'];
+            const datasets = [];
+            data.expiries.forEach((exp, ei) => {
+                const calls = data.points.filter(p => p.expiry === exp && p.type === 'call').sort((a, b) => a.strike - b.strike);
+                const puts = data.points.filter(p => p.expiry === exp && p.type === 'put').sort((a, b) => a.strike - b.strike);
+                if (calls.length) datasets.push({
+                    label: `${exp} (calls)`, data: calls.map(p => ({ x: p.moneyness, y: p.iv })),
+                    borderColor: colors[ei % colors.length], backgroundColor: 'transparent', tension: 0.3, pointRadius: 2, borderWidth: 2
+                });
+                if (puts.length) datasets.push({
+                    label: `${exp} (puts)`, data: puts.map(p => ({ x: p.moneyness, y: p.iv })),
+                    borderColor: colors[ei % colors.length], borderDash: [5, 3], backgroundColor: 'transparent', tension: 0.3, pointRadius: 2, borderWidth: 1.5
+                });
+            });
+            volSurfChartInstance = new Chart(ctx, {
+                type: 'scatter',
+                data: { datasets },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { labels: { color: '#94a3b8', font: { family: 'monospace', size: 10 } } } },
+                    scales: {
+                        x: { title: { display: true, text: 'Moneyness (K/S)', color: '#64748b' }, ticks: { color: '#94a3b8', font: { family: 'monospace' } }, grid: { color: '#1e293b' } },
+                        y: { title: { display: true, text: 'IV %', color: '#64748b' }, ticks: { color: '#94a3b8', font: { family: 'monospace' } }, grid: { color: '#1e293b' } }
+                    }
+                }
+            });
+        }
+
         function renderCoreVerdict(v) {
             const inst = document.getElementById('core-instruments');
             let ih = `<table class="w-full text-left text-[11px] font-mono text-slate-300">
                 <thead class="text-slate-500 border-b border-slate-700 uppercase">
-                    <tr><th class="py-1 pr-2">Инстр.</th><th class="py-1 pr-2 text-right">Спот</th><th class="py-1 pr-2">Режим</th><th class="py-1 pr-2 text-right">ATR14</th><th class="py-1 pr-2 text-right">ADX</th><th class="py-1 pr-2 text-right">RSI</th><th class="py-1 pr-2 text-right">IV</th><th class="py-1 pr-2 text-right">HV20</th><th class="py-1 pr-2 text-right">Rank</th><th class="py-1 pr-2 text-right">Skew</th><th class="py-1 text-right">Ликв.%</th></tr>
+                    <tr><th class="py-1 pr-2">Инстр.</th><th class="py-1 pr-2 text-right">Спот</th><th class="py-1 pr-2">Режим</th><th class="py-1 pr-2 text-right">ATR14</th><th class="py-1 pr-2 text-right">Объём</th><th class="py-1 pr-2 text-right">ADX</th><th class="py-1 pr-2 text-right">RSI</th><th class="py-1 pr-2 text-right">IV</th><th class="py-1 pr-2 text-right">HV20</th><th class="py-1 pr-2 text-right">Rank</th><th class="py-1 pr-2 text-right">Skew</th><th class="py-1 text-right">Ликв.%</th></tr>
                 </thead><tbody>`;
             (v.brief.instruments || []).forEach(i => {
                 const reg = i.regime === 'BULLISH' ? '<span class="text-emerald-400">бычий</span>' : i.regime === 'BEARISH' ? '<span class="text-rose-400">медвежий</span>' : '<span class="text-slate-400">боковик</span>';
@@ -1303,6 +1480,7 @@
                     <td class="py-1 pr-2 text-right">${i.spot ? i.spot.toLocaleString('ru-RU') : '—'}</td>
                     <td class="py-1 pr-2">${reg}${i.above_sma200 ? ' <span class="text-[9px] text-emerald-500">↑200</span>' : (i.sma200 ? ' <span class="text-[9px] text-rose-500">↓200</span>' : '')}</td>
                     <td class="py-1 pr-2 text-right">${i.atr14 ? i.atr14.toFixed(1) : '—'}</td>
+                    <td class="py-1 pr-2 text-right">${i.volume ? i.volume.toLocaleString('ru-RU') : '—'}</td>
                     <td class="py-1 pr-2 text-right">${i.adx14 || '—'}</td>
                     <td class="py-1 pr-2 text-right">${i.rsi14 || '—'}</td>
                     <td class="py-1 pr-2 text-right">${i.iv_atm ? i.iv_atm + '%' : '—'}</td>

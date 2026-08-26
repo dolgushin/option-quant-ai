@@ -38,6 +38,7 @@ type coreInstrument struct {
 	DTEFront     int     `json:"dte_front"`
 	Err          string  `json:"err,omitempty"`
 	ATR14        float64 `json:"atr14"` // average true range proxy: avg |Δclose| over 14 sessions
+	Volume       int     `json:"volume"` // last trade volume from MOEX ISS
 }
 
 type coreCandidate struct {
@@ -211,6 +212,11 @@ func collectCoreInstrument(symbol string) coreInstrument {
 	// ATR14 proxy (average |Δclose| over last 14 sessions).
 	if len(closes) >= 21 {
 		in.ATR14 = computeATR14(closes, 14)
+	}
+
+	// Volume from MOEX ISS (last trade volume of the front-month future).
+	if v, err := moexISSVolume(symbol); err == nil {
+		in.Volume = v
 	}
 
 	// Option surface: two nearest live expiries.
@@ -541,6 +547,13 @@ func candidateFromPlan(plan *spreadPlan, in coreInstrument) coreCandidate {
 			stopPrice = 0
 		}
 	}
+	// Calendar event warning: penalise candidates whose expiry falls near
+	// a known dividend or earnings date.
+	if warn, detail := calendarWarning(plan.Symbol, plan.Expiry); warn {
+		total -= 10
+		reasons = append(reasons, "⚠ Календарь: экспирация рядом с событием ("+detail+")")
+	}
+
 	return coreCandidate{
 		Symbol: plan.Symbol, Strategy: plan.Type, DisplayName: plan.DisplayName,
 		Expiry: plan.Expiry, DTE: plan.DaysToExp,
