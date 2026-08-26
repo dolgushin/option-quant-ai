@@ -457,6 +457,10 @@ func coreBuildCandidates(instruments []coreInstrument) []coreCandidate {
 					cand.Score = int(float64(cand.Score) * 1.1) // small‑risk bonus
 				}
 			}
+			// Apply quant weight to the candidate score
+			if coreSet.QuantWeight > 0 {
+				cand.Score = int(float64(cand.Score) * coreSet.QuantWeight)
+			}
 			out = append(out, cand)
 		}
 	}

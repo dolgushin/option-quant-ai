@@ -25,6 +25,8 @@ type coreAISettings struct {
 	Model       string `json:"model"`          // e.g. gpt-4o-mini
 	IntervalMin int    `json:"interval_min"`   // auto-scan interval, 0 = off
 	AutoPaper   bool   `json:"auto_paper"`     // auto-open paper spreads on strong verdicts
+	QuantWeight float64 `json:"quant_weight"`   // квантовый вес (0.0–1.0), по умолчанию 0.7
+	AiWeight    float64 `json:"ai_weight"`      // ИИ‑вес (0.0–1.0), по умолчанию 0.3
 }
 
 type coreAIVerdict struct {
@@ -69,6 +71,13 @@ func initCore(dataDir string) {
 			coreSet = st.Settings
 			coreVerdictLog = st.Verdicts
 		}
+	}
+	// Устанавливаем значения по умолчанию, если они не загружены из файла
+	if coreSet.QuantWeight == 0 {
+		coreSet.QuantWeight = 0.7
+	}
+	if coreSet.AiWeight == 0 {
+		coreSet.AiWeight = 0.3
 	}
 	coreStartAutoScan()
 }
@@ -292,8 +301,10 @@ func coreSettingsHandler(w http.ResponseWriter, r *http.Request) {
 			coreSet.Model = req.Model
 		}
 		coreSet.IntervalMin = int(math.Max(0, math.Min(float64(req.IntervalMin), 1440)))
-		coreSet.AutoPaper = req.AutoPaper
-		saveCoreStateLocked()
+coreSet.AutoPaper = req.AutoPaper
+		coreSet.QuantWeight = req.QuantWeight
+		coreSet.AiWeight = req.AiWeight
+	saveCoreStateLocked()
 	}
 	out := coreSet
 	if out.APIKey != "" {
