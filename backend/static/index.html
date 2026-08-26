@@ -1972,10 +1972,22 @@
                 d.spreads.forEach(s => {
                     const pnlCls = s.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400';
                     const creditCls = s.net_credit > 0 ? 'text-sky-300' : 'text-amber-300';
+                    // Theoretical P&L decomposition (when available).
+                    let theoInfo = '';
+                    if (s.position_found && s.theo_pnl !== undefined) {
+                        const ivCls = (s.iv_sensitivity||0) >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                        theoInfo = `<div class="text-[9px] mt-1 space-y-0.5">
+                            <span class="text-slate-400">BS:</span> <span class="${(s.theo_pnl||0)>=0?'text-emerald-400':'text-rose-400'}">${(s.theo_pnl||0)>=0?'+':''}${(s.theo_pnl||0).toLocaleString('ru-RU')} ₽</span>
+                            <span class="text-slate-600">|</span>
+                            <span class="text-slate-400" title="Изменение P&L при росте волатильности на 1%">ΔIV:</span> <span class="${ivCls}">${(s.iv_sensitivity||0)>=0?'+':''}${(s.iv_sensitivity||0).toLocaleString('ru-RU')} ₽</span>
+                            <span class="text-slate-600">|</span>
+                            <span class="text-slate-400" title="Ежедневный распад стоимости (theta)">Θ/д:</span> <span class="${(s.daily_decay||0)>=0?'text-emerald-400':'text-rose-400'}">${(s.daily_decay||0)>=0?'+':''}${(s.daily_decay||0).toLocaleString('ru-RU')} ₽</span>
+                        </div>`;
+                    }
                     html += `<tr class="border-b border-slate-800">
                         <td class="p-2 font-bold text-indigo-300">${s.display_name} <span class="text-[9px] text-slate-500">${s.roll_count ? 'ролл×' + s.roll_count : ''}</span><div class="text-[9px] text-slate-500">${s.symbol} · ${s.id}</div>
                             <div class="text-[9px] text-slate-400">эксп. ${s.expiry} · DTE ${s.dte}${s.state && s.state !== 'VERTICAL' ? ` · <span class="text-indigo-300 font-bold">◆ ${s.state}</span>` : ''}</div>
-                            <div class="text-[9px] text-slate-500">${spreadRuleBadge(s)}</div></td>
+                            <div class="text-[9px] text-slate-500">${spreadRuleBadge(s)}</div>${theoInfo}</td>
                         <td class="p-2">S ${s.short_strike.toLocaleString('ru-RU')} / L ${s.long_strike.toLocaleString('ru-RU')}</td>
                         <td class="p-2">${s.dte}</td>
                         <td class="p-2">${(s.entry_value||0).toLocaleString('ru-RU')}${s.net_credit > 0 ? ' <span class="text-[9px] text-sky-400" title="Отрицательная стоимость входа = полученный кредит">кредит</span>' : ''} / ${(s.current_value||0).toLocaleString('ru-RU')}</td>
@@ -3896,6 +3908,12 @@
             updateTokenStatus();
 
             setInterval(updateDashboard, 3000);
+
+            // Auto-refresh spreads tab every 5 seconds when active.
+            setInterval(() => {
+                const sprView = document.getElementById('spreads-view');
+                if (sprView && !sprView.classList.contains('hidden')) updateSpreads();
+            }, 5000);
         });
 
         // PWA: install prompt banner.

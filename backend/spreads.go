@@ -668,6 +668,52 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 					legs = append(legs, lm)
 				}
 				item["legs"] = legs
+
+				// Theoretical PnL: BS fair value of the spread at current
+				// spot / IV / DTE so the UI can show how PnL responds to
+				// volatility and time decay.
+				if spot > 0 {
+					rRate := 0.16
+					theoValue := 0.0
+					ivSens := 0.0   // vega: ruble change per 1% IV move
+					gammaSum := 0.0 // gamma per underlying unit
+					for _, l := range p.Legs {
+						if l.Kind != "OPTION" {
+							dir := 1.0
+							if l.Side == "SELL" {
+								dir = -1
+							}
+							theoValue += dir * l.CurrentPrice * float64(l.Quantity)
+							continue
+						}
+						iv := 0.30
+						if l.CurrentPrice > 0 {
+							if ivBack := quant.ImpliedVolatility(l.IsCall, l.CurrentPrice, spot, l.Strike, tYears, rRate); ivBack > 0 {
+								iv = ivBack
+							}
+						}
+						g := quant.CalculateBlackScholes(l.IsCall, spot, l.Strike, tYears, rRate, iv)
+						dir := 1.0
+						if l.Side == "SELL" {
+							dir = -1
+						}
+						q := float64(l.Quantity)
+						theoValue += dir * g.Price * q
+						ivSens += dir * g.Vega * q * 100.0  // vega per 1% IV, per share
+						gammaSum += dir * g.Gamma * q
+					}
+					mult := contractMultiplier(s.Symbol)
+					theoValueTotal := theoValue * mult * float64(s.Qty)
+					entryVal := p.EntryValue
+					theoPnL := theoValueTotal - entryVal
+					ivSensTotal := ivSens * mult * float64(s.Qty) // ruble impact per 1% IV
+					dailyDecay := p.Theta                         // theta in ₽/day already
+					item["theo_value"] = math.Round(theoValueTotal*100) / 100
+					item["theo_pnl"] = math.Round(theoPnL*100) / 100
+					item["iv_sensitivity"] = math.Round(ivSensTotal*100) / 100  // ₽ per 1% IV
+					item["daily_decay"] = math.Round(dailyDecay*100) / 100      // ₽ per day
+					item["gamma_total"] = math.Round(gammaSum*mult*float64(s.Qty)*10000) / 10000
+				}
 				break
 			}
 		}
