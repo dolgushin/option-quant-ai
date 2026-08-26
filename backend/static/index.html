@@ -67,6 +67,7 @@
             <button id="tab-btn-fc" onclick="switchTab('forecast')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🔮 Прогноз</button>
             <button id="tab-btn-core" onclick="switchTab('core')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🧠 Ядро</button>
             <button id="tab-btn-mcpnl" onclick="switchTab('mcpnl')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🎲 MC P&L</button>
+            <button id="tab-btn-ml" onclick="switchTab('ml')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🤖 ML</button>
         </nav>
 
         <div id="dashboard-view" class="space-y-4 md:space-y-6">
@@ -1003,6 +1004,41 @@
             </div>
         </div>
 
+        <!-- ML Module -->
+        <div id="ml-view" class="hidden space-y-4 md:space-y-6">
+            <div class="flex justify-between items-center">
+                <h2 class="text-lg font-semibold text-slate-200">🤖 Машинное обучение: предсказание сделок</h2>
+                <button onclick="trainML()" id="ml-train-btn" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg transition text-xs">🎓 Обучить модель</button>
+            </div>
+            <div id="ml-status" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                    <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">Важность признаков</div>
+                    <div id="ml-features" class="space-y-1"></div>
+                </div>
+                <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                    <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">Предсказание для кандидата</div>
+                    <div class="flex flex-wrap items-end gap-2 font-mono text-[11px] mb-3">
+                        <label class="text-slate-400">Инстр.
+                            <select id="ml-sym" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option>Si</option><option>RI</option><option>CR</option><option>NG</option><option>SBER</option><option>SBERP</option></select></label>
+                        <label class="text-slate-400">Стратегия
+                            <select id="ml-strat" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white">
+                                <option value="iron_condor">Iron Condor</option><option value="bull_put_spread">Bull Put</option><option value="bear_call_spread">Bear Call</option>
+                                <option value="bull_call_spread">Bull Call</option><option value="bear_put_spread">Bear Put</option><option value="long_strangle">Long Strangle</option>
+                            </select></label>
+                        <label class="text-slate-400">DTE <input id="ml-dte" type="number" value="14" class="w-14 bg-slate-900 border border-slate-600 rounded px-1 py-1 text-right text-white"></label>
+                        <label class="text-slate-400">IV% <input id="ml-iv" type="number" step="0.1" value="20" class="w-14 bg-slate-900 border border-slate-600 rounded px-1 py-1 text-right text-white"></label>
+                        <label class="text-slate-400">Тренд
+                            <select id="ml-trend" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option value="SIDEWAYS">Боковик</option><option value="BULLISH">Бычий</option><option value="BEARISH">Медвежий</option></select></label>
+                        <label class="text-slate-400">Vol
+                            <select id="ml-vol" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option value="neutral">Нейтрально</option><option value="IV>HV">IV>HV</option><option value="IV<HV">IV<HV</option></select></label>
+                        <button onclick="predictML()" class="px-3 py-1 bg-violet-600 hover:bg-violet-500 text-white font-bold rounded transition">🎯 Предсказать</button>
+                    </div>
+                    <div id="ml-prediction"></div>
+                </div>
+            </div>
+        </div>
+
         <!-- Analytics Core -->
         <div id="core-view" class="hidden space-y-4 md:space-y-6">
             <div class="flex justify-between items-center flex-wrap gap-2">
@@ -1099,8 +1135,8 @@
         const tabActive = 'px-4 py-2 text-xs font-bold rounded-lg bg-emerald-600 text-white transition';
 
         function switchTab(tab) {
-            const views = { dashboard: 'dashboard-view', spreads: 'spreads-view', stats: 'stats-view', forecast: 'forecast-view', core: 'core-view', mcpnl: 'mcpnl-view' };
-            const btns = { dashboard: 'tab-btn-dashboard', spreads: 'tab-btn-spreads', stats: 'tab-btn-stats', forecast: 'tab-btn-fc', core: 'tab-btn-core', mcpnl: 'tab-btn-mcpnl' };
+            const views = { dashboard: 'dashboard-view', spreads: 'spreads-view', stats: 'stats-view', forecast: 'forecast-view', core: 'core-view', mcpnl: 'mcpnl-view', ml: 'ml-view' };
+            const btns = { dashboard: 'tab-btn-dashboard', spreads: 'tab-btn-spreads', stats: 'tab-btn-stats', forecast: 'tab-btn-fc', core: 'tab-btn-core', mcpnl: 'tab-btn-mcpnl', ml: 'tab-btn-ml' };
             Object.values(views).forEach(id => document.getElementById(id).classList.add('hidden'));
             Object.values(btns).forEach(id => document.getElementById(id).className = tabIdle);
             document.getElementById(views[tab]).classList.remove('hidden');
@@ -1109,6 +1145,7 @@
             if (tab === 'stats') loadStats();
             if (tab === 'forecast') loadForecast();
             if (tab === 'core') loadCoreTab();
+            if (tab === 'ml') loadMLStatus();
         }
 
         // ---- Statistics module ----
@@ -1371,6 +1408,82 @@
                 btn.disabled = false;
                 btn.innerText = '⚡ Проанализировать рынок';
             }
+        }
+
+        // ---- ML Module ----
+        async function loadMLStatus() {
+            try {
+                const res = await fetch('/api/v2/ml/status');
+                const d = await res.json();
+                const k = document.getElementById('ml-status');
+                if (!d.trained) {
+                    k.innerHTML = kpiCard('Статус', '❌ Не обучена', 'text-rose-400') +
+                        kpiCard('Доступно сделок', d.trades || 0) +
+                        kpiCard('Минимум', '10', 'text-slate-400') +
+                        '<div></div>';
+                    document.getElementById('ml-features').innerHTML = '<div class="text-slate-500 text-[11px] font-mono">Модель не обучена</div>';
+                    return;
+                }
+                k.innerHTML =
+                    kpiCard('Accuracy', (d.accuracy * 100).toFixed(1) + '%', d.accuracy >= 0.6 ? 'text-emerald-400' : 'text-amber-400') +
+                    kpiCard('Precision', (d.precision * 100).toFixed(1) + '%') +
+                    kpiCard('Recall', (d.recall * 100).toFixed(1) + '%') +
+                    kpiCard('F1', d.f1.toFixed(3), d.f1 >= 0.5 ? 'text-emerald-400' : 'text-amber-400') +
+                    kpiCard('Обучено', d.trained_at, 'text-slate-400') +
+                    kpiCard('Сделок', d.train_size);
+                const maxImp = d.feature_importance.length ? d.feature_importance[0].importance : 1;
+                let fh = '';
+                (d.feature_importance || []).forEach(f => {
+                    const pct = Math.round(f.importance / maxImp * 100);
+                    fh += `<div class="flex items-center gap-2 text-[11px] font-mono">
+                        <span class="w-20 text-slate-400">${f.name}</span>
+                        <div class="flex-1 bg-slate-700 rounded h-3 overflow-hidden"><div class="bg-indigo-500 h-full" style="width:${pct}%"></div></div>
+                        <span class="w-12 text-right text-slate-300">${f.importance.toFixed(3)}</span></div>`;
+                });
+                document.getElementById('ml-features').innerHTML = fh || '<div class="text-slate-500 text-[11px]">Нет данных</div>';
+            } catch (e) { console.error(e); }
+        }
+
+        async function trainML() {
+            const btn = document.getElementById('ml-train-btn');
+            btn.disabled = true; btn.innerText = '⏳ Обучение...';
+            try {
+                const res = await fetch('/api/v2/ml/train', { method: 'POST' });
+                const d = await res.json();
+                if (d.error) { alert('❌ ' + d.error); return; }
+                alert(`✅ Модель обучена! Accuracy: ${(d.accuracy*100).toFixed(1)}%, F1: ${d.f1.toFixed(3)}, сделок: ${d.train_size}`);
+                loadMLStatus();
+            } catch (e) { alert('❌ Ошибка: ' + e.message); }
+            btn.disabled = false; btn.innerText = '🎓 Обучить модель';
+        }
+
+        async function predictML() {
+            const body = JSON.stringify({
+                symbol: document.getElementById('ml-sym').value,
+                strategy: document.getElementById('ml-strat').value,
+                dte: parseInt(document.getElementById('ml-dte').value) || 14,
+                iv: parseFloat(document.getElementById('ml-iv').value) || 20,
+                trend: document.getElementById('ml-trend').value,
+                vol_regime: document.getElementById('ml-vol').value,
+            });
+            const el = document.getElementById('ml-prediction');
+            el.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Расчёт...</div>';
+            try {
+                const res = await fetch('/api/v2/ml/predict', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+                const d = await res.json();
+                if (d.error) { el.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${d.error}</div>`; return; }
+                const prob = d.win_prob;
+                const cls = prob >= 0.6 ? 'text-emerald-400' : prob >= 0.4 ? 'text-amber-400' : 'text-rose-400';
+                const confCls = d.confidence === 'HIGH' ? 'text-emerald-300' : d.confidence === 'MEDIUM' ? 'text-amber-300' : 'text-slate-400';
+                el.innerHTML = `<div class="space-y-2 font-mono text-[11px]">
+                    <div class="text-lg font-bold ${cls}">Win Probability: ${(prob*100).toFixed(1)}%</div>
+                    <div>Уверенность: <span class="${confCls} font-bold">${d.confidence}</span></div>
+                    <div class="w-full bg-slate-700 rounded h-4 overflow-hidden">
+                        <div class="h-full ${prob >= 0.5 ? 'bg-emerald-500' : 'bg-rose-500'}" style="width:${prob*100}%"></div>
+                    </div>
+                    <div class="text-slate-500">На основе ${Object.keys(d.features).length} признаков (DTE, IV, тренд, волатильность, стратегия, инструмент)</div>
+                </div>`;
+            } catch (e) { el.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${e.message}</div>`; }
         }
 
         let mcHistChartInstance = null;
