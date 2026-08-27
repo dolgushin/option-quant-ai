@@ -104,10 +104,32 @@ TPR 1σ: рост→лестница, боковик→ratio, падение→A
 {"trade": bool, "confidence": 0..1, "construction": "...", "symbol": "...", "expiry": "YYYY-MM-DD",
 "entry_plan": "...", "management_plan": "...", "hedge_plan": "...", "invalidation": "...", "reasoning": "..."}`
 
+// AI quiet hours (MSK). Outside 09:00–22:00 the LLM is not consulted at all.
+const (
+	aiQuietStartHour = 22
+	aiQuietEndHour   = 9
+)
+
+// inAiQuietHours reports whether the given local hour (0–23) falls into the
+// nightly window [aiQuietStartHour, 24) ∪ [0, aiQuietEndHour).
+func inAiQuietHours(hour int) bool {
+	return hour >= aiQuietStartHour || hour < aiQuietEndHour
+}
+
+// aiQuietHoursNow reports whether the LLM should stay offline right now,
+// evaluated in Moscow time (MSK, UTC+3) regardless of the server locale.
+func aiQuietHoursNow() bool {
+	loc := time.FixedZone("MSK", 3*60*60)
+	return inAiQuietHours(time.Now().In(loc).Hour())
+}
+
 // callLLM consults an OpenAI-compatible chat completions endpoint.
 func callLLM(brief *coreBrief) (*coreAIVerdict, error) {
 	if coreSet.APIKey == "" || coreSet.BaseURL == "" {
 		return nil, fmt.Errorf("AI API не настроен (нужен base_url и api_key)")
+	}
+	if aiQuietHoursNow() {
+		return nil, fmt.Errorf("ИИ выключен в ночное время (22:00–09:00 MSK)")
 	}
 	briefJSON, _ := json.Marshal(brief)
 	payload := map[string]interface{}{
