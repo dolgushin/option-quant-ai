@@ -1,4 +1,4 @@
-const CACHE = 'optionquant-v1';
+const CACHE = 'optionquant-v2';
 const CORE = [
   '/',
   '/manifest.json',
