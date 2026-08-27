@@ -3,8 +3,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    ports:
-      - "9000:9000"
+    container_name: option-quant-app
     restart: always
     environment:
       - PORT=9000
@@ -13,6 +12,12 @@ services:
       - BYBIT_API_SECRET=56kv4jNlgCgBcIj6gtlU4G8cX6kIM1PfYX5k
     volumes:
       - quant_data:/app/data
+    networks:
+      - proxy
 
 volumes:
   quant_data:
+
+networks:
+  proxy:
+    external: true
