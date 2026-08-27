@@ -427,6 +427,166 @@ func buildVerticalSpread(symbol, spreadType, expiry string, qty int) (*spreadPla
 	return plan, nil
 }
 
+// rollLegSpec describes a leg of the resulting position after a roll. A
+// "kept" leg stays at its current series/strike; a "rolled" leg moves to a
+// new series and (optionally) a new strike.
+type rollLegSpec struct {
+	Side      string  // "BUY" | "SELL"
+	IsCall    bool
+	CurrentStrike float64 // strike in the current/kept series
+	// For a rolled leg in a target series:
+	Roll       bool    // true → move to TargetStrike; false → keep CurrentStrike
+	TargetStrike float64
+	SecID      string  // effective secid after resolution (may be set by caller)
+}
+
+// buildSpreadFromLegs computes the economics of a spread made from explicit
+// option legs (side/strike/call) in a given expiry, reusing the same quote and
+// Black-Scholes machinery as buildVerticalSpread. It supports zero or more
+// SELL legs and one or more BUY legs (verticals, and 1-legged rolls). It is
+// the engine for the roll preview and the per-leg roll execution.
+//
+// typeName/displayName keep the report human-readable; they are informational.
+func buildSpreadFromLegs(symbol, expiry string, qty int, legs []rollLegSpec, isDebit bool, typeName, displayName string) (*spreadPlan, error) {
+	if symbol == "" {
+		symbol = "Si"
+	}
+	if expiry == "" {
+		if expiryT := currentSeriesExpiry(symbol); expiryT != nil {
+			expiry = expiryT.Format("2006-01-02")
+		}
+	}
+	if qty <= 0 {
+		qty = 1
+	}
+
+	spot, err := getSpotPrice(symbol)
+	if err != nil || spot <= 0 {
+		spot = 83200.0
+	}
+
+	strikes, findOpt, err := optionChainFor(symbol, expiry)
+	if err != nil {
+		return nil, err
+	}
+	_ = strikes // used only via findOpt for secid/GO lookup
+
+	days := dteInDays(expiry, time.Now())
+	if days <= 0 {
+		days = 30
+	}
+	t := float64(days) / 365.0
+	rRate := 0.16
+
+	plan := &spreadPlan{
+		Symbol:      symbol,
+		Type:        typeName,
+		DisplayName: displayName,
+		Expiry:      expiry,
+		DaysToExp:   dteInDays(expiry, time.Now()),
+		Spot:        math.Round(spot*100) / 100,
+		Qty:         qty,
+		IsDebit:     isDebit,
+		Legs:        []spreadLeg{},
+	}
+
+	var credit, debit, thetaTotal, deltaTotal, marginShort float64
+	var shortStrike, longStrike float64
+
+	for _, sp := range legs {
+		side := sp.Side
+		if side == "" {
+			side = "BUY"
+		}
+		dir := 1.0
+		if side == "SELL" {
+			dir = -1.0
+		}
+		opt := findOpt(sp.TargetStrike, sp.IsCall)
+		if opt == nil {
+			return nil, fmt.Errorf("option not found at %v", sp.TargetStrike)
+		}
+		last, bid, offer, _ := moexOptionQuote(opt.SecID)
+		if last <= 0 {
+			last = opt.PrevPrice
+		}
+		_ = bid
+		_ = offer
+		if last <= 0 {
+			return nil, fmt.Errorf("нет рыночной цены для %s — операция отменена", opt.SecID)
+		}
+		iv := quant.ImpliedVolatility(sp.IsCall, last, spot, sp.TargetStrike, t, rRate)
+		if iv <= 0 {
+			iv = 0.30
+		}
+		g := quant.CalculateBlackScholes(sp.IsCall, spot, sp.TargetStrike, t, rRate, iv)
+
+		if side == "SELL" {
+			credit += last
+			shortStrike = sp.TargetStrike
+			if opt.IMNP > 0 {
+				marginShort += opt.IMNP
+			}
+		} else {
+			debit += last
+			longStrike = sp.TargetStrike
+		}
+		thetaTotal += dir * g.Theta
+		deltaTotal += dir * g.Delta
+
+		plan.Legs = append(plan.Legs, spreadLeg{
+			SecID:       opt.SecID,
+			Side:        side,
+			Strike:      sp.TargetStrike,
+			IsCall:      sp.IsCall,
+			Price:       math.Round(last*100) / 100,
+			Delta:       math.Round(dir*g.Delta*100) / 100,
+			Theta:       math.Round(dir*g.Theta*100) / 100,
+			MarginShort: opt.IMNP,
+		})
+	}
+
+	wing := math.Abs(shortStrike - longStrike)
+	if wing <= 0 {
+		wing = 1.0
+	}
+	netCredit := credit - debit
+
+	var maxProfit, maxLoss float64
+	if isDebit {
+		netDebit := debit - credit
+		if netDebit < 0 {
+			netDebit = 0
+		}
+		maxProfit = wing - netDebit
+		maxLoss = netDebit
+	} else {
+		maxProfit = netCredit
+		maxLoss = wing - netCredit
+	}
+	if maxProfit < 0 {
+		maxProfit = 0
+	}
+	if maxLoss < 0 {
+		maxLoss = 0
+	}
+
+	atmStrike := nearestStrikeFromStrikes(strikes, spot)
+
+	plan.ShortStrike = shortStrike
+	plan.LongStrike = longStrike
+	plan.WingWidth = math.Round(wing*10000) / 10000
+	plan.NetCredit = math.Round(netCredit*float64(qty)*100) / 100
+	plan.MaxProfit = math.Round(maxProfit*float64(qty)*100) / 100
+	plan.MaxLoss = math.Round(maxLoss*float64(qty)*100) / 100
+	plan.MarginShort = math.Round(marginShort*float64(qty)*100) / 100
+	plan.ThetaPerCtr = math.Round(thetaTotal*100) / 100
+	plan.DeltaPerCtr = math.Round(deltaTotal*100) / 100
+	plan.CentralStrike = atmStrike
+	plan.Multiplier = contractMultiplier(symbol)
+	return plan, nil
+}
+
 // spreadPlanHandler returns the full economics of a vertical spread.
 // URL: /api/v1/spreads/plan?symbol=Si&type=bull_put&qty=1&expiry=2026-09-17
 func spreadPlanHandler(w http.ResponseWriter, r *http.Request) {
@@ -849,9 +1009,27 @@ func spreadCloseHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// spreadRollHandler rolls a spread to the next futures series: closes the
-// current position, opens a new one in the next series and bumps RollCount.
-// POST /api/v1/spreads/roll {"id":"spr-...","live":false}
+// rollRequestLeg carries a per-leg override supplied by the caller when
+// rolling: which leg (side/call) to move and to which new strike.
+type rollRequestLeg struct {
+	Side   string  `json:"side"`
+	IsCall bool    `json:"is_call"`
+	Strike float64 `json:"strike"`
+	Roll   bool    `json:"roll"`
+}
+
+// spreadRollHandler rolls a spread into a chosen series, optionally moving one
+// or both legs to new strikes. It closes the current position, opens the new
+// one and bumps RollCount.
+// POST /api/v1/spreads/roll
+// {
+//   "id":"spr-...",
+//   "live":false,
+//   "series":"2026-10-15",          // optional target expiry (auto if empty)
+//   "legs":[                        // optional per-leg overrides (by side)
+//      {"side":"SELL","is_call":true,"strike":81000,"roll":true}
+//   ]
+// }
 func spreadRollHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {
@@ -860,8 +1038,10 @@ func spreadRollHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		ID   string `json:"id"`
-		Live bool   `json:"live"`
+		ID     string           `json:"id"`
+		Live   bool             `json:"live"`
+		Series string           `json:"series"`
+		Legs   []rollRequestLeg `json:"legs"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
@@ -873,10 +1053,17 @@ func spreadRollHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	roll := nextRollSeries(s.Symbol, s.Expiry)
-	if roll.NextSeries == "" {
-		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "no next series available"})
-		return
+	// Resolve the target series (default: earliest next).
+	targetExpiry := req.Series
+	var nextSeriesCode string
+	if targetExpiry == "" {
+		roll := nextRollSeries(s.Symbol, s.Expiry)
+		if roll.NextExpiry == "" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "no next series available"})
+			return
+		}
+		targetExpiry = roll.NextExpiry
+		nextSeriesCode = roll.NextSeries
 	}
 
 	// 1) Close the current position and record the trade.
@@ -902,8 +1089,30 @@ func spreadRollHandler(w http.ResponseWriter, r *http.Request) {
 	s.Status = "ROLLED"
 	saveSpreadRecord(s)
 
-	// 2) Open the same spread in the next series.
-	plan, err := buildVerticalSpread(s.Symbol, s.Type, roll.NextExpiry, s.Qty)
+	// 2) Build the resulting legs. Every option leg moves to the target series.
+	// If the caller chose a new strike for it, use that; otherwise keep the
+	// current strike (valued in the new series).
+	specs := make([]rollLegSpec, 0, 2)
+	for _, l := range pos.Legs {
+		if l.Kind != "OPTION" {
+			continue
+		}
+		strike := l.Strike
+		for _, over := range req.Legs {
+			if over.Side == l.Side && over.IsCall == l.IsCall && over.Strike > 0 {
+				strike = over.Strike
+				break
+			}
+		}
+		specs = append(specs, rollLegSpec{
+			Side:          l.Side,
+			IsCall:        l.IsCall,
+			CurrentStrike: l.Strike,
+			TargetStrike:  strike,
+		})
+	}
+
+	plan, err := buildSpreadFromLegs(s.Symbol, targetExpiry, s.Qty, specs, metaDebitForType(s.Type), s.Type, s.DisplayName)
 	if err != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "roll build failed: " + err.Error()})
 		return
@@ -964,16 +1173,298 @@ func spreadRollHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	saveSpreadRecord(newRec)
 
+	nextDisplay := targetExpiry
+	if nextSeriesCode != "" {
+		nextDisplay = fmt.Sprintf("%s (%s)", targetExpiry, nextSeriesCode)
+	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":       true,
-		"message":       fmt.Sprintf("Ролл выполнен: %s → %s (%s)", s.Expiry, roll.NextExpiry, roll.NextSeries),
+		"message":       fmt.Sprintf("Ролл выполнен: %s → %s", s.Expiry, nextDisplay),
 		"previous":      s,
 		"spread":        newRec,
 		"position":      p,
-		"next_series":   roll.NextSeries,
+		"next_series":   nextSeriesCode,
 		"portfolio":     quant.GetPortfolio(),
 		"stats":         quant.ComputeStats(),
 	})
+}
+
+// metaDebitForType returns whether a spread type is a debit structure.
+func metaDebitForType(t string) bool {
+	m, ok := spreadTypes[t]
+	if !ok {
+		return false
+	}
+	return m.Debit
+}
+
+// rollChainItem describes one option available to open as a rolled leg in the
+// target series, with full liquidity (top-of-book bid/ask + best-effort depth).
+type rollChainItem struct {
+	SecID  string  `json:"secid"`
+	Strike float64 `json:"strike"`
+	IsCall bool    `json:"is_call"`
+	Side   string  `json:"side"` // suggested side for building the structure
+	Mid    float64 `json:"mid"`
+	Bid    float64 `json:"bid"`
+	Ask    float64 `json:"ask"`
+	SpreadPct float64 `json:"spread_pct"` // (ask-bid)/mid %
+	Depth  []orderBookLevel `json:"depth"`  // Alor depth, empty if unavailable
+	DepthSrc string `json:"depth_src"`      // "alor" | "iss"
+}
+
+type orderBookLevel struct {
+	Price  float64 `json:"price"`
+	Volume int     `json:"volume"`
+	Side   string  `json:"side"` // "bid" | "ask"
+}
+
+// spreadRollPreviewHandler returns everything needed to preview and execute a
+// roll: the current legs with close liquidity, the list of available target
+// series, and — for a chosen series — the per-leg strike/quote menu with
+// economics. Re-run it with different series/strike params as the user picks.
+//
+// GET /api/v1/spreads/roll/preview?id=spr-...&series=2026-10-15
+//   &leg=SELL&leg=BUY&strike=81000&strike=82500
+func spreadRollPreviewHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	id := r.URL.Query().Get("id")
+	s, found := spreadRecordByID(id)
+	if !found || s.Status != "OPEN" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "spread not found or not open"})
+		return
+	}
+
+	// Current position legs with close liquidity.
+	positions := quant.GetActivePositions()
+	var pos *quant.Position
+	for i := range positions {
+		if positions[i].ID == s.PositionID {
+			pos = &positions[i]
+			break
+		}
+	}
+	current := []map[string]interface{}{}
+	closeValue := 0.0
+	mult := contractMultiplier(s.Symbol)
+	if pos != nil {
+		repricePosition(pos)
+		quant.SavePosition(*pos)
+		for _, l := range pos.Legs {
+			q := optionQuoteForDepth(l.SecID)
+			ml := map[string]interface{}{
+				"secid": l.SecID, "side": l.Side, "kind": l.Kind,
+				"strike": l.Strike, "is_call": l.IsCall,
+				"entry_price": math.Round(l.EntryPrice*100) / 100,
+				"current_price": math.Round(l.CurrentPrice*100) / 100,
+				"bid": q.Bid, "ask": q.Offer, "mid": q.Price,
+			}
+			current = append(current, ml)
+			// Close = sell what we own, buy what we sold (realizing at mid).
+			dir := 1.0
+			if l.Side == "SELL" {
+				dir = -1
+			}
+			if l.Kind == "OPTION" {
+				closeValue += dir * q.Price * mult * float64(l.Quantity)
+			}
+		}
+	}
+
+	// Available target series (newest first) → earliest-after-current first.
+	seriesList := []map[string]interface{}{}
+	for _, c := range optionSeriesForSymbol(s.Symbol) {
+		if c.LastDelDate <= time.Now().Format("2006-01-02") {
+			continue
+		}
+		seriesList = append(seriesList, map[string]interface{}{
+			"code": c.Code, "short_name": c.ShortName, "expiry": c.LastDelDate,
+			"dtc": dteInDays(c.LastDelDate, time.Now()),
+		})
+	}
+
+	// Resolve active target series.
+	targetExpiry := r.URL.Query().Get("series")
+	if targetExpiry == "" && len(seriesList) > 0 {
+		nr := nextRollSeries(s.Symbol, s.Expiry)
+		targetExpiry = nr.NextExpiry
+	}
+	if targetExpiry == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "no target series", "series_options": seriesList})
+		return
+	}
+
+	// Per-leg override strikes supplied via repeated leg/strike query params.
+	legSides := r.URL.Query()["leg"]
+	legStrikes := r.URL.Query()["strike"]
+	overrides := map[string]float64{}
+	for i, ls := range legSides {
+		if i < len(legStrikes) {
+			var st float64
+			fmt.Sscanf(legStrikes[i], "%f", &st)
+			overrides[strings.ToUpper(ls)] = st
+		}
+	}
+
+	// Build the strike/quote menu for each leg's side, and the resulting plan.
+	chainItems := []map[string]interface{}{}
+	specs := []rollLegSpec{}
+	underlyingOrderbook := []orderBookLevel{}
+	underlyingDepthSrc := ""
+	if pos != nil {
+		if code, ok := futuresSeriesAlor(s.Symbol); ok && alorMarket != nil {
+			if ob, err := alorMarket.FetchOrderbook("MOEX", code); err == nil {
+				for _, b := range ob.Bids {
+					underlyingOrderbook = append(underlyingOrderbook, orderBookLevel{Price: b.Price, Volume: b.Volume, Side: "bid"})
+				}
+				for _, a := range ob.Asks {
+					underlyingOrderbook = append(underlyingOrderbook, orderBookLevel{Price: a.Price, Volume: a.Volume, Side: "ask"})
+				}
+				underlyingDepthSrc = "alor"
+			}
+		}
+		for _, l := range pos.Legs {
+			if l.Kind != "OPTION" {
+				continue
+			}
+			side := l.Side
+			strike := l.Strike
+			if st, ok := overrides[strings.ToUpper(side)]; ok && st > 0 {
+				strike = st
+			}
+			items := optionChainMenu(s.Symbol, targetExpiry, side, l.IsCall, l.Strike)
+			chainItems = append(chainItems, map[string]interface{}{
+				"side": side, "is_call": l.IsCall, "current_strike": l.Strike,
+				"options": items,
+			})
+			specs = append(specs, rollLegSpec{
+				Side: l.Side, IsCall: l.IsCall, CurrentStrike: l.Strike,
+				TargetStrike: strike,
+			})
+		}
+	}
+
+	plan, err := buildSpreadFromLegs(s.Symbol, targetExpiry, s.Qty, specs, metaDebitForType(s.Type), s.Type, s.DisplayName)
+	var planErr string
+	if err != nil {
+		planErr = err.Error()
+	}
+
+	// Roll impact: realized on close (current value, marked at mid) flows into
+	// the new structure; net new credit is the difference.
+	netImpact := 0.0
+	if plan != nil {
+		// new position value at open ≈ net credit/paid of the new structure.
+		newNet := plan.NetCredit
+		netImpact = newNet - closeValue
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id": s.ID, "symbol": s.Symbol, "type": s.Type, "display_name": s.DisplayName,
+		"qty": s.Qty, "current_expiry": s.Expiry, "current_pnl": posPnL(pos),
+		"current": current, "close_value": math.Round(closeValue*100) / 100,
+		"series_options": seriesList, "target_series": targetExpiry,
+		"chain": chainItems, "plan": plan, "plan_error": planErr,
+		"net_impact": math.Round(netImpact*100) / 100,
+		"underlying_orderbook": underlyingOrderbook,
+		"underlying_depth_src": underlyingDepthSrc,
+	})
+}
+
+// posPnL returns the P&L of a position (0 if nil).
+func posPnL(p *quant.Position) float64 {
+	if p == nil {
+		return 0
+	}
+	return math.Round(p.PnL*100) / 100
+}
+
+// optionQuoteForDepth returns the cached quote (mark/bid/ask) for an option,
+// preferring a fresh live row.
+func optionQuoteForDepth(secid string) optionQuoteEx {
+	q, ok := cachedOptionQuoteEx(secid)
+	if !ok {
+		return optionQuoteEx{}
+	}
+	return q
+}
+
+// optionChainMenu lists the tradeable strikes of a leg (side/call) in a series
+// with full top-of-book liquidity for each strike and a best-effort Alor depth.
+func optionChainMenu(symbol, expiry, side string, isCall bool, anchorStrike float64) []map[string]interface{} {
+	_, find, err := optionChainFor(symbol, expiry)
+	if err != nil {
+		return nil
+	}
+	// Walk strikes around the current ATM using the chain finder.
+	chain := moexOptionsForAsset(symbol, expiry)
+	strikes := []float64{}
+	seen := map[float64]bool{}
+	for _, o := range chain {
+		if o.IsCall == isCall && !seen[o.Strike] {
+			seen[o.Strike] = true
+			strikes = append(strikes, o.Strike)
+		}
+	}
+	sort.Float64s(strikes)
+	// Keep a window of strikes around the anchor leg so the dropdown stays usable.
+	const half = 12
+	if anchorStrike > 0 && len(strikes) > 2*half {
+		best := 0
+		for i, st := range strikes {
+			if st <= anchorStrike {
+				best = i
+			}
+		}
+		lo := best - half
+		if lo < 0 {
+			lo = 0
+		}
+		hi := best + half
+		if hi > len(strikes) {
+			hi = len(strikes)
+		}
+		strikes = strikes[lo:hi]
+	}
+	out := []map[string]interface{}{}
+	for _, st := range strikes {
+		opt := find(st, isCall)
+		if opt == nil {
+			continue
+		}
+		q := optionQuoteForDepth(opt.SecID)
+		spreadPct := 0.0
+		if q.Bid > 0 && q.Offer >= q.Bid {
+			mid := (q.Bid + q.Offer) / 2
+			if mid > 0 {
+				spreadPct = math.Round((q.Offer-q.Bid)/mid*10000) / 100
+			}
+		}
+		item := map[string]interface{}{
+			"secid": opt.SecID, "strike": st, "is_call": isCall, "side": side,
+			"mid": math.Round(q.Price*10000) / 10000,
+			"bid": math.Round(q.Bid*10000) / 10000,
+			"ask": math.Round(q.Offer*10000) / 10000,
+			"spread_pct": spreadPct,
+			"depth": []orderBookLevel{}, "depth_src": "iss",
+		}
+		// Best-effort Alor depth for this option via its ISS secid as symbol.
+		if alorMarket != nil {
+			if ob, err := alorMarket.FetchOrderbook("MOEX", opt.SecID); err == nil {
+				levels := []orderBookLevel{}
+				for _, b := range ob.Bids {
+					levels = append(levels, orderBookLevel{Price: b.Price, Volume: b.Volume, Side: "bid"})
+				}
+				for _, a := range ob.Asks {
+					levels = append(levels, orderBookLevel{Price: a.Price, Volume: a.Volume, Side: "ask"})
+				}
+				item["depth"] = levels
+				item["depth_src"] = "alor"
+			}
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 // spreadHedgeHandler delta-hedges a spread using its linked position.

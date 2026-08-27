@@ -812,6 +812,66 @@
             </div>
         </div>
     </div>
+
+    <!-- ============ ROLL PREVIEW MODAL ============ -->
+    <div id="spread-roll-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden items-center justify-center p-4 overflow-y-auto">
+        <div class="bg-slate-800 border border-slate-700 w-full max-w-5xl rounded-2xl p-6 space-y-5 shadow-2xl relative my-8">
+            <div class="flex justify-between items-center border-b border-slate-700 pb-4">
+                <div>
+                    <h3 class="text-xl font-bold text-amber-400">↻ Предпросмотр ролла</h3>
+                    <p id="roll-modal-subtitle" class="text-xs text-slate-400 font-mono"></p>
+                </div>
+                <button onclick="closeRollModal()" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <!-- Left: current position to close -->
+                <div>
+                    <div class="text-[10px] text-slate-400 uppercase mb-1 font-mono">Закрываемая позиция</div>
+                    <div class="bg-slate-900/60 rounded-lg p-3 border border-slate-700">
+                        <div id="roll-close-box" class="text-xs font-mono text-slate-300 space-y-1"></div>
+                    </div>
+                </div>
+                <!-- Right: series + legs to open -->
+                <div>
+                    <div class="text-[10px] text-slate-400 uppercase mb-1 font-mono">Серия ролла</div>
+                    <div class="bg-slate-900/60 rounded-lg p-3 border border-slate-700 space-y-3">
+                        <div>
+                            <label class="block text-[10px] text-slate-400 mb-1">Целевая серия (экспирация)</label>
+                            <select id="roll-series" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs font-mono text-slate-200" onchange="rollPreviewReload()"></select>
+                        </div>
+                        <div id="roll-legs-box" class="space-y-3"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Order books -->
+            <div>
+                <div class="text-[10px] text-slate-400 uppercase mb-1 font-mono">Стаканы (ликвидность)</div>
+                <div id="roll-orderbooks" class="grid grid-cols-1 md:grid-cols-2 gap-3"></div>
+                <div id="roll-depth-note" class="text-[10px] text-slate-500 mt-1 font-mono"></div>
+            </div>
+
+            <!-- Economics -->
+            <div>
+                <div class="text-[10px] text-slate-400 uppercase mb-1 font-mono">Экономика ролла</div>
+                <div id="roll-econ" class="bg-slate-900/60 rounded-lg p-3 border border-slate-700 text-xs font-mono text-slate-300 grid grid-cols-2 md:grid-cols-3 gap-2"></div>
+            </div>
+
+            <!-- Payoff chart -->
+            <div>
+                <div class="text-[10px] text-slate-400 uppercase mb-1 font-mono">Payoff новой структуры</div>
+                <div class="bg-slate-900/60 rounded-lg p-2 border border-slate-700">
+                    <canvas id="roll-payoff-canvas" height="170"></canvas>
+                </div>
+            </div>
+
+            <div class="flex justify-end gap-2 border-t border-slate-700 pt-4">
+                <button onclick="closeRollModal()" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold rounded-xl transition text-sm">Отмена</button>
+                <button onclick="executeRoll()" class="px-5 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl transition text-sm">↻ Выполнить ролл</button>
+            </div>
+        </div>
+    </div>
         </div><!-- /dashboard-view -->
 
         <!-- ============ SPREADS VIEW ============ -->
@@ -1854,12 +1914,292 @@
             updateSpreads();
         }
 
+        // ---- Roll preview ----
+        let rollState = null; // { id, symbol, expiry, legs:[{side,is_call,current_strike,chosen_strike}], series }
+
         async function rollSpread(id) {
-            if (!confirm('Ролл спреда в следующую серию? Текущий закроется, новый откроется.')) return;
-            const d = await sprAction('/api/v1/spreads/roll', id, false);
+            const modal = document.getElementById('spread-roll-modal');
+            modal.classList.remove('hidden');
+            rollState = { id: id, legs: [], series: '' };
+            await rollPreviewLoad();
+        }
+        function closeRollModal() {
+            document.getElementById('spread-roll-modal').classList.add('hidden');
+            rollState = null;
+        }
+
+        async function rollPreviewLoad() {
+            const d = await fetch(`/api/v1/spreads/roll/preview?id=${rollState.id}`).then(r => r.json()).catch(e => ({ error: String(e) }));
+            if (d.error) { document.getElementById('roll-modal-subtitle').innerText = '❌ ' + d.error; return; }
+            rollState.id = d.id;
+            rollState.symbol = d.symbol;
+            rollState.expiry = d.current_expiry;
+            document.getElementById('roll-modal-subtitle').innerText =
+                `${d.display_name} · ${d.symbol} · ${d.id} · эксп. ${d.current_expiry} · P&L ${d.current_pnl != null ? (d.current_pnl>=0?'+':'')+d.current_pnl.toLocaleString('ru-RU') : '—'}`;
+
+            // Close box
+            let closeHtml = '<div class="text-slate-400">P&L на закрытие: <span class="' + (d.current_pnl>=0?'text-emerald-400':'text-rose-400') + '">' + (d.current_pnl>=0?'+':'') + (d.current_pnl||0).toLocaleString('ru-RU') + ' ₽</span></div>';
+            (d.current||[]).forEach(l => {
+                const src = l.quote_src === 'mid' ? 'стакан' : l.quote_src === 'last' ? 'сделка' : l.quote_src === 'settle' ? 'клиринг' : '';
+                closeHtml += `<div class="text-[10px] text-slate-400">${l.side} ${l.secid} ${l.kind==='FUTURES'?'фьюч.':(l.is_call?'CALL':'PUT')} @ ${l.strike != null ? l.strike.toLocaleString('ru-RU') : '—'} — вход ${(l.entry_price||0).toFixed(2)} / сейчас ${(l.current_price||0).toFixed(2)}${l.bid ? ` <span class="text-emerald-400">бид ${l.bid.toFixed(2)}</span>`:''}${l.ask ? ` <span class="text-rose-400">аск ${l.ask.toFixed(2)}</span>`:''}${src?' · '+src:''}</div>`;
+            });
+            document.getElementById('roll-close-box').innerHTML = closeHtml;
+
+            // Series dropdown
+            const sel = document.getElementById('roll-series');
+            const prevSeries = rollState.series || d.target_series;
+            sel.innerHTML = (d.series_options||[]).map(s =>
+                `<option value="${s.expiry}" ${s.expiry===prevSeries?'selected':''}>${s.expiry} · DTE ${s.dtc}${s.code? ' · '+s.code:''}</option>`
+            ).join('');
+            rollState.series = sel.value;
+            rollState.chain = d.chain || [];
+            renderRollLegs(d);
+            renderRoll();
+        }
+
+        function renderRollLegs(d) {
+            const box = document.getElementById('roll-legs-box');
+            const prev = rollState.legs || [];
+            // build per-leg selectors from the chain returned by the server, preserving
+            // any prior user choices matched by side+type.
+            rollState.legs = (d.chain||[]).map(ch => {
+                const old = prev.find(p => p.side === ch.side && p.is_call === ch.is_call);
+                let chosen = ch.current_strike;
+                if (old && old.chosen_strike != null && ch.options && ch.options.some(o => o.strike === old.chosen_strike)) {
+                    chosen = old.chosen_strike;
+                }
+                return {
+                    side: ch.side, is_call: ch.is_call, current_strike: ch.current_strike,
+                    options: ch.options||[],
+                    chosen_strike: chosen,
+                    roll: old ? old.roll : true,
+                };
+            });
+            if (!rollState.legs.length) { box.innerHTML = '<div class="text-xs text-slate-500">Нет ног для ролла</div>'; return; }
+            box.innerHTML = rollState.legs.map((leg, i) => {
+                const cur = leg.current_strike;
+                const opts = leg.options.map(o =>
+                    `<option value="${o.strike}" ${o.strike===leg.chosen_strike?'selected':''}>${o.strike.toLocaleString('ru-RU')}${o.ask>0?` — бид ${o.bid.toFixed(2)} / аск ${o.ask.toFixed(2)}`:''}</option>`
+                ).join('');
+                return `<div class="bg-slate-900/60 rounded p-2 border border-slate-700">
+                    <div class="flex items-center justify-between">
+                        <div class="text-[11px] ${leg.side==='SELL'?'text-rose-300':'text-emerald-300'} font-bold">${leg.side} ${leg.is_call?'CALL':'PUT'} · текущий страйк ${cur.toLocaleString('ru-RU')}</div>
+                        <label class="text-[10px] text-slate-400 flex items-center gap-1">
+                            <input type="checkbox" ${leg.roll?'checked':''} onchange="toggleRollLeg(${i}, this.checked)" class="accent-amber-500"> роллить
+                        </label>
+                    </div>
+                    <div class="mt-1 flex items-center gap-2">
+                        <label class="text-[10px] text-slate-400">новый страйк</label>
+                        <select id="roll-leg-strike-${i}" class="flex-1 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs font-mono text-slate-200" onchange="onRollLegStrike(${i}, this.value)">
+                            ${opts}
+                        </select>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        function toggleRollLeg(i, checked) {
+            if (!rollState.legs[i]) return;
+            rollState.legs[i].roll = checked;
+            renderRoll();
+        }
+        function onRollLegStrike(i, strike) {
+            if (!rollState.legs[i]) return;
+            rollState.legs[i].chosen_strike = parseFloat(strike);
+            renderRoll();
+        }
+
+        function rollPreviewReload() {
+            rollState.series = document.getElementById('roll-series').value;
+            rollPreviewRefetch(true);
+        }
+
+        // fetch the preview with current params; when rebuildChain, also re-render
+        // the per-leg strike dropdowns from the returned chain for the new series.
+        async function rollPreviewRefetch(rebuildChain) {
+            const params = new URLSearchParams({ id: rollState.id, series: rollState.series });
+            rollState.legs.forEach(leg => {
+                if (!leg.roll) return;
+                params.append('leg', leg.side);
+                params.append('strike', String(leg.chosen_strike));
+            });
+            const d = await fetch('/api/v1/spreads/roll/preview?' + params).then(r => r.json()).catch(e => ({ error: String(e) }));
+            if (d.error) { renderRollError(d.error); return; }
+            if (rebuildChain && d.chain) {
+                // snap each leg's chosen strike to the nearest available option in the new series
+                d.chain.forEach((ch, i) => {
+                    const leg = rollState.legs[i];
+                    if (!leg) return;
+                    let opts = ch.options || [];
+                    if (leg.chosen_strike != null) {
+                        let nearest = opts[0];
+                        let best = Infinity;
+                        opts.forEach(o => {
+                            const diff = Math.abs(o.strike - leg.chosen_strike);
+                            if (diff < best) { best = diff; nearest = o; }
+                        });
+                        if (nearest) leg.chosen_strike = nearest.strike;
+                    }
+                });
+                renderRollLegs(d);
+            }
+            renderRollEcon(d);
+            renderRollOrderbooks(d);
+            renderRollPayoff(d);
+        }
+
+        async function renderRoll() {
+            rollPreviewRefetch(false);
+        }
+
+        function renderRollError(msg) {
+            document.getElementById('roll-econ').innerHTML = `<div class="col-span-3 text-rose-400">❌ ${msg}</div>`;
+        }
+
+        function renderRollEcon(d) {
+            const p = d.plan || {};
+            const mult = p.multiplier || 1;
+            const qty = d.qty || 1;
+            const em = v => (v>=0?'+':'') + Number(v).toLocaleString('ru-RU');
+            const nc = p.net_credit != null ? p.net_credit : 0;
+            const box = document.getElementById('roll-econ');
+            box.innerHTML = `
+                <div class="bg-slate-900/50 rounded p-2 border border-slate-700">
+                    <div class="text-[9px] text-slate-500 uppercase">Нетто (вход)</div>
+                    <div class="text-sm font-bold ${nc>=0?'text-sky-300':'text-amber-300'}">${em(nc)} ₽</div>
+                </div>
+                <div class="bg-slate-900/50 rounded p-2 border border-slate-700">
+                    <div class="text-[9px] text-slate-500 uppercase">Макс. прибыль</div>
+                    <div class="text-sm font-bold text-emerald-300">${em(p.max_profit||0)} ₽</div>
+                </div>
+                <div class="bg-slate-900/50 rounded p-2 border border-slate-700">
+                    <div class="text-[9px] text-slate-500 uppercase">Макс. убыток</div>
+                    <div class="text-sm font-bold text-rose-300">${em(p.max_loss||0)} ₽</div>
+                </div>
+                <div class="bg-slate-900/50 rounded p-2 border border-slate-700">
+                    <div class="text-[9px] text-slate-500 uppercase">ГО</div>
+                    <div class="text-sm font-bold text-slate-200">${(p.margin_short||0).toLocaleString('ru-RU')} ₽</div>
+                </div>
+                <div class="bg-slate-900/50 rounded p-2 border border-slate-700">
+                    <div class="text-[9px] text-slate-500 uppercase">Δ / Θ (за контр.)</div>
+                    <div class="text-sm font-bold text-slate-200">${(p.delta_per_contract||0).toFixed(2)} / ${(p.theta_per_contract||0).toFixed(2)}</div>
+                </div>
+                <div class="bg-slate-900/50 rounded p-2 border border-slate-700">
+                    <div class="text-[9px] text-slate-500 uppercase">Множитель × кол-во</div>
+                    <div class="text-sm font-bold text-slate-200">${mult} × ${qty}</div>
+                </div>
+            `;
+            (d.plan_error) && renderRollError(d.plan_error);
+        }
+
+        function renderRollOrderbooks(d) {
+            const box = document.getElementById('roll-orderbooks');
+            const note = document.getElementById('roll-depth-note');
+            let html = '';
+            // Underlying
+            if (d.underlying_orderbook && d.underlying_orderbook.length) {
+                html += orderbookHTML('Фьючерс (базовый)', d.underlying_orderbook, d.underlying_depth_src);
+            }
+            // Each leg's chosen strike depth
+            (rollState.legs||[]).forEach((leg, i) => {
+                const opt = (leg.options||[]).find(o => o.strike === leg.chosen_strike);
+                if (leg.roll && opt) {
+                    const label = `${leg.side} ${leg.is_call?'CALL':'PUT'} @ ${leg.chosen_strike.toLocaleString('ru-RU')}`;
+                    if (opt.depth && opt.depth.length) html += orderbookHTML(label, opt.depth, opt.depth_src);
+                    else html += bidAskHTML(label, opt);
+                }
+            });
+            box.innerHTML = html || '<div class="text-xs text-slate-500">Нет данных по стаканам (Alor недоступен).</div>';
+            const alorCount = (d.underlying_depth_src==='alor'?1:0) + ((rollState.legs||[]).filter(l=>l.options&&l.options.find(o=>o.strike===l.chosen_strike&&o.depth_src==='alor')).length);
+            note.innerText = alorCount ? `Стаканы: Alor (${alorCount} инструментов), остальные — лучший бид/аск MOEX.` : 'Полные стаканы через Alor недоступны (нет refresh-токена). Показан лучший бид/аск MOEX.';
+        }
+
+        function orderbookHTML(title, levels, src) {
+            const bids = levels.filter(l => l.side === 'bid');
+            const asks = levels.filter(l => l.side === 'ask');
+            const B = 8, A = 8;
+            const bidRows = bids.slice(0, B).map(l =>
+                `<div class="flex justify-between py-0.5"><span class="text-emerald-400">${l.price.toLocaleString('ru-RU')}</span><span class="text-slate-300 text-right">${l.volume}</span></div>`
+            ).join('') || '<div class="text-slate-600">—</div>';
+            const askRows = asks.slice(0, A).map(l =>
+                `<div class="flex justify-between py-0.5"><span class="text-rose-400">${l.price.toLocaleString('ru-RU')}</span><span class="text-slate-300 text-right">${l.volume}</span></div>`
+            ).join('') || '<div class="text-slate-600">—</div>';
+            return `<div class="bg-slate-900/60 rounded-lg p-2 border border-slate-700">
+                <div class="text-[10px] text-slate-400 font-mono mb-1">${title} <span class="text-slate-600">${src==='alor'?'[Alor стакан]':'[ISS]'}</span></div>
+                <div class="grid grid-cols-2 gap-2 font-mono text-[10px]">
+                    <div>
+                        <div class="text-[9px] text-emerald-500 uppercase mb-0.5">Биды</div>
+                        <div class="max-h-32 overflow-y-auto">${bidRows}</div>
+                    </div>
+                    <div>
+                        <div class="text-[9px] text-rose-500 uppercase mb-0.5">Аски</div>
+                        <div class="max-h-32 overflow-y-auto">${askRows}</div>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        function bidAskHTML(title, opt) {
+            const spread = opt.spread_pct!=null ? `${opt.spread_pct.toFixed(2)}%` : '—';
+            return `<div class="bg-slate-900/60 rounded-lg p-2 border border-slate-700">
+                <div class="text-[10px] text-slate-400 font-mono mb-1">${title}</div>
+                <div class="text-[11px] font-mono space-y-1">
+                    <div><span class="text-slate-500">бид</span> <span class="text-emerald-400">${opt.bid>0?opt.bid.toFixed(2):'—'}</span></div>
+                    <div><span class="text-slate-500">аск</span> <span class="text-rose-400">${opt.ask>0?opt.ask.toFixed(2):'—'}</span></div>
+                    <div><span class="text-slate-500">спред</span> <span class="text-slate-300">${spread}</span></div>
+                </div>
+            </div>`;
+        }
+
+        function renderRollPayoff(d) {
+            const p = d.plan;
+            if (!p || !p.legs || !p.legs.length) return;
+            const canvas = document.getElementById('roll-payoff-canvas');
+            if (typeof Chart === 'undefined' || !canvas) return;
+            if (rollState._payoffChart) rollState._payoffChart.destroy();
+            const spot = p.spot_price || 83200;
+            const mult = p.multiplier || 1;
+            const qty = p.qty || 1;
+            const strikes = p.legs.map(l=>l.strike);
+            const lo = Math.min(...strikes) - (p.width_step||500)*2;
+            const hi = Math.max(...strikes) + (p.width_step||500)*2;
+            const N = 60;
+            const xs = [], ys = [];
+            for (let k=0;k<N;k++) {
+                const S = lo + (hi-lo)*k/(N-1);
+                let pnl = 0;
+                p.legs.forEach(l => {
+                    const dir = l.side==='SELL'?-1:1;
+                    const intrinsic = l.is_call ? Math.max(0,S-l.strike) : Math.max(0,l.strike-S);
+                    pnl += dir * (intrinsic - l.price) * mult * qty;
+                });
+                xs.push(S); ys.push(pnl);
+            }
+            const ctx = canvas.getContext('2d');
+            rollState._payoffChart = new Chart(ctx, {
+                type: 'line',
+                data: { datasets: [{ label:'P&L новой структуры', data: xs.map((x,i)=>({x,y:ys[i]})), borderColor:'#818cf8', borderWidth:2, pointRadius:0, fill:false }]},
+                options: { animation:false, scales:{ x:{type:'linear',ticks:{color:'#94a3b8',font:{size:9}},grid:{color:'#1e293b'}}, y:{ticks:{color:'#94a3b8',font:{size:9}},grid:{color:'#1e293b'}} }, plugins:{legend:{labels:{color:'#cbd5e1',font:{size:9}}}} }
+            });
+        }
+
+        async function executeRoll() {
+            const body = { id: rollState.id, live: false, series: rollState.series };
+            body.legs = (rollState.legs||[]).filter(l=>l.roll).map(l => ({ side: l.side, is_call: l.is_call, strike: l.chosen_strike, roll: true }));
+            if (!confirm('Выполнить ролл с выбранными параметрами? Текущий спред закроется, новый откроется.')) return;
+            let d;
+            try {
+                d = await fetch('/api/v1/spreads/roll', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                }).then(r => r.json());
+            } catch (e) { d = { error: String(e) }; }
             alert(d.message || d.error || 'ok');
+            closeRollModal();
             updateSpreads();
         }
+
 
         async function closeSpread(id) {
             if (!confirm('Закрыть спред? (зафиксировать P&L в истории сделок)')) return;

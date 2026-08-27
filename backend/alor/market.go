@@ -44,6 +44,39 @@ type OrderbookEntry struct {
 	Volume int     `json:"volume"`
 }
 
+// FetchOrderbook returns the full limit order book (all levels) for a MOEX
+// instrument via Alor. An empty exchange defaults to MOEX.
+func (m *MarketClient) FetchOrderbook(exchange, symbol string) (AlorOrderbookResponse, error) {
+	var empty AlorOrderbookResponse
+	if exchange == "" {
+		exchange = "MOEX"
+	}
+	token, err := m.authClient.GetAccessToken()
+	if err != nil {
+		return empty, fmt.Errorf("authentication error: %w", err)
+	}
+	url := fmt.Sprintf("%s/md/v2/orderbooks/%s/%s", m.baseURL, exchange, symbol)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return empty, err
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return empty, fmt.Errorf("failed to fetch orderbook: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return empty, fmt.Errorf("alor orderbook API returned status: %d", resp.StatusCode)
+	}
+	var ob AlorOrderbookResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ob); err != nil {
+		return empty, fmt.Errorf("failed to decode orderbook: %w", err)
+	}
+	return ob, nil
+}
+
 func NewMarketClient(authClient *AuthClient) *MarketClient {
 	return &MarketClient{
 		authClient: authClient,
