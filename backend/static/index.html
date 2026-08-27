@@ -1967,6 +1967,14 @@
                         '<tr><td colspan="9" class="p-3 text-center text-slate-500">Нет открытых спредов</td></tr>';
                     return;
                 }
+                // If the structure (set of spread ids) is unchanged, patch the
+                // live cells in place so open profiles and charts are preserved.
+                const ids = d.spreads.map(s => s.id).sort().join('|');
+                if (lastSpreadIds === ids) {
+                    patchSpreadLive(d);
+                    return;
+                }
+                lastSpreadIds = ids;
                 let html = '';
                 lastSpreads = d.spreads;
                 d.spreads.forEach(s => {
@@ -1987,13 +1995,13 @@
                     html += `<tr class="border-b border-slate-800">
                         <td class="p-2 font-bold text-indigo-300">${s.display_name} <span class="text-[9px] text-slate-500">${s.roll_count ? 'ролл×' + s.roll_count : ''}</span><div class="text-[9px] text-slate-500">${s.symbol} · ${s.id}</div>
                             <div class="text-[9px] text-slate-400">эксп. ${s.expiry} · DTE ${s.dte}${s.state && s.state !== 'VERTICAL' ? ` · <span class="text-indigo-300 font-bold">◆ ${s.state}</span>` : ''}</div>
-                            <div class="text-[9px] text-slate-500">${spreadRuleBadge(s)}</div>${theoInfo}</td>
+                            <div class="text-[9px] text-slate-500">${spreadRuleBadge(s)}</div><div class="theo-info">${theoInfo}</div></td>
                         <td class="p-2">S ${s.short_strike.toLocaleString('ru-RU')} / L ${s.long_strike.toLocaleString('ru-RU')}</td>
                         <td class="p-2">${s.dte}</td>
-                        <td class="p-2">${(s.entry_value||0).toLocaleString('ru-RU')}${s.net_credit > 0 ? ' <span class="text-[9px] text-sky-400" title="Отрицательная стоимость входа = полученный кредит">кредит</span>' : ''} / ${(s.current_value||0).toLocaleString('ru-RU')}</td>
-                        <td class="p-2 ${pnlCls}">${s.pnl >= 0 ? '+' : ''}${(s.pnl||0).toLocaleString('ru-RU')}</td>
-                        <td class="p-2 ${pnlCls}">${(s.pnl_percent||0).toFixed(1)}%</td>
-                        <td class="p-2">${(s.net_delta||0).toFixed(1)} / ${(s.net_theta||0).toFixed(1)}</td>
+                        <td class="p-2 spr-cur" data-id="${s.id}" id="spr-cur-${s.id}">${(s.entry_value||0).toLocaleString('ru-RU')}${s.net_credit > 0 ? ' <span class="text-[9px] text-sky-400" title="Отрицательная стоимость входа = полученный кредит">кредит</span>' : ''} / ${(s.current_value||0).toLocaleString('ru-RU')}</td>
+                        <td class="p-2 spr-pnl" id="spr-pnl-${s.id}">${s.pnl >= 0 ? '+' : ''}${(s.pnl||0).toLocaleString('ru-RU')}</td>
+                        <td class="p-2 spr-pnlp" id="spr-pnlp-${s.id}">${(s.pnl_percent||0).toFixed(1)}%</td>
+                        <td class="p-2 spr-greek" id="spr-greek-${s.id}">${(s.net_delta||0).toFixed(1)} / ${(s.net_theta||0).toFixed(1)}</td>
                         <td class="p-2"><span class="text-[9px] text-slate-400">${s.hedge_legs||0} фьюч.</span></td>
                         <td class="p-2 whitespace-nowrap">
                             <button onclick="toggleSprProfile('${s.id}')" class="px-2 py-1 text-[10px] bg-indigo-700 hover:bg-indigo-600 text-white rounded transition">📊 Профиль</button>
@@ -2006,20 +2014,81 @@
                     html += `<tr id="sprd-${s.id}" class="hidden"><td colspan="9" class="p-0 border-b border-slate-800 bg-slate-900/40"><div id="sprd-box-${s.id}" class="p-3"></div></td></tr>`;
                 });
                 document.getElementById('spr-body').innerHTML = html;
+                // Re-open any profiles that were expanded before the refresh so
+                // the 5s auto-refresh does not collapse them mid-view.
+                openProfiles.forEach(id => {
+                    const row = document.getElementById(`sprd-${id}`);
+                    if (row) {
+                        row.classList.remove('hidden');
+                        const box = document.getElementById(`sprd-box-${id}`);
+                        if (box && !box.innerHTML) {
+                            const s = d.spreads?.find(x => x.id === id);
+                            if (s) renderSpreadProfile(s);
+                        }
+                    }
+                });
             } catch (e) {
                 console.error("Spreads update failed", e);
             }
         }
 
+        let lastSpreadIds = '';
+
+        // Update only the live (numeric) cells for existing spread rows, leaving
+        // static structure, open profiles and charts untouched.
+        function patchSpreadLive(d) {
+            lastSpreads = d.spreads;
+            d.spreads.forEach(s => {
+                const pnl = document.getElementById(`spr-pnl-${s.id}`);
+                if (pnl) {
+                    pnl.className = `p-2 spr-pnl ${s.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+                    pnl.innerText = (s.pnl >= 0 ? '+' : '') + (s.pnl||0).toLocaleString('ru-RU');
+                }
+                const pnlp = document.getElementById(`spr-pnlp-${s.id}`);
+                if (pnlp) {
+                    pnlp.className = `p-2 spr-pnlp ${s.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+                    pnlp.innerText = (s.pnl_percent||0).toFixed(1) + '%';
+                }
+                const cur = document.getElementById(`spr-cur-${s.id}`);
+                if (cur) {
+                    cur.innerHTML = `${(s.entry_value||0).toLocaleString('ru-RU')}${s.net_credit > 0 ? ' <span class="text-[9px] text-sky-400">кредит</span>' : ''} / ${(s.current_value||0).toLocaleString('ru-RU')}`;
+                }
+                const greek = document.getElementById(`spr-greek-${s.id}`);
+                if (greek) greek.innerText = `${(s.net_delta||0).toFixed(1)} / ${(s.net_theta||0).toFixed(1)}`;
+                let theoInfo = '';
+                if (s.position_found && s.theo_pnl !== undefined) {
+                    const ivCls = (s.iv_sensitivity||0) >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                    theoInfo = `<div class="text-[9px] mt-1 space-y-0.5">
+                        <span class="text-slate-400">BS:</span> <span class="${(s.theo_pnl||0)>=0?'text-emerald-400':'text-rose-400'}">${(s.theo_pnl||0)>=0?'+':''}${(s.theo_pnl||0).toLocaleString('ru-RU')} ₽</span>
+                        <span class="text-slate-600">|</span>
+                        <span class="text-slate-400" title="Изменение P&L при росте волатильности на 1%">ΔIV:</span> <span class="${ivCls}">${(s.iv_sensitivity||0)>=0?'+':''}${(s.iv_sensitivity||0).toLocaleString('ru-RU')} ₽</span>
+                        <span class="text-slate-600">|</span>
+                        <span class="text-slate-400" title="Ежедневный распад стоимости (theta)">Θ/д:</span> <span class="${(s.daily_decay||0)>=0?'text-emerald-400':'text-rose-400'}">${(s.daily_decay||0)>=0?'+':''}${(s.daily_decay||0).toLocaleString('ru-RU')} ₽</span>
+                    </div>`;
+                }
+                const row = pnl?.closest('tr');
+                if (row) {
+                    const theoCell = row.querySelector('.theo-info');
+                    if (theoCell) theoCell.innerHTML = theoInfo;
+                }
+            });
+        }
+
         let lastSpreads = [];
         const profileCharts = {};
+        const openProfiles = new Set();
 
         function toggleSprProfile(id) {
             const row = document.getElementById(`sprd-${id}`);
             if (!row) return;
-            const showing = !row.classList.contains('hidden');
-            row.classList.toggle('hidden');
-            if (!showing) renderSpreadProfile(lastSpreads.find(x => x.id === id));
+            if (openProfiles.has(id)) {
+                openProfiles.delete(id);
+                row.classList.add('hidden');
+            } else {
+                openProfiles.add(id);
+                row.classList.remove('hidden');
+                renderSpreadProfile(lastSpreads.find(x => x.id === id));
+            }
         }
 
         // Position profile: per-leg strike/prices/IV table plus the P&L payoff
