@@ -27,6 +27,7 @@
 - `NetCredit > 0` = credit spread, `< 0` = debit.
 - Series lists come from real OPTION expiries (`optionSeriesForSymbol`), codes may be synthetic `"Si-2026-08-20"`. Synthetic codes must be resolved to a tradable future via `resolveRealFuturesCode` wherever a ticker is quoted/hedged (see `getSpotPrice`, `futuresSeriesAlor`).
 - Alor Command API v2 endpoints require the unique `X-REQID` header; auth is `POST https://oauth.alor.ru/refresh?token=<refreshToken>` returning `AccessToken` (30 min).
+- **Option marks are hybrid** (`optionMark`/`optionMarkWithSrc` in option_mark.go): live two-sided books with spread ≤ 25% of mid (`quoteIsLive`) are marked at mid; dead/wide/stale books are marked at Black-Scholes fair value using the series IV (`seriesIVForExpiry`, median of liquid near-ATM strikes, fallback realized/0.30). The official MOEX constructor prices illiquid series the same way — mid marks on dead books are noise (a 500-wide spread must never "move to" 2400). `mark_src` in leg JSON shows `mid|last|theo|none`.
 
 ## Conventions
 - `KNOWLEDGE.md` is the trading knowledge base; manager defaults and rule semantics reference it by section. Update it together with management-rule changes. `README.md` is the user-facing overview (features, quick start, API map) — keep both in sync when adding modules.
