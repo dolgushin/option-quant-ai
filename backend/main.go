@@ -597,6 +597,7 @@ type optionQuoteEx struct {
 	Settle  float64 // evening clearing mark (fresher than stale trades)
 	Updated string  // ISS UPDATETIME (HH:MM:SS) of the marketdata row
 	Src     string  // mid | last | settle | none
+	Cached  time.Time
 }
 
 var (
@@ -616,7 +617,7 @@ func cachedOptionQuote(secid string) (last, bid, offer float64) {
 
 func cachedOptionQuoteEx(secid string) (optionQuoteEx, bool) {
 	quoteMu.Lock()
-	if q, ok := quoteCache[secid]; ok && q.Src != "" {
+	if q, ok := quoteCache[secid]; ok && q.Cached.Add(quoteTTL).After(time.Now()) {
 		quoteMu.Unlock()
 		return q, true
 	}
@@ -626,6 +627,7 @@ func cachedOptionQuoteEx(secid string) (optionQuoteEx, bool) {
 	if err != nil {
 		return optionQuoteEx{}, false
 	}
+	q.Cached = time.Now()
 	quoteMu.Lock()
 	quoteCache[secid] = q
 	quoteMu.Unlock()
