@@ -65,6 +65,11 @@ var (
 	spotOverrides = map[string]float64{}
 	spotMu        sync.Mutex
 
+	// spotQuoteCache short-caches Alor/MOEX spot prices so per-position
+	// repricing loops do not hammer the feeds on every request.
+	spotQuoteCache = map[string]spotQuote{}
+	spotQuoteMu    sync.Mutex
+
 	// Selected options series per asset (MOEX code: SiU6 = September 2026).
 	// The user can switch between quarterly/monthly series via POST /api/v1/series.
 	// For SBER/SBERP the series is a premium equity option expiry (e.g. SBRF-2026-09-16).
@@ -399,8 +404,10 @@ func dteInDays(lastDelDate string, ref time.Time) int {
 }
 
 // getSpotPrice returns the real-time futures/spot price.
-// It first checks a user override, then MOEX ISS (public, no token), then the
-// Alor API, then falls back to a realistic estimate.
+// It first checks a user override and the short-lived spot cache, then prefers
+// the Alor live feed (when a refresh token is configured) as the primary
+// source, falling back to the public MOEX ISS and finally to a realistic
+// estimate.
 func getSpotPrice(symbol string) (float64, error) {
 	spotMu.Lock()
 	if p, ok := spotOverrides[symbol]; ok {
@@ -417,11 +424,31 @@ func getSpotPrice(symbol string) (float64, error) {
 		return q.Price, nil
 	}
 
-	// 1) MOEX ISS public API — free, no token required, real FORTS prices.
-	// For premium equity options (SBER/SBERP) the underlying is the share
-	// itself, quoted on the stock market (TQBR), not a FORTS futures.
+	spotQuoteMu.Lock()
+	if q, ok := spotQuoteCache[symbol]; ok && q.Cached.Add(spotQuoteTTL).After(time.Now()) {
+		spotQuoteMu.Unlock()
+		return q.Price, nil
+	}
+	spotQuoteMu.Unlock()
+
+	// 1) Alor API (needs a valid refresh token) — primary live feed. For
+	// premium equity options (SBER/SBERP) the underlying is the share itself,
+	// and futuresSeriesAlor maps it straight to the plain ticker.
+	if futuresSymbol, ok := futuresSeriesAlor(symbol); ok && alorMarket != nil {
+		if quote, err := alorMarket.FetchSecurityQuote(futuresSymbol); err == nil && quote.Price > 0 {
+			spotQuoteMu.Lock()
+			spotQuoteCache[symbol] = spotQuote{Price: quote.Price, Cached: time.Now()}
+			spotQuoteMu.Unlock()
+			return quote.Price, nil
+		}
+	}
+
+	// 2) MOEX ISS public API — fallback, free, no token required.
 	if _, isEquity := equityOptions[symbol]; isEquity {
 		if price, err := moexStockSpotPrice(symbol); err == nil && price > 0 {
+			spotQuoteMu.Lock()
+			spotQuoteCache[symbol] = spotQuote{Price: price, Cached: time.Now()}
+			spotQuoteMu.Unlock()
 			return price, nil
 		}
 	}
@@ -436,14 +463,10 @@ func getSpotPrice(symbol string) (float64, error) {
 	}
 	if issCode != "" {
 		if price, err := moexISSSpotPrice(issCode); err == nil && price > 0 {
+			spotQuoteMu.Lock()
+			spotQuoteCache[symbol] = spotQuote{Price: price, Cached: time.Now()}
+			spotQuoteMu.Unlock()
 			return price, nil
-		}
-	}
-
-	// 2) Alor API (needs a valid refresh token).
-	if futuresSymbol, ok := futuresSeriesAlor(symbol); ok && alorMarket != nil {
-		if quote, err := alorMarket.FetchSecurityQuote(futuresSymbol); err == nil && quote.Price > 0 {
-			return quote.Price, nil
 		}
 	}
 
@@ -607,6 +630,14 @@ var (
 
 const quoteTTL = 5 * time.Second
 
+// spotQuote is a short-lived cache entry for an underlying's price.
+type spotQuote struct {
+	Price  float64
+	Cached time.Time
+}
+
+const spotQuoteTTL = 10 * time.Second
+
 func cachedOptionQuote(secid string) (last, bid, offer float64) {
 	q, ok := cachedOptionQuoteEx(secid)
 	if !ok {
@@ -623,7 +654,18 @@ func cachedOptionQuoteEx(secid string) (optionQuoteEx, bool) {
 	}
 	quoteMu.Unlock()
 
-	q, err := moexOptionQuoteEx(secid)
+	// Prefer the live Alor feed; fall back to the public MOEX ISS when the
+	// token is not configured or the live feed has nothing tradable.
+	var q optionQuoteEx
+	var err error
+	if alorAuth != nil && alorAuth.HasRefreshToken() {
+		q, err = alorOptionQuoteEx(secid)
+		if err != nil || q.Src == "none" || q.Price <= 0 {
+			q, err = moexOptionQuoteEx(secid)
+		}
+	} else {
+		q, err = moexOptionQuoteEx(secid)
+	}
 	if err != nil {
 		return optionQuoteEx{}, false
 	}
@@ -632,6 +674,35 @@ func cachedOptionQuoteEx(secid string) (optionQuoteEx, bool) {
 	quoteCache[secid] = q
 	quoteMu.Unlock()
 	return q, true
+}
+
+// alorOptionQuoteEx fetches the live top-of-book quote of an option from the
+// Alor market-data feed (primary source when a refresh token is configured).
+// Alor returns the current order book, so the mark reflects the live queue
+// instead of a possibly stale MOEX ISS row.
+func alorOptionQuoteEx(secid string) (optionQuoteEx, error) {
+	if alorMarket == nil || alorAuth == nil || !alorAuth.HasRefreshToken() {
+		return optionQuoteEx{}, fmt.Errorf("alor not configured")
+	}
+	q, err := alorMarket.FetchSecurityQuote(secid)
+	if err != nil {
+		return optionQuoteEx{}, fmt.Errorf("alor option quote failed: %w", err)
+	}
+	res := optionQuoteEx{
+		Bid:     q.Bid,
+		Offer:   q.Ask,
+		Price:   q.Price,
+		Updated: q.Timestamp.Format("15:04:05"),
+		Src:     "last",
+	}
+	if q.Bid > 0 && q.Ask >= q.Bid {
+		res.Price = (q.Bid + q.Ask) / 2
+		res.Src = "mid"
+	}
+	if res.Price <= 0 {
+		res.Src = "none"
+	}
+	return res, nil
 }
 
 // moexOptionQuoteEx fetches the live marketdata row of an option and picks the
@@ -1659,8 +1730,8 @@ func moexOrderHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// repricePosition refreshes every leg's current price from live MOEX quotes
-// and recomputes PnL, delta and theta of the position.
+// repricePosition refreshes every leg's current price from live quotes (Alor
+// preferred, MOEX ISS fallback) and recomputes PnL, delta and theta.
 func repricePosition(p *quant.Position) {
 	spot, _ := getSpotPrice(p.Symbol)
 	mult := contractMultiplier(p.Symbol)
@@ -1685,20 +1756,17 @@ func repricePosition(p *quant.Position) {
 
 		var last float64
 		if leg.Kind == "FUTURES" {
-			// Prefer the actual contract quote (leg.SecID like "SiU6"); fall
-			// back to the symbol spot when no contract code is stored.
-			last = 0
-			if leg.SecID != "" && len(leg.SecID) >= 3 {
+			// Prefer Alor's live feed (getSpotPrice), fall back to the actual
+			// contract quote (leg.SecID like "SiU6") and then the stored price.
+			if s, err := getSpotPrice(p.Symbol); err == nil && s > 0 {
+				last = s
+			} else if leg.SecID != "" && len(leg.SecID) >= 3 {
 				if c, err := moexISSSpotPrice(leg.SecID); err == nil && c > 0 {
 					last = c
 				}
 			}
 			if last <= 0 {
-				if s, err := getSpotPrice(p.Symbol); err == nil && s > 0 {
-					last = s
-				} else {
-					last = leg.CurrentPrice
-				}
+				last = leg.CurrentPrice
 			}
 		} else {
 			l, b, o := cachedOptionQuote(leg.SecID)
