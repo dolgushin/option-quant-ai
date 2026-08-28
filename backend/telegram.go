@@ -47,13 +47,18 @@ func sendTelegramMessage(text string) error {
 	return sendTelegramMessageWith(token, chat, text)
 }
 
+// telegramAPIBase is a Russian-hosted Telegram Bot API relay. api.telegram.org
+// is unreachable from RU VPSes (connection timeout), so notifications go
+// through the short proxy URL instead. The bot is bound to the relay path.
+const telegramAPIBase = "http://193.233.87.23/bot8627553310"
+
 // sendTelegramMessageWith sends a message with explicit credentials (used by the
 // settings handler to validate before persisting).
 func sendTelegramMessageWith(token, chat, text string) error {
 	if token == "" || chat == "" {
 		return fmt.Errorf("telegram not configured")
 	}
-	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
+	apiURL := telegramAPIBase + "/sendMessage"
 	form := url.Values{}
 	form.Set("chat_id", chat)
 	form.Set("text", text)
