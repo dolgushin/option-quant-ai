@@ -46,7 +46,7 @@ func mcPLHandler(w http.ResponseWriter, r *http.Request) {
 	dte, _ := strconv.Atoi(r.URL.Query().Get("dte"))
 	n, _ := strconv.Atoi(r.URL.Query().Get("n"))
 
-	if credit == 0 || maxLoss == 0 || spot == 0 || iv == 0 || dte <= 0 {
+	if credit == 0 || spot == 0 || iv == 0 || dte <= 0 {
 		json.NewEncoder(w).Encode(map[string]string{"error": "missing required params"})
 		return
 	}
@@ -56,50 +56,57 @@ func mcPLHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Determine spread direction: credit > 0 means short premium (credit spread).
 	width := math.Abs(longK - shortK)
+	// If both strikes coincide (or are missing), derive the spread width from
+	// the entered max loss so the simulation stays meaningful.
+	if width == 0 && maxLoss > 0 {
+		width = math.Abs(maxLoss)
+	}
 	if width == 0 {
-		width = math.Abs(longK - shortK)
+		width = math.Abs(credit) + 1
 	}
 	isDebit := credit < 0
 	absCredit := math.Abs(credit)
 
 	pnls := make([]float64, n)
-	dt := float64(dte) / 365.0
-	dailySigma := iv / math.Sqrt(252)
+	// Risk-neutral daily log step: iv annualized, DTE in calendar days.
+	sig := iv / math.Sqrt(365)
 
 	for i := 0; i < n; i++ {
-		// Simulate daily spot path with GBM.
+		// Simulate daily spot path with GBM (zero drift, risk-neutral).
 		s := spot
 		for d := 0; d < dte; d++ {
-			z := rand.NormFloat64()
-			s *= math.Exp((iv*iv/2-0.5*dailySigma*dailySigma)*dt/float64(dte) + dailySigma*z)
+			s *= math.Exp(sig * rand.NormFloat64())
 		}
 
-		// Spread P&L at expiry.
+		// Spread P&L at expiry (European payoff), direction-aware by strikes:
+		// width = |shortK - longK| caps every branch. Credit spread loses when
+		// the underlying breaches the short leg; debit spread earns when it
+		// breaches the long (money) leg.
 		var pnl float64
 		if isDebit {
 			pnl = -absCredit // paid premium
-			if longK > shortK {
-				// Bull call spread: profit if spot > longK
-				if s > shortK {
-					pnl += math.Min(s-shortK, width)
+			if longK < shortK {
+				// Bull call: profit when spot rises above the long (lower) strike.
+				if s > longK {
+					pnl += math.Min(s-longK, width)
 				}
 			} else {
-				// Bear put spread: profit if spot < longK
-				if s < shortK {
-					pnl += math.Min(shortK-s, width)
+				// Bear put: profit when spot falls below the long (higher) strike.
+				if s < longK {
+					pnl += math.Min(longK-s, width)
 				}
 			}
 		} else {
 			pnl = absCredit // received premium
-			if longK > shortK {
-				// Bull put spread: loss if spot < longK
-				if s < longK {
-					pnl -= math.Min(longK-s, width)
+			if longK < shortK {
+				// Bull put: loss when spot drops below the short (higher) strike.
+				if s < shortK {
+					pnl -= math.Min(shortK-s, width)
 				}
 			} else {
-				// Bear call spread: loss if spot > longK
-				if s > longK {
-					pnl -= math.Min(s-longK, width)
+				// Bear call: loss when spot rallies above the short (lower) strike.
+				if s > shortK {
+					pnl -= math.Min(s-shortK, width)
 				}
 			}
 		}
@@ -116,22 +123,30 @@ func mcPLHandler(w http.ResponseWriter, r *http.Request) {
 		sum += p
 	}
 
-	// Build histogram (20 bins).
+	// Build histogram (24 bins). Even a degenerate (single-value) distribution
+	// must render: pad the range by one unit so the frontend gets a chart.
 	lo, hi := pnls[0], pnls[len(pnls)-1]
-	nbins := 20
+	if hi <= lo {
+		hi = lo + 1
+	}
+	nbins := 24
 	bins := make([]histBin, nbins)
-	if hi > lo {
-		w := (hi - lo) / float64(nbins)
-		for i := range bins {
-			bins[i] = histBin{From: math.Round((lo+float64(i)*w)*100) / 100, To: math.Round((lo+float64(i+1)*w)*100) / 100}
+	bw := (hi - lo) / float64(nbins)
+	if bw <= 0 {
+		bw = 1
+	}
+	for i := range bins {
+		bins[i] = histBin{From: math.Round((lo+float64(i)*bw)*100) / 100, To: math.Round((lo+float64(i+1)*bw)*100) / 100}
+	}
+	for _, p := range pnls {
+		idx := int((p - lo) / bw)
+		if idx < 0 {
+			idx = 0
 		}
-		for _, p := range pnls {
-			idx := int((p - lo) / w)
-			if idx >= nbins {
-				idx = nbins - 1
-			}
-			bins[idx].Count++
+		if idx >= nbins {
+			idx = nbins - 1
 		}
+		bins[idx].Count++
 	}
 
 	rnd := func(v float64) float64 { return math.Round(v*100) / 100 }
@@ -141,7 +156,7 @@ func mcPLHandler(w http.ResponseWriter, r *http.Request) {
 		P50:        rnd(pnls[int(float64(n)*0.50)]),
 		P75:        rnd(pnls[int(float64(n)*0.75)]),
 		P95:        rnd(pnls[int(float64(n)*0.95)]),
-		ProbProfit: math.Round(probs / float64(n) * 10000) / 100,
+		ProbProfit: math.Round(probs/float64(n)*10000) / 100,
 		AvgPnL:     rnd(sum / float64(n)),
 		MaxLoss:    rnd(pnls[0]),
 		MaxWin:     rnd(pnls[len(pnls)-1]),

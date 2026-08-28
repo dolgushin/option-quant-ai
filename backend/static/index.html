@@ -1039,23 +1039,24 @@
             <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
                 <div class="flex flex-wrap items-end gap-3 font-mono text-[11px]">
                     <label class="block text-slate-400">Премия (кредит), ₽
-                        <input id="mc-credit" type="number" value="500" class="w-24 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
-                    <label class="block text-rose-400">Макс. убыток, ₽
-                        <input id="mc-maxloss" type="number" value="2000" class="w-24 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                        <input id="mc-credit" type="number" value="80" class="w-24 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="block text-rose-400">Макс. риск (свой), ₽
+                        <input id="mc-maxloss" type="number" value="1420" class="w-24 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
                     <label class="block text-slate-400">Спот
                         <input id="mc-spot" type="number" value="85000" class="w-28 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
                     <label class="block text-slate-400">IV (доля)
                         <input id="mc-iv" type="number" step="0.01" value="0.15" class="w-20 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
                     <label class="block text-slate-400">Страйк (short)
-                        <input id="mc-short" type="number" value="85000" class="w-28 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                        <input id="mc-short" type="number" value="84000" class="w-28 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
                     <label class="block text-slate-400">Страйк (long)
-                        <input id="mc-long" type="number" value="84500" class="w-28 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                        <input id="mc-long" type="number" value="82500" class="w-28 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
                     <label class="block text-slate-400">DTE
-                        <input id="mc-dte" type="number" min="1" max="365" value="14" class="w-16 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                        <input id="mc-dte" type="number" min="1" max="365" value="21" class="w-16 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
                     <label class="block text-slate-400">Симуляций
                         <input id="mc-n" type="number" min="100" max="50000" value="5000" class="w-20 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
                     <button onclick="runMCPnL()" class="px-4 py-1.5 bg-violet-600 hover:bg-violet-500 text-white font-bold rounded-lg transition">🎲 Симуляция</button>
                 </div>
+                <div class="text-[10px] text-slate-500 font-mono mt-2">P&L на экспирацию. Спред определяют страйки; если они совпали — ширина берётся из макс. риска. Для гладкой формы держите оба страйка вне денег.</div>
             </div>
             <div id="mc-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
             <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
@@ -1567,7 +1568,7 @@
                     kpiCard('Prob Profit', d.prob_profit + '%', ppCls) +
                     kpiCard('Медиана P&L ₽', (d.p50 >= 0 ? '+' : '') + d.p50.toLocaleString('ru-RU'), pnlCls(d.p50)) +
                     kpiCard('Средний P&L ₽', (d.avg_pnl >= 0 ? '+' : '') + d.avg_pnl.toLocaleString('ru-RU'), pnlCls(d.avg_pnl)) +
-                    kpiCard('5%-95% перцентиль', `${d.p5.toLocaleString('ru-RU')} / ${d.p95.toLocaleString('ru-RU')}`, 'text-slate-300');
+                    kpiCard('Экстремумы ₽ (loss/win)', `${(d.max_loss >= 0 ? '+' : '') + d.max_loss.toLocaleString('ru-RU')} … ${(d.max_win >= 0 ? '+' : '') + d.max_win.toLocaleString('ru-RU')}`, pnlCls(d.max_loss));
                 drawMCHist(d);
             } catch (e) { k.innerHTML = `<div class="col-span-full text-center text-rose-400 py-4 font-mono">❌ ${e.message}</div>`; }
         }
@@ -1588,7 +1589,7 @@
                     plugins: { legend: { display: false } },
                     scales: {
                         x: { ticks: { color: '#94a3b8', font: { family: 'monospace', size: 9 }, maxRotation: 45 }, grid: { display: false } },
-                        y: { ticks: { color: '#94a3b8', font: { family: 'monospace' } }, grid: { color: '#1e293b' } }
+                        y: { beginAtZero: true, ticks: { color: '#94a3b8', font: { family: 'monospace' } }, grid: { color: '#1e293b' }, title: { display: true, text: 'сценариев', color: '#64748b', font: { size: 9 } } }
                     }
                 }
             });
