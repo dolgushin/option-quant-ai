@@ -823,7 +823,9 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 							lm["quote_stale"] = quoteIsStale(q.Updated, q.Src)
 						}
 						if spot > 0 {
-							if _, msrc := optionMarkWithSrc(l.SecID, l.IsCall, l.Strike, spot, tYears, s.Symbol, s.Expiry); msrc != "" {
+							q, qOk := cachedOptionQuoteEx(l.SecID)
+							if qOk && l.CurrentPrice > 0 {
+								msrc := quoteMarkSrc(q, l.CurrentPrice)
 								lm["mark_src"] = msrc
 							}
 							if l.CurrentPrice > 0 {

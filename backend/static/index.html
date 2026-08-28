@@ -2297,7 +2297,11 @@
 
         async function updateSpreads() {
             try {
-                const res = await fetch('/api/v1/spreads');
+                const ac = new AbortController();
+                const tid = setTimeout(() => ac.abort(), 12000);
+                const res = await fetch('/api/v1/spreads', { signal: ac.signal });
+                clearTimeout(tid);
+                if (!res.ok) throw new Error('HTTP '+res.status);
                 const d = await res.json();
                 document.getElementById('spr-summary').innerText =
                     `${d.spreads.length} открыто | ${d.spreads.filter(s => s.net_credit > 0).length} кредитных | ${d.spreads.filter(s => s.net_credit <= 0).length} дебетовых`;
@@ -2370,6 +2374,8 @@
                 });
             } catch (e) {
                 console.error("Spreads update failed", e);
+                const body = document.getElementById('spr-body');
+                if (body) body.innerHTML = '<tr><td colspan="10" class="p-3 text-center text-rose-400">Не удалось загрузить спреды: '+(e.message||e)+'</td></tr>';
             }
         }
 

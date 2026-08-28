@@ -8,6 +8,7 @@ package main
 // illiquid series where a stale two-sided quote is pure noise.
 
 import (
+	"math"
 	"sort"
 	"sync"
 	"time"
@@ -82,9 +83,10 @@ func seriesIVForExpiry(symbol, expiry string) float64 {
 		if o.Strike <= 0 {
 			continue
 		}
-		// Near-the-money only: the mid of the chain is where the book is real.
+		// Near-the-money only: keep only fresh, tight books so the
+		// derived vol is not poisoned by stale quotes.
 		mn := o.Strike / spot
-		if mn < 0.9 || mn > 1.1 {
+		if mn < 0.95 || mn > 1.05 {
 			continue
 		}
 		o := o
@@ -94,13 +96,10 @@ func seriesIVForExpiry(symbol, expiry string) float64 {
 			defer wg.Done()
 			defer func() { <-sem }()
 			q, ok := cachedOptionQuoteEx(o.SecID)
-			if !ok || q.Bid <= 0 || q.Offer < q.Bid {
-				return
+			if !ok || !quoteIsLive(q) {
+				return // dead / stale book — skip
 			}
 			mid := (q.Bid + q.Offer) / 2
-			if mid <= 0 || (q.Offer-q.Bid)/mid > markLiveSpreadPct {
-				return // dead book — not informative for vol
-			}
 			iv := quant.ImpliedVolatility(o.IsCall, mid, spot, o.Strike, t, 0.16)
 			if iv > 0.02 && iv <= 3 {
 				samples <- iv
@@ -121,6 +120,8 @@ func seriesIVForExpiry(symbol, expiry string) float64 {
 		iv = ivs[len(ivs)/2]
 	} else if rv := realizedVolForSymbol(symbol); rv > 0.02 && rv <= 3 {
 		iv = rv
+	} else if hist := latestIVHistory(symbol); hist > 0 {
+		iv = hist
 	}
 
 	seriesIVMu.Lock()
@@ -155,4 +156,39 @@ func optionMarkWithSrc(secid string, isCall bool, strike, spot float64, tYears f
 		}
 	}
 	return 0, "none"
+}
+
+// quoteMarkSrc returns the provenance of the mark applied to a leg given its
+// live two-sided book `q` and the final marked price. Mirrors the logic in
+// optionMark/optionMarkWithSrc so the UI can show "mid|last|theo" without
+// recomputing Black-Scholes.
+func quoteMarkSrc(q optionQuoteEx, currentPrice float64) string {
+	if q.Price > 0 && q.Bid > 0 && q.Offer >= q.Bid && !quoteIsStale(q.Updated, q.Src) {
+		mid := (q.Bid + q.Offer) / 2
+		if (q.Offer-q.Bid)/mid <= markLiveSpreadPct && math.Abs(q.Price-currentPrice) < 0.01 {
+			return "mid"
+		}
+		if q.Src == "last" && q.Price > 0 && !quoteIsStale(q.Updated, q.Src) && math.Abs(q.Price-currentPrice) < 0.01 {
+			return "last"
+		}
+	}
+	if currentPrice > 0 {
+		return "theo"
+	}
+	return "none"
+}
+
+// latestIVHistory returns the most recent historical ATM implied volatility
+// for the asset (from iv_history.json). Falls back to 0 if unavailable.
+func latestIVHistory(symbol string) float64 {
+	asset := issAssetCode(symbol)
+	ivHistory.mu.RLock()
+	pts := ivHistory.byAsset[asset]
+	ivHistory.mu.RUnlock()
+	if len(pts) == 0 {
+		return 0
+	}
+	// pts are sorted by date ascending; return the last (most recent) point.
+	last := pts[len(pts)-1]
+	return last.IV
 }
