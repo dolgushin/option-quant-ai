@@ -87,28 +87,28 @@ type spreadPlan struct {
 // spreadRecord is a persisted open vertical-spread position with its own id,
 // linked to a quant.Position for portfolio/risk tracking.
 type spreadRecord struct {
-	ID           string  `json:"id"`
-	PositionID   string  `json:"position_id"`
-	Symbol       string  `json:"symbol"`
-	Type         string  `json:"type"`
-	DisplayName  string  `json:"display_name"`
-	Expiry       string  `json:"expiry"`
-	Qty          int     `json:"qty"`
-	ShortStrike  float64 `json:"short_strike"`
-	LongStrike   float64 `json:"long_strike"`
-	WingWidth    float64 `json:"width_step"`
-	NetCredit    float64 `json:"net_credit"`
-	MaxProfit    float64 `json:"max_profit"`
-	MaxLoss      float64 `json:"max_loss"`
-	Margin       float64 `json:"margin"`
-	OpenedAt     string  `json:"opened_at"`
-	Status       string  `json:"status"` // OPEN / CLOSED / ROLLED
-	RollCount    int     `json:"roll_count"`
+	ID          string  `json:"id"`
+	PositionID  string  `json:"position_id"`
+	Symbol      string  `json:"symbol"`
+	Type        string  `json:"type"`
+	DisplayName string  `json:"display_name"`
+	Expiry      string  `json:"expiry"`
+	Qty         int     `json:"qty"`
+	ShortStrike float64 `json:"short_strike"`
+	LongStrike  float64 `json:"long_strike"`
+	WingWidth   float64 `json:"width_step"`
+	NetCredit   float64 `json:"net_credit"`
+	MaxProfit   float64 `json:"max_profit"`
+	MaxLoss     float64 `json:"max_loss"`
+	Margin      float64 `json:"margin"`
+	OpenedAt    string  `json:"opened_at"`
+	Status      string  `json:"status"` // OPEN / CLOSED / ROLLED
+	RollCount   int     `json:"roll_count"`
 	// Management rules — filled by user-provided spread rules (Phase 10+).
-	StopLossPct    float64 `json:"stop_loss_pct"`
-	TakeProfitPct  float64 `json:"take_profit_pct"`
+	StopLossPct     float64 `json:"stop_loss_pct"`
+	TakeProfitPct   float64 `json:"take_profit_pct"`
 	TrailingStopPct float64 `json:"trailing_stop_pct"`
-	MaxHedgeDelta  float64 `json:"max_hedge_delta"`
+	MaxHedgeDelta   float64 `json:"max_hedge_delta"`
 	// Auto-management rules (spreads_manager.go).
 	AutoRollDTE       int     `json:"auto_roll_dte"`
 	RollCreditPct     float64 `json:"roll_credit_pct"`
@@ -132,9 +132,9 @@ type spreadRecord struct {
 }
 
 var (
-	spreadsMu    sync.Mutex
-	spreadStore  []spreadRecord
-	spreadsFile  string
+	spreadsMu   sync.Mutex
+	spreadStore []spreadRecord
+	spreadsFile string
 )
 
 // initSpreads binds the spreads registry to the data directory and loads it.
@@ -431,13 +431,13 @@ func buildVerticalSpread(symbol, spreadType, expiry string, qty int) (*spreadPla
 // "kept" leg stays at its current series/strike; a "rolled" leg moves to a
 // new series and (optionally) a new strike.
 type rollLegSpec struct {
-	Side      string  // "BUY" | "SELL"
-	IsCall    bool
+	Side          string // "BUY" | "SELL"
+	IsCall        bool
 	CurrentStrike float64 // strike in the current/kept series
 	// For a rolled leg in a target series:
-	Roll       bool    // true → move to TargetStrike; false → keep CurrentStrike
+	Roll         bool // true → move to TargetStrike; false → keep CurrentStrike
 	TargetStrike float64
-	SecID      string  // effective secid after resolution (may be set by caller)
+	SecID        string // effective secid after resolution (may be set by caller)
 }
 
 // buildSpreadFromLegs computes the economics of a spread made from explicit
@@ -671,26 +671,26 @@ func spreadOpenHandler(w http.ResponseWriter, r *http.Request) {
 	quant.SavePosition(p)
 
 	rec := spreadRecord{
-		ID:           fmt.Sprintf("spr-%d", time.Now().UnixNano()/1e6),
-		PositionID:   p.ID,
-		Symbol:       plan.Symbol,
-		Type:         plan.Type,
-		DisplayName:  plan.DisplayName,
-		Expiry:       plan.Expiry,
-		Qty:          plan.Qty,
-		ShortStrike:  plan.ShortStrike,
-		LongStrike:   plan.LongStrike,
-		WingWidth:    plan.WingWidth,
-		NetCredit:    plan.NetCredit,
-		MaxProfit:    plan.MaxProfit,
-		MaxLoss:      plan.MaxLoss,
-		Margin:       plan.MarginShort,
-		OpenedAt:     time.Now().Format(time.RFC3339),
-		Status:       "OPEN",
-		RollCount:    0,
-		TakeProfitPct: 0,
+		ID:              fmt.Sprintf("spr-%d", time.Now().UnixNano()/1e6),
+		PositionID:      p.ID,
+		Symbol:          plan.Symbol,
+		Type:            plan.Type,
+		DisplayName:     plan.DisplayName,
+		Expiry:          plan.Expiry,
+		Qty:             plan.Qty,
+		ShortStrike:     plan.ShortStrike,
+		LongStrike:      plan.LongStrike,
+		WingWidth:       plan.WingWidth,
+		NetCredit:       plan.NetCredit,
+		MaxProfit:       plan.MaxProfit,
+		MaxLoss:         plan.MaxLoss,
+		Margin:          plan.MarginShort,
+		OpenedAt:        time.Now().Format(time.RFC3339),
+		Status:          "OPEN",
+		RollCount:       0,
+		TakeProfitPct:   0,
 		TrailingStopPct: 0,
-		MaxHedgeDelta: 0,
+		MaxHedgeDelta:   0,
 		// Knowledge-base defaults (KNOWLEDGE.md §1): stop at ~1.5x credit
 		// (0.75 of max loss for a one-third-width credit), weekly MOEX series
 		// roll on the last full week, profit capture target 50%, risk band 3%
@@ -734,41 +734,41 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]interface{}, 0, len(open))
 	for _, s := range open {
 		item := map[string]interface{}{
-			"id":           s.ID,
-			"position_id":  s.PositionID,
-			"symbol":       s.Symbol,
-			"type":         s.Type,
-			"display_name": s.DisplayName,
-			"expiry":       s.Expiry,
-			"qty":          s.Qty,
-			"short_strike": s.ShortStrike,
-			"long_strike":  s.LongStrike,
-			"width_step":   s.WingWidth,
-			"net_credit":   s.NetCredit,
-			"max_profit":   s.MaxProfit,
-			"max_loss":     s.MaxLoss,
-			"margin":       s.Margin,
-			"opened_at":    s.OpenedAt,
-			"roll_count":   s.RollCount,
-			"stop_loss_pct": s.StopLossPct,
-			"take_profit_pct": s.TakeProfitPct,
-			"trailing_stop_pct": s.TrailingStopPct,
-			"max_hedge_delta": s.MaxHedgeDelta,
-			"auto_roll_dte":   s.AutoRollDTE,
-			"roll_credit_pct": s.RollCreditPct,
+			"id":                   s.ID,
+			"position_id":          s.PositionID,
+			"symbol":               s.Symbol,
+			"type":                 s.Type,
+			"display_name":         s.DisplayName,
+			"expiry":               s.Expiry,
+			"qty":                  s.Qty,
+			"short_strike":         s.ShortStrike,
+			"long_strike":          s.LongStrike,
+			"width_step":           s.WingWidth,
+			"net_credit":           s.NetCredit,
+			"max_profit":           s.MaxProfit,
+			"max_loss":             s.MaxLoss,
+			"margin":               s.Margin,
+			"opened_at":            s.OpenedAt,
+			"roll_count":           s.RollCount,
+			"stop_loss_pct":        s.StopLossPct,
+			"take_profit_pct":      s.TakeProfitPct,
+			"trailing_stop_pct":    s.TrailingStopPct,
+			"max_hedge_delta":      s.MaxHedgeDelta,
+			"auto_roll_dte":        s.AutoRollDTE,
+			"roll_credit_pct":      s.RollCreditPct,
 			"roll_strike_risk_pct": s.RollStrikeRiskPct,
-			"auto_hedge":      s.AutoHedge,
-			"live":            s.Live,
-			"dte":             dteInDays(s.Expiry, time.Now()),
-			"multiplier":      contractMultiplier(s.Symbol),
-			"state":           s.State,
-			"tpr1":            s.TPR1,
-			"tpr2":            s.TPR2,
-			"profit_target_pct": s.ProfitTargetPct,
-			"profit_action":   s.ProfitAction,
-			"tpr_mode":        s.TPRMode,
-			"view_override":   s.ViewOverride,
-			"central_strike":  s.CentralStrike,
+			"auto_hedge":           s.AutoHedge,
+			"live":                 s.Live,
+			"dte":                  dteInDays(s.Expiry, time.Now()),
+			"multiplier":           contractMultiplier(s.Symbol),
+			"state":                s.State,
+			"tpr1":                 s.TPR1,
+			"tpr2":                 s.TPR2,
+			"profit_target_pct":    s.ProfitTargetPct,
+			"profit_action":        s.ProfitAction,
+			"tpr_mode":             s.TPRMode,
+			"view_override":        s.ViewOverride,
+			"central_strike":       s.CentralStrike,
 		}
 
 		// Live telemetry from the linked position.
@@ -814,16 +814,24 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 						"current_price": math.Round(l.CurrentPrice*100) / 100,
 						"entry_zero":    l.Kind == "OPTION" && l.EntryPrice <= 0,
 					}
-					if l.Kind == "OPTION" && spot > 0 && l.CurrentPrice > 0 {
-						if iv := quant.ImpliedVolatility(l.IsCall, l.CurrentPrice, spot, l.Strike, tYears, 0.16); iv > 0 {
-							lm["iv_pct"] = math.Round(iv*1000) / 10
+					if l.Kind == "OPTION" {
+						// Quote freshness: source of the live two-sided book
+						// (if any) plus the provenance of the final mark.
+						if q, ok := cachedOptionQuoteEx(l.SecID); ok {
+							lm["quote_src"] = q.Src
+							lm["quote_time"] = q.Updated
+							lm["quote_stale"] = quoteIsStale(q.Updated, q.Src)
 						}
-					}
-					// Quote freshness: source (mid/last/settle) and ISS row time.
-					if q, ok := cachedOptionQuoteEx(l.SecID); ok {
-						lm["quote_src"] = q.Src
-						lm["quote_time"] = q.Updated
-						lm["quote_stale"] = quoteIsStale(q.Updated, q.Src)
+						if spot > 0 {
+							if _, msrc := optionMarkWithSrc(l.SecID, l.IsCall, l.Strike, spot, tYears, s.Symbol, s.Expiry); msrc != "" {
+								lm["mark_src"] = msrc
+							}
+							if l.CurrentPrice > 0 {
+								if iv := quant.ImpliedVolatility(l.IsCall, l.CurrentPrice, spot, l.Strike, tYears, 0.16); iv > 0 {
+									lm["iv_pct"] = math.Round(iv*1000) / 10
+								}
+							}
+						}
 					}
 					legs = append(legs, lm)
 				}
@@ -1022,14 +1030,15 @@ type rollRequestLeg struct {
 // or both legs to new strikes. It closes the current position, opens the new
 // one and bumps RollCount.
 // POST /api/v1/spreads/roll
-// {
-//   "id":"spr-...",
-//   "live":false,
-//   "series":"2026-10-15",          // optional target expiry (auto if empty)
-//   "legs":[                        // optional per-leg overrides (by side)
-//      {"side":"SELL","is_call":true,"strike":81000,"roll":true}
-//   ]
-// }
+//
+//	{
+//	  "id":"spr-...",
+//	  "live":false,
+//	  "series":"2026-10-15",          // optional target expiry (auto if empty)
+//	  "legs":[                        // optional per-leg overrides (by side)
+//	     {"side":"SELL","is_call":true,"strike":81000,"roll":true}
+//	  ]
+//	}
 func spreadRollHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {
@@ -1149,27 +1158,27 @@ func spreadRollHandler(w http.ResponseWriter, r *http.Request) {
 	quant.SavePosition(p)
 
 	newRec := spreadRecord{
-		ID:            fmt.Sprintf("spr-%d", time.Now().UnixNano()/1e6),
-		PositionID:    p.ID,
-		Symbol:        plan.Symbol,
-		Type:          plan.Type,
-		DisplayName:   plan.DisplayName,
-		Expiry:        plan.Expiry,
-		Qty:           plan.Qty,
-		ShortStrike:   plan.ShortStrike,
-		LongStrike:    plan.LongStrike,
-		WingWidth:     plan.WingWidth,
-		NetCredit:     plan.NetCredit,
-		MaxProfit:     plan.MaxProfit,
-		MaxLoss:       plan.MaxLoss,
-		Margin:        plan.MarginShort,
-		OpenedAt:      time.Now().Format(time.RFC3339),
-		Status:        "OPEN",
-		RollCount:     s.RollCount + 1,
-		StopLossPct:   s.StopLossPct,
-		TakeProfitPct: s.TakeProfitPct,
+		ID:              fmt.Sprintf("spr-%d", time.Now().UnixNano()/1e6),
+		PositionID:      p.ID,
+		Symbol:          plan.Symbol,
+		Type:            plan.Type,
+		DisplayName:     plan.DisplayName,
+		Expiry:          plan.Expiry,
+		Qty:             plan.Qty,
+		ShortStrike:     plan.ShortStrike,
+		LongStrike:      plan.LongStrike,
+		WingWidth:       plan.WingWidth,
+		NetCredit:       plan.NetCredit,
+		MaxProfit:       plan.MaxProfit,
+		MaxLoss:         plan.MaxLoss,
+		Margin:          plan.MarginShort,
+		OpenedAt:        time.Now().Format(time.RFC3339),
+		Status:          "OPEN",
+		RollCount:       s.RollCount + 1,
+		StopLossPct:     s.StopLossPct,
+		TakeProfitPct:   s.TakeProfitPct,
 		TrailingStopPct: s.TrailingStopPct,
-		MaxHedgeDelta: s.MaxHedgeDelta,
+		MaxHedgeDelta:   s.MaxHedgeDelta,
 	}
 	saveSpreadRecord(newRec)
 
@@ -1178,14 +1187,14 @@ func spreadRollHandler(w http.ResponseWriter, r *http.Request) {
 		nextDisplay = fmt.Sprintf("%s (%s)", targetExpiry, nextSeriesCode)
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":       true,
-		"message":       fmt.Sprintf("Ролл выполнен: %s → %s", s.Expiry, nextDisplay),
-		"previous":      s,
-		"spread":        newRec,
-		"position":      p,
-		"next_series":   nextSeriesCode,
-		"portfolio":     quant.GetPortfolio(),
-		"stats":         quant.ComputeStats(),
+		"success":     true,
+		"message":     fmt.Sprintf("Ролл выполнен: %s → %s", s.Expiry, nextDisplay),
+		"previous":    s,
+		"spread":      newRec,
+		"position":    p,
+		"next_series": nextSeriesCode,
+		"portfolio":   quant.GetPortfolio(),
+		"stats":       quant.ComputeStats(),
 	})
 }
 
@@ -1201,16 +1210,16 @@ func metaDebitForType(t string) bool {
 // rollChainItem describes one option available to open as a rolled leg in the
 // target series, with full liquidity (top-of-book bid/ask + best-effort depth).
 type rollChainItem struct {
-	SecID  string  `json:"secid"`
-	Strike float64 `json:"strike"`
-	IsCall bool    `json:"is_call"`
-	Side   string  `json:"side"` // suggested side for building the structure
-	Mid    float64 `json:"mid"`
-	Bid    float64 `json:"bid"`
-	Ask    float64 `json:"ask"`
-	SpreadPct float64 `json:"spread_pct"` // (ask-bid)/mid %
-	Depth  []orderBookLevel `json:"depth"`  // Alor depth, empty if unavailable
-	DepthSrc string `json:"depth_src"`      // "alor" | "iss"
+	SecID     string           `json:"secid"`
+	Strike    float64          `json:"strike"`
+	IsCall    bool             `json:"is_call"`
+	Side      string           `json:"side"` // suggested side for building the structure
+	Mid       float64          `json:"mid"`
+	Bid       float64          `json:"bid"`
+	Ask       float64          `json:"ask"`
+	SpreadPct float64          `json:"spread_pct"` // (ask-bid)/mid %
+	Depth     []orderBookLevel `json:"depth"`      // Alor depth, empty if unavailable
+	DepthSrc  string           `json:"depth_src"`  // "alor" | "iss"
 }
 
 type orderBookLevel struct {
@@ -1225,7 +1234,8 @@ type orderBookLevel struct {
 // economics. Re-run it with different series/strike params as the user picks.
 //
 // GET /api/v1/spreads/roll/preview?id=spr-...&series=2026-10-15
-//   &leg=SELL&leg=BUY&strike=81000&strike=82500
+//
+//	&leg=SELL&leg=BUY&strike=81000&strike=82500
 func spreadRollPreviewHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	id := r.URL.Query().Get("id")
@@ -1255,9 +1265,9 @@ func spreadRollPreviewHandler(w http.ResponseWriter, r *http.Request) {
 			ml := map[string]interface{}{
 				"secid": l.SecID, "side": l.Side, "kind": l.Kind,
 				"strike": l.Strike, "is_call": l.IsCall,
-				"entry_price": math.Round(l.EntryPrice*100) / 100,
+				"entry_price":   math.Round(l.EntryPrice*100) / 100,
 				"current_price": math.Round(l.CurrentPrice*100) / 100,
-				"bid": q.Bid, "ask": q.Offer, "mid": q.Price,
+				"bid":           q.Bid, "ask": q.Offer, "mid": q.Price,
 			}
 			current = append(current, ml)
 			// Close = sell what we own, buy what we sold (realizing at mid).
@@ -1365,7 +1375,7 @@ func spreadRollPreviewHandler(w http.ResponseWriter, r *http.Request) {
 		"current": current, "close_value": math.Round(closeValue*100) / 100,
 		"series_options": seriesList, "target_series": targetExpiry,
 		"chain": chainItems, "plan": plan, "plan_error": planErr,
-		"net_impact": math.Round(netImpact*100) / 100,
+		"net_impact":           math.Round(netImpact*100) / 100,
 		"underlying_orderbook": underlyingOrderbook,
 		"underlying_depth_src": underlyingDepthSrc,
 	})
@@ -1442,11 +1452,11 @@ func optionChainMenu(symbol, expiry, side string, isCall bool, anchorStrike floa
 		}
 		item := map[string]interface{}{
 			"secid": opt.SecID, "strike": st, "is_call": isCall, "side": side,
-			"mid": math.Round(q.Price*10000) / 10000,
-			"bid": math.Round(q.Bid*10000) / 10000,
-			"ask": math.Round(q.Offer*10000) / 10000,
+			"mid":        math.Round(q.Price*10000) / 10000,
+			"bid":        math.Round(q.Bid*10000) / 10000,
+			"ask":        math.Round(q.Offer*10000) / 10000,
 			"spread_pct": spreadPct,
-			"depth": []orderBookLevel{}, "depth_src": "iss",
+			"depth":      []orderBookLevel{}, "depth_src": "iss",
 		}
 		// Best-effort Alor depth for this option via its ISS secid as symbol.
 		if alorMarket != nil {

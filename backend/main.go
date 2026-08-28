@@ -26,7 +26,6 @@ var staticFiles embed.FS
 
 // Version: 1.0.1 - Initial capital widget added
 
-
 type GreeksRequest struct {
 	IsCall bool    `json:"is_call"`
 	S      float64 `json:"spot_price"`
@@ -798,9 +797,9 @@ func contractMultiplier(symbol string) float64 {
 }
 
 var (
-	assetPointCache   = map[string]float64{}
-	assetPointTime    = map[string]time.Time{}
-	assetPointMu      sync.Mutex
+	assetPointCache = map[string]float64{}
+	assetPointTime  = map[string]time.Time{}
+	assetPointMu    sync.Mutex
 )
 
 // assetPointValue resolves the ruble value of one premium point for an ISS
@@ -1198,13 +1197,13 @@ func seriesInfoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type seriesItem struct {
-		Code        string `json:"code"`
-		ShortName   string `json:"short_name"`
-		Expiry      string `json:"expiry"`
-		DaysToExp   int    `json:"days_to_exp"`
-		Type        string `json:"type"`
-		TypeCode    string `json:"type_code"`
-		IsCurrent   bool   `json:"is_current"`
+		Code      string `json:"code"`
+		ShortName string `json:"short_name"`
+		Expiry    string `json:"expiry"`
+		DaysToExp int    `json:"days_to_exp"`
+		Type      string `json:"type"`
+		TypeCode  string `json:"type_code"`
+		IsCurrent bool   `json:"is_current"`
 	}
 
 	today := now.Format("2006-01-02")
@@ -1292,9 +1291,9 @@ func setSeriesHandler(w http.ResponseWriter, r *http.Request) {
 	seriesMu.Unlock()
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":  true,
-		"symbol":   req.Symbol,
-		"series":   req.Series,
+		"success": true,
+		"symbol":  req.Symbol,
+		"series":  req.Series,
 	})
 }
 
@@ -1517,7 +1516,7 @@ func settingsTokenHandler(w http.ResponseWriter, r *http.Request) {
 			status = "configured"
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status": status,
+			"status":    status,
 			"has_token": tokenStore != nil && tokenStore.HasToken(),
 		})
 		return
@@ -1555,9 +1554,9 @@ func settingsTokenHandler(w http.ResponseWriter, r *http.Request) {
 		valid, msg := alorAuth.ValidateRefreshToken()
 
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":  true,
-			"valid":    valid,
-			"message":  msg,
+			"success":   true,
+			"valid":     valid,
+			"message":   msg,
 			"has_token": true,
 		})
 		return
@@ -1769,14 +1768,10 @@ func repricePosition(p *quant.Position) {
 				last = leg.CurrentPrice
 			}
 		} else {
-			l, b, o := cachedOptionQuote(leg.SecID)
-			if l > 0 {
-				last = l
-			} else if b > 0 {
-				last = b
-			} else if o > 0 {
-				last = o
-			} else {
+			// Hybrid mark: live narrow books at the mid, dead/wide books at
+			// BS fair value with the series IV (like the MOEX constructor).
+			last = optionMark(leg.SecID, leg.IsCall, leg.Strike, spot, t, p.Symbol, p.Expiry)
+			if last <= 0 {
 				last = leg.CurrentPrice
 			}
 		}
@@ -1836,6 +1831,7 @@ func positionsHandler(w http.ResponseWriter, r *http.Request) {
 		"stats":     stats,
 	})
 }
+
 // closesUpTo returns daily closes of the underlying ending at `until`
 // (entry context for closed trades).
 func closesUpTo(symbol string, until time.Time, days int) []float64 {
@@ -2003,18 +1999,18 @@ func riskHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"net_delta":       math.Round(netDelta*100) / 100,
-		"net_gamma":       math.Round(netGamma*100) / 100,
-		"net_theta":       math.Round(netTheta*100) / 100,
-		"margin_load_pct": math.Round(marginLoad*100) / 100,
-		"locked_margin":   portfolio.LockedMargin,
-		"initial_capital": portfolio.InitialCapital,
-		"unrealized_pnl":  portfolio.UnrealizedPnL,
-		"realized_pnl":    realized,
+		"net_delta":         math.Round(netDelta*100) / 100,
+		"net_gamma":         math.Round(netGamma*100) / 100,
+		"net_theta":         math.Round(netTheta*100) / 100,
+		"margin_load_pct":   math.Round(marginLoad*100) / 100,
+		"locked_margin":     portfolio.LockedMargin,
+		"initial_capital":   portfolio.InitialCapital,
+		"unrealized_pnl":    portfolio.UnrealizedPnL,
+		"realized_pnl":      realized,
 		"drawdown_realized": math.Round(dd*100) / 100,
-		"positions_count": len(positions),
-		"total_exposure":  math.Round(totalValue*100) / 100,
-		"stats":           stats,
+		"positions_count":   len(positions),
+		"total_exposure":    math.Round(totalValue*100) / 100,
+		"stats":             stats,
 	})
 }
 
@@ -2237,10 +2233,10 @@ func tradesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodDelete {
 		removed := quant.ClearTrades()
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"ok":        true,
-			"removed":   removed,
-			"trades":    quant.GetTrades(),
-			"stats":     quant.ComputeStats(),
+			"ok":      true,
+			"removed": removed,
+			"trades":  quant.GetTrades(),
+			"stats":   quant.ComputeStats(),
 		})
 		return
 	}
@@ -2502,16 +2498,16 @@ func strategyParityHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := map[string]interface{}{
-		"symbol":       symbol,
-		"series":       seriesCode,
-		"expiry":       expiry,
-		"days_to_exp":  dteInDays(expiry, time.Now()),
-		"spot_price":   spot,
-		"strike":       strike,
-		"chain_count":  len(chain),
-		"call_found":   callOpt != nil,
-		"put_found":    putOpt != nil,
-		"note":         "Live MOEX ISS prices",
+		"symbol":      symbol,
+		"series":      seriesCode,
+		"expiry":      expiry,
+		"days_to_exp": dteInDays(expiry, time.Now()),
+		"spot_price":  spot,
+		"strike":      strike,
+		"chain_count": len(chain),
+		"call_found":  callOpt != nil,
+		"put_found":   putOpt != nil,
+		"note":        "Live MOEX ISS prices",
 	}
 
 	if callOpt == nil || putOpt == nil {
@@ -2588,26 +2584,26 @@ func strategyParityHandler(w http.ResponseWriter, r *http.Request) {
 	thetaPerContract := -callG.Theta + putG.Theta
 
 	response["call"] = map[string]interface{}{
-		"secid":         callOpt.SecID,
-		"price":         callLast,
-		"bid":           callBid,
-		"offer":         callOffer,
-		"implied_vol":   callIV * 100,
-		"theoretical":   callG.Price,
-		"theta":         callG.Theta,
-		"delta":         callG.Delta,
-		"margin_short":  callOpt.IMNP,
+		"secid":        callOpt.SecID,
+		"price":        callLast,
+		"bid":          callBid,
+		"offer":        callOffer,
+		"implied_vol":  callIV * 100,
+		"theoretical":  callG.Price,
+		"theta":        callG.Theta,
+		"delta":        callG.Delta,
+		"margin_short": callOpt.IMNP,
 	}
 	response["put"] = map[string]interface{}{
-		"secid":         putOpt.SecID,
-		"price":         putLast,
-		"bid":           putBid,
-		"offer":         putOffer,
-		"implied_vol":   putIV * 100,
-		"theoretical":   putG.Price,
-		"theta":         putG.Theta,
-		"delta":         putG.Delta,
-		"margin_short":  putOpt.IMNP,
+		"secid":        putOpt.SecID,
+		"price":        putLast,
+		"bid":          putBid,
+		"offer":        putOffer,
+		"implied_vol":  putIV * 100,
+		"theoretical":  putG.Price,
+		"theta":        putG.Theta,
+		"delta":        putG.Delta,
+		"margin_short": putOpt.IMNP,
 	}
 	response["theoretical_diff"] = math.Round(theoreticalDiff*100) / 100
 	response["actual_diff"] = math.Round(actualDiff*100) / 100
@@ -2754,18 +2750,18 @@ func strategyIronCondorHandler(w http.ResponseWriter, r *http.Request) {
 	buyCall := findOpt(buyCallStrike, true)
 
 	response := map[string]interface{}{
-		"symbol":       symbol,
-		"series":       seriesCode,
-		"expiry":       expiry,
-		"days_to_exp":  dteInDays(expiry, time.Now()),
-		"spot_price":   spot,
-		"atm_strike":   atmStrike,
-		"step":         step,
-		"note":         "Live MOEX ISS prices",
-		"sell_put":     sellPut != nil,
-		"buy_put":      buyPut != nil,
-		"sell_call":    sellCall != nil,
-		"buy_call":     buyCall != nil,
+		"symbol":      symbol,
+		"series":      seriesCode,
+		"expiry":      expiry,
+		"days_to_exp": dteInDays(expiry, time.Now()),
+		"spot_price":  spot,
+		"atm_strike":  atmStrike,
+		"step":        step,
+		"note":        "Live MOEX ISS prices",
+		"sell_put":    sellPut != nil,
+		"buy_put":     buyPut != nil,
+		"sell_call":   sellCall != nil,
+		"buy_call":    buyCall != nil,
 	}
 
 	if sellPut == nil || buyPut == nil || sellCall == nil || buyCall == nil {
@@ -2789,13 +2785,13 @@ func strategyIronCondorHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type legOut struct {
-		SecID        string  `json:"secid"`
-		Action       string  `json:"action"`
-		Strike       float64 `json:"strike"`
-		Price        float64 `json:"price"`
-		Theta        float64 `json:"theta"`
-		Delta        float64 `json:"delta"`
-		MarginShort  float64 `json:"margin_short"`
+		SecID       string  `json:"secid"`
+		Action      string  `json:"action"`
+		Strike      float64 `json:"strike"`
+		Price       float64 `json:"price"`
+		Theta       float64 `json:"theta"`
+		Delta       float64 `json:"delta"`
+		MarginShort float64 `json:"margin_short"`
 	}
 
 	var legResults []legOut
@@ -3088,22 +3084,22 @@ func buildStrategy(symbol, strategy string) map[string]interface{} {
 	unlimited := strategy == "long_straddle" || strategy == "long_strangle"
 
 	return map[string]interface{}{
-		"symbol":              symbol,
-		"series":              seriesCode,
-		"expiry":              expiry,
-		"days_to_exp":         dteInDays(expiry, time.Now()),
-		"spot_price":          spot,
-		"atm_strike":          atmStrike,
-		"strategy_name":       displayName,
-		"note":                "Live MOEX ISS prices",
+		"symbol":               symbol,
+		"series":               seriesCode,
+		"expiry":               expiry,
+		"days_to_exp":          dteInDays(expiry, time.Now()),
+		"spot_price":           spot,
+		"atm_strike":           atmStrike,
+		"strategy_name":        displayName,
+		"note":                 "Live MOEX ISS prices",
 		"unlimited_max_profit": unlimited,
-		"legs":                legResults,
-		"net_credit":          math.Round(netCredit*100) / 100,
-		"width_step":          math.Round(wingWidth*10000) / 10000,
-		"max_profit":          math.Round(maxProfit*100) / 100,
-		"max_loss":            math.Round(maxLoss*100) / 100,
-		"theta_per_contract":  math.Round(thetaTotal*100) / 100,
-		"margin_short_total":  math.Round(marginShort*100) / 100,
+		"legs":                 legResults,
+		"net_credit":           math.Round(netCredit*100) / 100,
+		"width_step":           math.Round(wingWidth*10000) / 10000,
+		"max_profit":           math.Round(maxProfit*100) / 100,
+		"max_loss":             math.Round(maxLoss*100) / 100,
+		"theta_per_contract":   math.Round(thetaTotal*100) / 100,
+		"margin_short_total":   math.Round(marginShort*100) / 100,
 	}
 }
 
@@ -3269,9 +3265,9 @@ func rotationHandler(w http.ResponseWriter, r *http.Request) {
 
 	advice := quant.RecommendRotation(regime, trendRegime, held)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"rotation":  advice,
-		"iv":        math.Round(iv*10000) / 10000,
-		"hv":        math.Round(hv*10000) / 10000,
+		"rotation":   advice,
+		"iv":         math.Round(iv*10000) / 10000,
+		"hv":         math.Round(hv*10000) / 10000,
 		"trade_gate": tradeGate(symbol),
 	})
 }
