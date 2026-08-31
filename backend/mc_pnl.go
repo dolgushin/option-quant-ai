@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+
+	"option-quant-ai/optioncalc"
 )
 
 type mcPLResult struct {
@@ -45,6 +47,20 @@ func mcPLHandler(w http.ResponseWriter, r *http.Request) {
 	longK, _ := strconv.ParseFloat(r.URL.Query().Get("long"), 64)
 	dte, _ := strconv.Atoi(r.URL.Query().Get("dte"))
 	n, _ := strconv.Atoi(r.URL.Query().Get("n"))
+
+	// Optional MOEX Options Calculator sourcing: when a symbol+expiry is given
+	// and the volatility / spot aren't, pull the series ATM IV and live spot so
+	// the simulation uses the exchange's own data instead of manual inputs.
+	symbol := r.URL.Query().Get("symbol")
+	expiry := r.URL.Query().Get("expiry")
+	if symbol != "" && expiry != "" && optCalc != nil {
+		if iv == 0 {
+			iv = mcMoexATMIV(symbol, expiry)
+		}
+		if spot == 0 {
+			spot, _ = getSpotPrice(symbol)
+		}
+	}
 
 	if credit == 0 || spot == 0 || iv == 0 || dte <= 0 {
 		json.NewEncoder(w).Encode(map[string]string{"error": "missing required params"})
@@ -162,4 +178,49 @@ func mcPLHandler(w http.ResponseWriter, r *http.Request) {
 		MaxWin:     rnd(pnls[len(pnls)-1]),
 		Histogram:  bins,
 	})
+}
+
+// mcMoexATMIV returns the near-the-money implied volatility (decimal) for a
+// symbol+expiry from the MOEX Options Calculator book, or 0 if unavailable.
+func mcMoexATMIV(symbol, expiry string) float64 {
+	seriesCode, err := optCalc.SeriesByExpiry(optionCalcAsset(symbol), expiry)
+	if err != nil {
+		return 0
+	}
+	board, err := optCalc.Board(optionCalcAsset(symbol), seriesCode)
+	if err != nil || (len(board.Calls) == 0 && len(board.Puts) == 0) {
+		return 0
+	}
+	spot, _ := getSpotPrice(symbol)
+	if spot <= 0 {
+		return 0
+	}
+	best := 0.0
+	bestDiff := math.MaxFloat64
+	// Average call/put IV at the strike closest to spot.
+	seen := map[float64]int{}
+	ivSum := map[float64]float64{}
+	consider := func(o optioncalc.BoardOption) {
+		if o.Volatility <= 0 {
+			return
+		}
+		d := math.Abs(o.Strike - spot)
+		if d < bestDiff {
+			bestDiff = d
+			best = o.Strike
+		}
+		seen[o.Strike]++
+		ivSum[o.Strike] += o.Volatility
+	}
+	for _, o := range board.Calls {
+		consider(o)
+	}
+	for _, o := range board.Puts {
+		consider(o)
+	}
+	iv, ok := ivSum[best]
+	if !ok {
+		return 0
+	}
+	return iv / float64(seen[best]) / 100
 }

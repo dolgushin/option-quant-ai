@@ -17,6 +17,7 @@ import (
 
 	"option-quant-ai/agent"
 	"option-quant-ai/alor"
+	"option-quant-ai/optioncalc"
 	"option-quant-ai/quant"
 	"option-quant-ai/secure"
 )
@@ -99,6 +100,10 @@ var (
 	alorAuth   *alor.AuthClient
 	alorMarket *alor.MarketClient
 	alorExec   *alor.ExecutionClient
+
+	// optCalc is the MOEX Options Calculator client used to source greeks, IV
+	// and theo prices for charts (no auth, public feed).
+	optCalc *optioncalc.Client
 )
 
 // futuresContract is a MOEX FORTS futures contract with its expiry date.
@@ -257,6 +262,20 @@ func syntheticSeriesExpiry(code string) (*time.Time, bool) {
 
 // resolveRealFuturesCode maps a synthetic expiry-based code to the real
 // futures contract of the same root expiring on/after that date — needed where
+// optionCalcAsset maps an app symbol to the MOEX Options Calculator asset code
+// (RI and CR are small-premium RUB/CNY underlyings the calculator only knows by
+// their RTS/CNY codes).
+func optionCalcAsset(symbol string) string {
+	switch symbol {
+	case "RI":
+		return "RTS"
+	case "CR":
+		return "CNY"
+	default:
+		return symbol
+	}
+}
+
 // a tradable ticker is required (quoting, margin, hedging).
 func resolveRealFuturesCode(symbol, code string) string {
 	exp, ok := syntheticSeriesExpiry(code)
@@ -3418,6 +3437,7 @@ func main() {
 		log.Fatalf("Failed to initialize secure store: %v", err)
 	}
 	initAlorClients()
+	optCalc = optioncalc.New()
 	initTelegram()
 	initSpreads(dataDir)
 	initCore(dataDir)

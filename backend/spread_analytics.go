@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"time"
 
+	"option-quant-ai/optioncalc"
 	"option-quant-ai/quant"
 )
 
@@ -32,6 +33,21 @@ type analyticsLeg struct {
 	Theta    float64 `json:"theta"`
 	Rho      float64 `json:"rho"`
 	Iv       float64 `json:"iv"` // percent
+	// Moex carries the exchange's own greeks/IV for this leg (filled by the
+	// handler from the MOEX Options Calculator). When set, buildSpreadAnalytics
+	// uses these authoritative values instead of backing them out locally.
+	Moex *moexLegData `json:"-"`
+}
+
+// moexLegData holds a leg's values as reported by the MOEX Options Calculator.
+type moexLegData struct {
+	IV    float64 // implied volatility, decimal (0.30 = 30%)
+	Theo  float64
+	Delta float64
+	Gamma float64
+	Vega  float64
+	Theta float64
+	Rho   float64
 }
 
 type analyticsCurves struct {
@@ -55,6 +71,7 @@ type spreadAnalytics struct {
 	Mult    float64            `json:"multiplier"`
 	Qty     int                `json:"qty"`
 	Central float64            `json:"central_strike"`
+	Source  string             `json:"source"` // "moex-optcalc" or "local"
 	Legs    []analyticsLeg     `json:"legs"`
 	Totals  map[string]float64 `json:"totals"`
 	Curves  analyticsCurves    `json:"curves"`
@@ -86,11 +103,20 @@ func buildSpreadAnalytics(symbol, expiry string, spot float64, dte int, mult flo
 	}
 	const r = 0.16
 
-	// Per-leg IV from the current mark.
+	// Per-leg IV: prefer the MOEX Options Calculator's own IV (authoritative
+	// skew); fall back to backing IV out of the current mark locally.
 	ivs := make([]float64, len(a.Legs))
 	for i := range a.Legs {
 		l := &a.Legs[i]
-		if l.Kind == "FUTURES" || l.Current <= 0 {
+		if l.Kind == "FUTURES" {
+			continue
+		}
+		if l.Moex != nil && l.Moex.IV > 0 {
+			ivs[i] = l.Moex.IV
+			l.Iv = math.Round(l.Moex.IV*1000) / 10
+			continue
+		}
+		if l.Current <= 0 {
 			continue
 		}
 		iv := quant.ImpliedVolatility(l.IsCall, l.Current, spot, l.Strike, t, r)
@@ -112,7 +138,7 @@ func buildSpreadAnalytics(symbol, expiry string, spot float64, dte int, mult flo
 	}
 
 	// Per-leg statics at the current spot (greeks per underlying unit,
-	// P&L in money).
+	// P&L in money). When MOEX data is present use the exchange's own greeks.
 	for i := range a.Legs {
 		l := &a.Legs[i]
 		dir := 1.0
@@ -123,6 +149,15 @@ func buildSpreadAnalytics(symbol, expiry string, spot float64, dte int, mult flo
 		l.PnL = math.Round(dir*(l.Current-l.Entry)*q*mult*100) / 100
 		if l.Kind == "FUTURES" {
 			l.Delta = math.Round(dir*q*10000) / 10000
+			continue
+		}
+		if l.Moex != nil {
+			l.Theo = math.Round(l.Moex.Theo*100) / 100
+			l.Delta = math.Round(dir*l.Moex.Delta*q*10000) / 10000
+			l.Gamma = math.Round(dir*l.Moex.Gamma*q*10000) / 10000
+			l.Vega = math.Round(dir*l.Moex.Vega*q*10000) / 10000
+			l.Theta = math.Round(dir*l.Moex.Theta*q*10000) / 10000
+			l.Rho = math.Round(dir*l.Moex.Rho*q*10000) / 10000
 			continue
 		}
 		g := quant.CalculateBlackScholes(l.IsCall, spot, l.Strike, t, r, ivs[i])
@@ -216,11 +251,11 @@ func spreadAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 
 	id := r.URL.Query().Get("id")
 	var (
-		legsIn       []analyticsLeg
+		legsIn         []analyticsLeg
 		symbol, expiry string
-		spot, mult   float64
-		dte, qty     int
-		central      float64
+		spot, mult     float64
+		dte, qty       int
+		central        float64
 	)
 
 	if id != "" {
@@ -280,8 +315,88 @@ func spreadAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	a := buildSpreadAnalytics(symbol, expiry, spot, dte, mult, legsIn)
+	// Enrich legs with the MOEX Options Calculator's own greeks and IV where
+	// the series is available. Falls back silently to local Black-Scholes.
+	enriched, applied := enrichLegsFromMOEX(symbol, expiry, legsIn)
+
+	a := buildSpreadAnalytics(symbol, expiry, spot, dte, mult, enriched)
 	a.Qty = qty
 	a.Central = central
+	if applied {
+		a.Source = "moex-optcalc"
+	} else {
+		a.Source = "local"
+	}
 	json.NewEncoder(w).Encode(a)
+}
+
+// enrichLegsFromMOEX attaches each option leg's greeks/IV from the MOEX
+// Options Calculator board for the given series. Returns the (possibly
+// unchanged) legs and reports whether the enrichment was applied. Share-premium
+// options (equityOptions) and future-option assets not covered by the
+// calculator are skipped and keep the local path.
+func enrichLegsFromMOEX(symbol, expiry string, legs []analyticsLeg) (out []analyticsLeg, applied bool) {
+	if optCalc == nil {
+		return legs, false
+	}
+	asset := optionCalcAsset(symbol)
+	seriesCode, err := optCalc.SeriesByExpiry(asset, expiry)
+	if err != nil {
+		return legs, false
+	}
+	board, err := optCalc.Board(asset, seriesCode)
+	if err != nil {
+		return legs, false
+	}
+
+	bySecid := map[string]*optioncalc.BoardOption{}
+	for i := range board.Calls {
+		bySecid[board.Calls[i].SecID] = &board.Calls[i]
+	}
+	for i := range board.Puts {
+		bySecid[board.Puts[i].SecID] = &board.Puts[i]
+	}
+
+	out = make([]analyticsLeg, len(legs))
+	copy(out, legs)
+	found := false
+	for i := range out {
+		l := &out[i]
+		if l.Kind == "FUTURES" {
+			continue
+		}
+		bo, ok := bySecid[l.SecID]
+		if !ok {
+			// Fall back to matching by strike+type if secid differs.
+			bo = findBoardOption(board, l.Strike, l.IsCall)
+			if bo == nil {
+				continue
+			}
+		}
+		l.Moex = &moexLegData{
+			IV:    bo.Volatility / 100,
+			Theo:  bo.Theo,
+			Delta: bo.Delta,
+			Gamma: bo.Gamma,
+			Vega:  bo.Vega,
+			Theta: bo.Theta,
+			Rho:   bo.Rho,
+		}
+		found = true
+	}
+	return out, found
+}
+
+// findBoardOption locates a call/put row by strike in a board.
+func findBoardOption(board *optioncalc.Board, strike float64, isCall bool) *optioncalc.BoardOption {
+	src := board.Puts
+	if isCall {
+		src = board.Calls
+	}
+	for i := range src {
+		if math.Abs(src[i].Strike-strike) < 0.5 {
+			return &src[i]
+		}
+	}
+	return nil
 }

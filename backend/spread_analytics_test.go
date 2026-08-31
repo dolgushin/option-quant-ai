@@ -60,3 +60,26 @@ func TestAnalyticsTotalsPnLZeroAtEntry(t *testing.T) {
 		t.Fatalf("totals delta = %.4f out of range", a.Totals["delta"])
 	}
 }
+
+func TestAnalyticsUsesMOEXGreeksAndIV(t *testing.T) {
+	legs := analyticsTestLegs()
+	// Simulate the MOEX Options Calculator enrichment: IV and greeks from the
+	// exchange take precedence over the local Black-Scholes derivation.
+	legs[0].Moex = &moexLegData{IV: 0.21, Theo: 6.5, Delta: 0.35, Gamma: 0.02, Vega: 0.55, Theta: 0.9, Rho: 0.1}
+	legs[1].Moex = &moexLegData{IV: 0.19, Theo: 3.9, Delta: 0.25, Gamma: 0.02, Vega: 0.52, Theta: 0.7, Rho: 0.08}
+	a := buildSpreadAnalytics("SBERP", "2026-09-16", 273.76, 22, 100, legs)
+	if math.Abs(a.Legs[0].Iv-21) > 0.01 {
+		t.Fatalf("leg0 iv = %.2f, want 21 (from MOEX)", a.Legs[0].Iv)
+	}
+	// Delta signs follow side: sell -> negative, buy -> positive.
+	if a.Legs[0].Delta >= 0 {
+		t.Fatalf("leg0 delta = %.4f, want negative (sell)", a.Legs[0].Delta)
+	}
+	if a.Legs[1].Delta <= 0 {
+		t.Fatalf("leg1 delta = %.4f, want positive (buy)", a.Legs[1].Delta)
+	}
+	// Buy call at slightly-LT strike: MOEX greeks used (0.25 * 2).
+	if math.Abs(a.Legs[1].Delta-0.50) > 1e-6 {
+		t.Fatalf("leg1 delta = %.4f, want 0.50", a.Legs[1].Delta)
+	}
+}

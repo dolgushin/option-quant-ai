@@ -13,19 +13,19 @@ import (
 )
 
 type volSurfacePoint struct {
-	Strike float64 `json:"strike"`
-	IV     float64 `json:"iv"`     // implied volatility, percent
-	Type   string  `json:"type"`   // "call" or "put"
-	DTE    int     `json:"dte"`    // days to expiry
-	Expiry string  `json:"expiry"` // expiry date
+	Strike    float64 `json:"strike"`
+	IV        float64 `json:"iv"`        // implied volatility, percent
+	Type      string  `json:"type"`      // "call" or "put"
+	DTE       int     `json:"dte"`       // days to expiry
+	Expiry    string  `json:"expiry"`    // expiry date
 	Moneyness float64 `json:"moneyness"` // strike / spot
 }
 
 type volSurfaceResponse struct {
-	Symbol  string            `json:"symbol"`
-	Spot    float64           `json:"spot"`
-	Points  []volSurfacePoint `json:"points"`
-	Expiries []string         `json:"expiries"` // unique sorted expiries
+	Symbol   string            `json:"symbol"`
+	Spot     float64           `json:"spot"`
+	Points   []volSurfacePoint `json:"points"`
+	Expiries []string          `json:"expiries"` // unique sorted expiries
 }
 
 // volSurfaceHandler returns IV data for all strikes across multiple expiries.
@@ -67,40 +67,46 @@ func volSurfaceHandler(w http.ResponseWriter, r *http.Request) {
 
 	var points []volSurfacePoint
 	seenExpiries := map[string]bool{}
+	asset := optionCalcAsset(symbol)
 
 	for _, exp := range expiries {
-		chain := moexOptionsForAsset(symbol, exp)
-		if len(chain) == 0 {
+		if optCalc == nil {
+			continue
+		}
+		seriesCode, err := optCalc.SeriesByExpiry(asset, exp)
+		if err != nil {
+			continue
+		}
+		board, err := optCalc.Board(asset, seriesCode)
+		if err != nil || (len(board.Calls) == 0 && len(board.Puts) == 0) {
 			continue
 		}
 		seenExpiries[exp] = true
 		dte := dteInDays(exp, time.Now())
 
-		for _, o := range chain {
-			q, err := moexOptionQuoteEx(o.SecID)
-			if err != nil || q.Price <= 0 {
+		for _, o := range board.Calls {
+			ivPct := math.Round(o.Volatility*100) / 100
+			if o.Volatility <= 0 || ivPct > 500 {
 				continue
-			}
-			t := float64(dte) / 365.0
-			if t <= 0 {
-				t = 1.0 / 365.0
-			}
-			iv := quantIV(o.IsCall, q.Price, spot, o.Strike, t)
-			if iv <= 0 || math.IsNaN(iv) || math.IsInf(iv, 0) {
-				continue
-			}
-			ivPct := math.Round(iv*10000) / 100
-			if ivPct < 0.1 || ivPct > 500 {
-				continue
-			}
-			tp := "put"
-			if o.IsCall {
-				tp = "call"
 			}
 			points = append(points, volSurfacePoint{
 				Strike:    o.Strike,
 				IV:        ivPct,
-				Type:      tp,
+				Type:      "call",
+				DTE:       dte,
+				Expiry:    exp,
+				Moneyness: math.Round(o.Strike/spot*10000) / 10000,
+			})
+		}
+		for _, o := range board.Puts {
+			ivPct := math.Round(o.Volatility*100) / 100
+			if o.Volatility <= 0 || ivPct > 500 {
+				continue
+			}
+			points = append(points, volSurfacePoint{
+				Strike:    o.Strike,
+				IV:        ivPct,
+				Type:      "put",
 				DTE:       dte,
 				Expiry:    exp,
 				Moneyness: math.Round(o.Strike/spot*10000) / 10000,
