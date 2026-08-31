@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -73,7 +74,7 @@ func (a *AuthClient) GetAccessToken() (string, error) {
 		return "", fmt.Errorf("alor refresh token is not configured")
 	}
 
-	url := fmt.Sprintf("%s/refresh?token=%s", a.baseURL, a.refreshToken)
+	url := fmt.Sprintf("%s/refresh?token=%s", a.baseURL, url.QueryEscape(a.refreshToken))
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
 		return "", err
