@@ -1042,8 +1042,12 @@
                         <input id="mc-credit" type="number" value="80" class="w-24 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
                     <label class="block text-rose-400">Макс. риск (свой), ₽
                         <input id="mc-maxloss" type="number" value="1420" class="w-24 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="block text-slate-400">Инстр. (Si)
+                        <input id="mc-sym" type="text" value="" placeholder="Si" class="w-20 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
                     <label class="block text-slate-400">Спот
                         <input id="mc-spot" type="number" value="85000" class="w-28 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="block text-cyan-400">Экспирация (Moex IV/спот, опц.)
+                        <input id="mc-expiry" type="text" value="" placeholder="2026-11-19" class="w-32 mt-1 bg-slate-900 border border-cyan-700/60 rounded px-2 py-1 text-white"></label>
                     <label class="block text-slate-400">IV (доля)
                         <input id="mc-iv" type="number" step="0.01" value="0.15" class="w-20 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
                     <label class="block text-slate-400">Страйк (short)
@@ -1056,7 +1060,7 @@
                         <input id="mc-n" type="number" min="100" max="50000" value="5000" class="w-20 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
                     <button onclick="runMCPnL()" class="px-4 py-1.5 bg-violet-600 hover:bg-violet-500 text-white font-bold rounded-lg transition">🎲 Симуляция</button>
                 </div>
-                <div class="text-[10px] text-slate-500 font-mono mt-2">P&L на экспирацию. Спред определяют страйки; если они совпали — ширина берётся из макс. риска. Для гладкой формы держите оба страйка вне денег.</div>
+                <div class="text-[10px] text-slate-500 font-mono mt-2">P&L на экспирацию. Спред определяют страйки; если они совпали — ширина берётся из макс. риска. Для гладкой формы держите оба страйка вне денег. Если указать Инстр.+Экспирацию (и оставить Спот/IV пустыми) — волатильность и спот возьмутся из MOEX Options Calculator (ATM серии).</div>
             </div>
             <div id="mc-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
             <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
@@ -1557,10 +1561,12 @@
             const longK = document.getElementById('mc-long').value;
             const dte = document.getElementById('mc-dte').value;
             const n = document.getElementById('mc-n').value;
+            const sym = document.getElementById('mc-sym').value.trim();
+            const exp = document.getElementById('mc-expiry').value.trim();
             const k = document.getElementById('mc-kpis');
             k.innerHTML = '<div class="col-span-full text-center text-slate-500 py-4 font-mono">Симуляция...</div>';
             try {
-                const res = await fetch(`/api/v1/mc-pnl?credit=${credit}&maxloss=${maxloss}&spot=${spot}&iv=${iv}&short=${shortK}&long=${longK}&dte=${dte}&n=${n}`);
+                const res = await fetch(`/api/v1/mc-pnl?credit=${credit}&maxloss=${maxloss}&spot=${spot}&iv=${iv}&short=${shortK}&long=${longK}&dte=${dte}&n=${n}&symbol=${encodeURIComponent(sym)}&expiry=${encodeURIComponent(exp)}`);
                 const d = await res.json();
                 if (d.error) { k.innerHTML = `<div class="col-span-full text-center text-rose-400 py-4 font-mono">❌ ${d.error}</div>`; return; }
                 const ppCls = d.prob_profit >= 60 ? 'text-emerald-400' : d.prob_profit >= 40 ? 'text-amber-400' : 'text-rose-400';
@@ -2627,7 +2633,7 @@
                             <tfoot>${tfoot}</tfoot>
                         </table>
                         </div>
-                        <div class="text-[10px] text-slate-500 mt-1 font-mono">Греки — на единицу актива; Θ — в ₽/день; P&L — в ₽ (с множителем)</div>
+                        <div class="text-[10px] text-slate-500 mt-1 font-mono">Греки — на единицу актива; Θ — в ₽/день; P&L — в ₽ (с множителем)${d.source === 'moex-optcalc' ? ' · <span class="text-cyan-400">данные: MOEX Options Calculator</span>' : ''}</div>
                         <div class="bg-slate-900/60 rounded-lg p-2 border border-slate-700 mt-2">
                             <div class="flex items-center justify-between mb-1">
                                 <div class="text-[10px] text-slate-400 font-mono">Биржевые стаканы (Alor, 5 бидов / 5 асков), ₽</div>
