@@ -3485,6 +3485,7 @@ func main() {
 	http.HandleFunc("/api/v1/spreads/roll", spreadRollHandler)
 	http.HandleFunc("/api/v1/spreads/roll/preview", spreadRollPreviewHandler)
 	http.HandleFunc("/api/v1/spreads/rules", spreadRulesHandler)
+	http.HandleFunc("/api/v1/spreads/depth", spreadDepthHandler)
 	http.HandleFunc("/api/v1/spreads/manager", spreadManagerHandler)
 	http.HandleFunc("/api/v1/spreads", spreadListHandler)
 	http.HandleFunc("/api/v1/strategy/rotation", rotationHandler)
