@@ -8,6 +8,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"option-quant-ai/quant"
 )
@@ -30,6 +31,7 @@ type spreadLegDepth struct {
 type spreadDepthResponse struct {
 	Legs []spreadLegDepth `json:"legs"`
 	Src  string           `json:"src"`
+	Note string           `json:"note,omitempty"`
 }
 
 // spreadDepthHandler returns the top 5 bid/ask levels of every option leg of
@@ -58,10 +60,12 @@ func spreadDepthHandler(w http.ResponseWriter, r *http.Request) {
 		SecID string
 		Side  string
 	}
+	posFound := false
 	for _, p := range quant.GetActivePositions() {
 		if p.ID != rec.PositionID {
 			continue
 		}
+		posFound = true
 		for _, l := range p.Legs {
 			if l.Kind == "OPTION" && l.SecID != "" {
 				optLegs = append(optLegs, struct {
@@ -75,14 +79,22 @@ func spreadDepthHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp := spreadDepthResponse{Legs: []spreadLegDepth{}, Src: ""}
 	if alorMarket == nil {
+		resp.Note = "Alor не настроен"
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+	if !posFound {
+		resp.Note = "Позиция спреда не найдена в активных"
 		json.NewEncoder(w).Encode(resp)
 		return
 	}
 
+	var errs []string
 	for _, ol := range optLegs {
-		leg := spreadLegDepth{SecID: ol.SecID, Side: ol.Side}
+		leg := spreadLegDepth{SecID: ol.SecID, Side: ol.Side, Src: "alor"}
 		ob, err := alorMarket.FetchOrderbook("MOEX", ol.SecID)
 		if err != nil {
+			errs = append(errs, ol.SecID+": "+err.Error())
 			continue
 		}
 		for i := 0; i < len(ob.Bids) && i < depthLevels; i++ {
@@ -93,6 +105,9 @@ func spreadDepthHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.Src = "alor"
 		resp.Legs = append(resp.Legs, leg)
+	}
+	if len(errs) > 0 {
+		resp.Note = "Alor: " + strings.Join(errs, "; ")
 	}
 
 	json.NewEncoder(w).Encode(resp)

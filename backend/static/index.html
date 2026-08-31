@@ -2628,6 +2628,13 @@
                         </table>
                         </div>
                         <div class="text-[10px] text-slate-500 mt-1 font-mono">Греки — на единицу актива; Θ — в ₽/день; P&L — в ₽ (с множителем)</div>
+                        <div class="bg-slate-900/60 rounded-lg p-2 border border-slate-700 mt-2">
+                            <div class="flex items-center justify-between mb-1">
+                                <div class="text-[10px] text-slate-400 font-mono">Биржевые стаканы (Alor, 5 бидов / 5 асков), ₽</div>
+                                <button onclick="loadSpreadDepth('${s.id}')" class="px-2 py-0.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-[10px] font-bold rounded transition">↻ Обновить</button>
+                            </div>
+                            <div id="spr-depth-${s.id}" class="text-slate-500 font-mono text-[11px]">Загрузка стаканов…</div>
+                        </div>
                     </div>
                     <div class="space-y-2">
                         <div class="bg-slate-900/60 rounded-lg p-2 border border-slate-700">
@@ -2645,15 +2652,7 @@
                             </div>
                         </div>
                     </div>
-                </div>
-                <div class="bg-slate-900/60 rounded-lg p-2 border border-slate-700 mt-3">
-                    <div class="flex items-center justify-between mb-1">
-                        <div class="text-[10px] text-slate-400 font-mono">Биржевые стаканы (Alor, 5 бидов / 5 асков), ₽</div>
-                        <button onclick="loadSpreadDepth('${s.id}')" class="px-2 py-0.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-[10px] font-bold rounded transition">↻ Обновить</button>
-                    </div>
-                    <div id="spr-depth-${s.id}" class="text-slate-500 font-mono text-[11px]">Загрузка стаканов…</div>
-                </div>
-            </div>`;
+                </div>`;
 
             const mk = analyticsMarkers(s);
             drawCurvesChart(`spr-ch-pnl-${s.id}`, d.curves.spots, [
@@ -2681,6 +2680,7 @@
                 const res = await fetch(`/api/v1/spreads/depth?id=${id}`);
                 const d = await res.json();
                 if (d.error) { el.innerHTML = `<span class="text-rose-400">❌ ${d.error}</span>`; return; }
+                if (d.note) { el.innerHTML = `<span class="text-amber-400">⚠ ${d.note}</span>`; return; }
                 if (!d.legs || !d.legs.length) { el.innerHTML = '<span class="text-slate-500">Нет ног-опционов для стакана.</span>'; return; }
                 const fmt = v => Math.round(v).toLocaleString('ru-RU');
                 let html = '<div class="grid grid-cols-1 md:grid-cols-2 gap-2">';
