@@ -780,10 +780,25 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 				p := &positions[i]
 				repricePosition(p)
 				quant.SavePosition(*p)
+				mult := contractMultiplier(s.Symbol)
+
+				// Price the card's "now" P&L at the MOEX Options Calculator
+				// theo (same mark the analytics profile uses) so both views
+				// agree; falls back to the hybrid marks when MOEX is absent.
+				theoCur, theoPnl, theoBySecid, theoApplied := theoMarkedOpenPosition(s.Symbol, s.Expiry, p.Legs, p.CurrentValue, p.EntryValue, mult)
+				if theoApplied {
+					item["mark_theo"] = true
+					item["current_value"] = math.Round(theoCur*100) / 100
+					item["pnl"] = math.Round(theoPnl*100) / 100
+					if p.EntryValue != 0 {
+						item["pnl_percent"] = math.Round(theoPnl/math.Abs(p.EntryValue)*100*100) / 100
+					}
+				} else {
+					item["current_value"] = math.Round(p.CurrentValue*100) / 100
+					item["pnl"] = math.Round(p.PnL*100) / 100
+					item["pnl_percent"] = math.Round(p.PnLPercent*100) / 100
+				}
 				item["entry_value"] = math.Round(p.EntryValue*100) / 100
-				item["current_value"] = math.Round(p.CurrentValue*100) / 100
-				item["pnl"] = math.Round(p.PnL*100) / 100
-				item["pnl_percent"] = math.Round(p.PnLPercent*100) / 100
 				item["net_delta"] = math.Round(p.Delta*100) / 100
 				item["net_theta"] = math.Round(p.Theta*100) / 100
 				item["hedge_legs"] = countHedgeLegs(p)
@@ -803,6 +818,10 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				legs := make([]map[string]interface{}, 0, len(p.Legs))
 				for _, l := range p.Legs {
+					curPrice := l.CurrentPrice
+					if theo, ok := theoBySecid[l.SecID]; theoApplied && ok && theo > 0 {
+						curPrice = theo
+					}
 					lm := map[string]interface{}{
 						"secid":         l.SecID,
 						"side":          l.Side,
@@ -811,10 +830,20 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 						"is_call":       l.IsCall,
 						"quantity":      l.Quantity,
 						"entry_price":   math.Round(l.EntryPrice*100) / 100,
-						"current_price": math.Round(l.CurrentPrice*100) / 100,
+						"current_price": math.Round(curPrice*100) / 100,
 						"entry_zero":    l.Kind == "OPTION" && l.EntryPrice <= 0,
 					}
-					if l.Kind == "OPTION" {
+					if l.Kind == "OPTION" && theoApplied {
+						if theo, ok := theoBySecid[l.SecID]; ok && theo > 0 {
+							lm["quote_src"] = "theo"
+							lm["quote_time"] = ""
+							lm["quote_stale"] = false
+							lm["mark_src"] = "theo"
+						} else {
+							lm["quote_src"] = "live"
+						}
+					}
+					if l.Kind == "OPTION" && !theoApplied {
 						// Quote freshness: source of the live two-sided book
 						// (if any) plus the provenance of the final mark.
 						if q, ok := cachedOptionQuoteEx(l.SecID); ok {
@@ -843,14 +872,25 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 				// spot / IV / DTE so the UI can show how PnL responds to
 				// volatility and time decay.
 				if spot > 0 {
-					mult := contractMultiplier(s.Symbol)
-					th := spreadTheoLive(p.Legs, spot, s.Expiry, mult)
-					theoPnL := th.Value - p.EntryValue
-					item["theo_value"] = math.Round(th.Value*100) / 100
-					item["theo_pnl"] = math.Round(theoPnL*100) / 100
-					item["iv_sensitivity"] = math.Round(th.Vega*100) / 100 // ₽ per 1% IV
-					item["daily_decay"] = math.Round(p.Theta*100) / 100    // ₽ per day
-					item["gamma_total"] = math.Round(th.Gamma*10000) / 10000
+					if theoApplied {
+						// The card is already priced at MOEX theo (pnl/theo_pnl
+						// agree with the analytics profile); keep BS only for the
+						// greek sensitivities.
+						th := spreadTheoLive(p.Legs, spot, s.Expiry, mult)
+						item["theo_value"] = math.Round(theoCur*100) / 100
+						item["theo_pnl"] = math.Round(theoPnl*100) / 100
+						item["iv_sensitivity"] = math.Round(th.Vega*100) / 100 // ₽ per 1% IV
+						item["daily_decay"] = math.Round(p.Theta*100) / 100    // ₽ per day
+						item["gamma_total"] = math.Round(th.Gamma*10000) / 10000
+					} else {
+						th := spreadTheoLive(p.Legs, spot, s.Expiry, mult)
+						theoPnL := th.Value - p.EntryValue
+						item["theo_value"] = math.Round(th.Value*100) / 100
+						item["theo_pnl"] = math.Round(theoPnL*100) / 100
+						item["iv_sensitivity"] = math.Round(th.Vega*100) / 100 // ₽ per 1% IV
+						item["daily_decay"] = math.Round(p.Theta*100) / 100    // ₽ per day
+						item["gamma_total"] = math.Round(th.Gamma*10000) / 10000
+					}
 				}
 				break
 			}

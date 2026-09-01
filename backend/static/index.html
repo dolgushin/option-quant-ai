@@ -2459,7 +2459,7 @@
             (s.legs || []).forEach(l => {
                 const dirCls = l.side === 'SELL' ? 'text-rose-300' : 'text-emerald-300';
                 const kindTag = l.kind === 'FUTURES' ? 'хедж' : (l.is_call ? 'CALL' : 'PUT');
-                const srcTag = l.quote_src === 'mid' ? 'стакан' : l.quote_src === 'last' ? 'сделка' : l.quote_src === 'settle' ? 'клиринг' : '';
+                const srcTag = l.quote_src === 'mid' ? 'стакан' : l.quote_src === 'last' ? 'сделка' : l.quote_src === 'settle' ? 'клиринг' : l.quote_src === 'theo' ? 'теор MOEX' : '';
                 const qBadge = srcTag ? `<div class="text-[10px] ${l.quote_stale ? 'text-amber-400' : 'text-slate-500'}">${srcTag}${l.quote_time ? ' ' + l.quote_time.slice(0, 5) : ''}${l.quote_stale ? ' ⚠' : ''}</div>` : '';
                 legRows += `<tr class="border-b border-slate-800">
                     <td class="py-1 pr-3 ${dirCls}">${l.side}</td>

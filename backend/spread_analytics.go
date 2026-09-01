@@ -368,6 +368,40 @@ func priceOpenLegsAtMOEXTheo(legs []analyticsLeg) {
 	}
 }
 
+// theoMarkedOpenPosition re-prices an open position at the MOEX Options
+// Calculator theo (the same mark the analytics profile uses). Returns the
+// position's theo-based current value and P&L, per-secid theo prices and
+// whether at least one option leg was re-marked. Falls back to the passed
+// hybrid marks when the series is unavailable.
+func theoMarkedOpenPosition(symbol, expiry string, legs []quant.PositionLeg, hybridValue, entryValue, mult float64) (cur, pnl float64, theoBySecid map[string]float64, applied bool) {
+	in := make([]analyticsLeg, 0, len(legs))
+	for _, l := range legs {
+		in = append(in, analyticsLeg{
+			SecID: l.SecID, Side: l.Side, Kind: l.Kind, Strike: l.Strike, IsCall: l.IsCall,
+			Quantity: l.Quantity, Entry: l.EntryPrice, Current: l.CurrentPrice,
+		})
+	}
+	enriched, ok := enrichLegsFromMOEX(symbol, expiry, in)
+	if !ok {
+		return hybridValue, hybridValue - entryValue, nil, false
+	}
+	priceOpenLegsAtMOEXTheo(enriched)
+	theoBySecid = map[string]float64{}
+	value := 0.0
+	for i := range enriched {
+		l := &enriched[i]
+		dir := 1.0
+		if l.Side == "SELL" {
+			dir = -1
+		}
+		value += dir * l.Current * mult * float64(l.Quantity)
+		if l.Kind == "OPTION" && l.Moex != nil && l.Moex.Theo > 0 {
+			theoBySecid[l.SecID] = l.Moex.Theo
+		}
+	}
+	return value, value - entryValue, theoBySecid, true
+}
+
 // enrichLegsFromMOEX attaches each option leg's greeks/IV from the MOEX
 // Options Calculator board for the given series. Returns the (possibly
 // unchanged) legs and reports whether the enrichment was applied. Share-premium

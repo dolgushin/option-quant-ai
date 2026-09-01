@@ -3,6 +3,8 @@ package main
 import (
 	"math"
 	"testing"
+
+	"option-quant-ai/quant"
 )
 
 func analyticsTestLegs() []analyticsLeg {
@@ -142,5 +144,24 @@ func TestAnalyticsUsesMOEXGreeksAndIV(t *testing.T) {
 	// Buy call at slightly-LT strike: MOEX greeks used (0.25 * 2).
 	if math.Abs(a.Legs[1].Delta-0.50) > 1e-6 {
 		t.Fatalf("leg1 delta = %.4f, want 0.50", a.Legs[1].Delta)
+	}
+}
+
+// theoMarkedOpenPosition without a MOEX calculator falls back to the passed
+// hybrid marks — the position is priced exactly the way it was re-priced.
+func TestTheoMarkedOpenPositionFallback(t *testing.T) {
+	cur, pnl, bySecid, applied := theoMarkedOpenPosition("Si", "2026-12-17",
+		[]quant.PositionLeg{
+			{SecID: "Si86500BX6", Side: "SELL", Kind: "OPTION", Strike: 86500, IsCall: false, Quantity: 4, EntryPrice: 2534, CurrentPrice: 2500},
+			{SecID: "Si86000BX6", Side: "BUY", Kind: "OPTION", Strike: 86000, IsCall: false, Quantity: 4, EntryPrice: 2000, CurrentPrice: 2350},
+		}, 1000, -2136, 1)
+	if applied {
+		t.Fatalf("applied = true without a MOEX calculator, want fallback")
+	}
+	if math.Abs(cur-1000) > 1e-9 || math.Abs(pnl-3136) > 1e-9 {
+		t.Fatalf("fallback cur/pnl = %v / %v, want hybrid 1000 / 3136", cur, pnl)
+	}
+	if len(bySecid) != 0 {
+		t.Fatalf("bySecid must be empty on fallback, got %v", bySecid)
 	}
 }
