@@ -5,6 +5,32 @@ import (
 	"testing"
 )
 
+func TestSpreadsAlreadyOpen(t *testing.T) {
+	open := []spreadRecord{
+		{Symbol: "Si", Type: "bull_put", ShortStrike: 86500, LongStrike: 86000},
+		{Symbol: "Si", Type: "bear_call", ShortStrike: 88000, LongStrike: 88500},
+	}
+	p := &spreadPlan{Symbol: "Si", Type: "bull_put", ShortStrike: 86500, LongStrike: 86000}
+	if !spreadAlreadyOpen(p, open) {
+		t.Error("identical strike pair on same symbol/type should be considered open")
+	}
+	p2 := &spreadPlan{Symbol: "Si", Type: "bull_put", ShortStrike: 87000, LongStrike: 86500}
+	if spreadAlreadyOpen(p2, open) {
+		t.Error("different strikes are a different trade")
+	}
+	p3 := &spreadPlan{Symbol: "Si", Type: "bull_call", ShortStrike: 86500, LongStrike: 86000}
+	if spreadAlreadyOpen(p3, open) {
+		t.Error("different construction type is not the same trade")
+	}
+	p4 := &spreadPlan{Symbol: "CR", Type: "bull_put", ShortStrike: 86500, LongStrike: 86000}
+	if spreadAlreadyOpen(p4, open) {
+		t.Error("different instrument is not the same trade")
+	}
+	if !spreadAlreadyOpen(&spreadPlan{Symbol: "Si", Type: "bear_call", ShortStrike: 88000.4, LongStrike: 88500.4}, open) {
+		t.Error("strikes within 0.5 tolerance should match")
+	}
+}
+
 func TestRecomputePlanEconomics(t *testing.T) {
 	// Credit bull-put: SELL 86500 @ 100, BUY 86000 @ 60, wing 500, qty 2.
 	plan := &spreadPlan{

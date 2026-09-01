@@ -400,6 +400,7 @@ func quantActiveSummary() map[string]float64 {
 // returns the best few.
 func coreBuildCandidates(instruments []coreInstrument) []coreCandidate {
 	out := []coreCandidate{}
+	open := openSpreads()
 	for _, in := range instruments {
 		if in.ExpiryFront == "" || in.Spot <= 0 {
 			continue
@@ -446,6 +447,12 @@ func coreBuildCandidates(instruments []coreInstrument) []coreCandidate {
 			if err != nil {
 				continue
 			}
+			// Do not recommend a construction whose twin (same symbol, type and
+			// strike pair) is already open — reopening the same position just
+			// multiplies exposure on an existing trade.
+			if spreadAlreadyOpen(plan, open) {
+				continue
+			}
 			in2 := in
 			in2.ExpiryFront = expiry
 			cand := candidateFromPlan(plan, in2)
@@ -475,6 +482,28 @@ func coreBuildCandidates(instruments []coreInstrument) []coreCandidate {
 		out = out[:8]
 	}
 	return out
+}
+
+// spreadAlreadyOpen reports whether an identical construction (same symbol,
+// type and strike pair) is already OPEN. The Core must not re-recommend a
+// spread the trader already holds — reopening it would silently multiply the
+// same directional/short-gamma risk instead of opening a new trade.
+func spreadAlreadyOpen(plan *spreadPlan, open []spreadRecord) bool {
+	for _, s := range open {
+		if s.Symbol != plan.Symbol || s.Type != plan.Type {
+			continue
+		}
+		if strikesEqual(s.ShortStrike, plan.ShortStrike) && strikesEqual(s.LongStrike, plan.LongStrike) {
+			return true
+		}
+	}
+	return false
+}
+
+// strikesEqual compares strikes with the tolerance used across the chain
+// lookup (half a step), so AL2 vs AL2.5 style series map to the same strike.
+func strikesEqual(a, b float64) bool {
+	return math.Abs(a-b) < 0.5
 }
 
 func candidateFromPlan(plan *spreadPlan, in coreInstrument) coreCandidate {
