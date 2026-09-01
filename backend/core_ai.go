@@ -242,13 +242,17 @@ func shouldAutoOpen(v *coreVerdict) bool {
 }
 
 // openPaperFromVerdict opens the top quant candidate as a paper spread and
-// pushes a Telegram alert with the entry details.
+// pushes a Telegram alert with the entry details. Each option leg is priced at
+// its executable book level (SELL fills the best bid, BUY the best ask) so the
+// recorded entry reflects what the market actually pays for an immediate order;
+// exit/close continues to use theoretical marks (see priceOpenLegsAtMOEXTheo).
 func openPaperFromVerdict(v coreVerdict) string {
 	top := v.QuantTop
 	plan, err := buildVerticalSpread(top.Symbol, top.Strategy, top.Expiry, 1)
 	if err != nil {
 		return ""
 	}
+	priceEntryAtExecutable(plan)
 	src := spreadRecord{
 		StopLossPct: 0.75, AutoRollDTE: defaultAutoRollDTE(plan.DaysToExp),
 		RollCreditPct: 0.5, RollStrikeRiskPct: 0.03,
@@ -264,6 +268,85 @@ func openPaperFromVerdict(v coreVerdict) string {
 	}
 	notifyStructureEntry(rec, plan)
 	return rec.ID
+}
+
+// priceEntryAtExecutable re-marks a plan's option legs at the executable
+// prices from the live Alor order book before opening: a SELL leg fills at the
+// best bid, a BUY leg at the best ask (both are what an immediate market order
+// would actually pay/receive). Legs without a usable book level keep the plan
+// mid price. Plan economics (credit/debit, extremes, margin) are recomputed so
+// the recorded spread matches the market entry, while exit stays theoretical.
+func priceEntryAtExecutable(plan *spreadPlan) {
+	if plan == nil || alorMarket == nil {
+		return
+	}
+	changed := false
+	for i := range plan.Legs {
+		l := &plan.Legs[i]
+		ob, err := alorMarket.FetchOrderbook("MOEX", l.SecID)
+		if err != nil {
+			continue
+		}
+		var fill float64
+		if l.Side == "SELL" && len(ob.Bids) > 0 && ob.Bids[0].Price > 0 {
+			fill = ob.Bids[0].Price
+		} else if l.Side == "BUY" && len(ob.Asks) > 0 && ob.Asks[0].Price > 0 {
+			fill = ob.Asks[0].Price
+		}
+		if fill <= 0 {
+			continue
+		}
+		l.Price = math.Round(fill*100) / 100
+		changed = true
+	}
+	if changed {
+		recomputePlanEconomics(plan)
+	}
+}
+
+// recomputePlanEconomics re-derives a plan's credit/debit, max profit/loss and
+// margin from the leg prices, mirroring buildVerticalSpread.
+func recomputePlanEconomics(plan *spreadPlan) {
+	if plan == nil {
+		return
+	}
+	var credit, debit, marginShort float64
+	for _, l := range plan.Legs {
+		if l.Side == "SELL" {
+			credit += l.Price
+			marginShort += l.MarginShort
+		} else {
+			debit += l.Price
+		}
+	}
+	wing := math.Abs(plan.ShortStrike - plan.LongStrike)
+	if wing <= 0 {
+		wing = 1
+	}
+	netCredit := credit - debit
+	var maxProfit, maxLoss float64
+	if plan.IsDebit {
+		netDebit := debit - credit
+		if netDebit < 0 {
+			netDebit = 0
+		}
+		maxProfit = wing - netDebit
+		maxLoss = netDebit
+	} else {
+		maxProfit = netCredit
+		maxLoss = wing - netCredit
+	}
+	if maxProfit < 0 {
+		maxProfit = 0
+	}
+	if maxLoss < 0 {
+		maxLoss = 0
+	}
+	q := float64(plan.Qty)
+	plan.NetCredit = math.Round(netCredit*q*100) / 100
+	plan.MaxProfit = math.Round(maxProfit*q*100) / 100
+	plan.MaxLoss = math.Round(maxLoss*q*100) / 100
+	plan.MarginShort = math.Round(marginShort*q*100) / 100
 }
 
 // notifyStructureEntry pushes a Telegram alert when the Core auto-entry opened
