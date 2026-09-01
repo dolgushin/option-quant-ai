@@ -1010,6 +1010,8 @@ func spreadCloseHandler(w http.ResponseWriter, r *http.Request) {
 	s.Status = "CLOSED"
 	saveSpreadRecord(s)
 
+	notifyStructureClosed(&s, "Закрыто вручную", trade.RealizedPnL, trade.PnLPercent)
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":   true,
 		"spread":    s,

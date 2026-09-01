@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -198,27 +199,9 @@ func telegramNotifier(stop <-chan struct{}) {
 			}
 		}
 
-		// 2) Rotation signal when the top strategy for the regime changes.
-		symbol := "Si"
-		iv := currentATMIVRaw(symbol)
-		hv := realizedVolForSymbol(symbol)
-		if iv > 0 && hv > 0 {
-			trend := tradeTrend(symbol)
-			trendRegime := "SIDEWAYS"
-			if t, ok := trend["regime"].(string); ok {
-				trendRegime = t
-			}
-			regime := quant.ClassifyMarketRegime(iv, hv, trendRegime == "BULLISH" || trendRegime == "BEARISH")
-			held := make([]quant.HeldPositionInfo, 0, len(positions))
-			for _, p := range positions {
-				held = append(held, quant.HeldPositionInfo{ID: p.ID, Strategy: normalizeStrategyName(p.Strategy), Symbol: p.Symbol})
-			}
-			advice := quant.RecommendRotation(regime, trendRegime, held)
-			top := advice.Ranking[0].StrategyName
-			key := "rot:" + symbol
-			text := fmt.Sprintf("🔄 <b>Режим: %s</b> (тренд %s, IV %.0f%%, HV %.0f%%)\nЛучшая стратегия: <b>%s</b> (%.0f/100).", advice.Regime, advice.Trend, iv*100, hv*100, top, advice.Ranking[0].Score)
-			sendIfChanged(key, text, true)
-		}
+		// Rotation/regime digests are intentionally NOT pushed to Telegram —
+		// only actionable events are: expiry alerts, Core auto-entry and
+		// structure closes (see notifyStructureClosed / coreAutoScanLoop).
 	}
 }
 
@@ -226,4 +209,52 @@ func telegramNotifier(stop <-chan struct{}) {
 func telegramEscape(s string) string {
 	repl := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 	return repl.Replace(s)
+}
+
+// pnlSigned formats a ruble P&L with an explicit sign.
+func pnlSigned(v float64) string {
+	sign := "-"
+	if v >= 0 {
+		sign = "+"
+	}
+	return fmt.Sprintf("%s%0.2f", sign, math.Abs(v))
+}
+
+// notifyStructureClosed pushes a Telegram alert when a spread structure is
+// closed (manual close, stop-loss or take-profit from the auto-manager), with
+// the exact data it closed at: realized P&L, return %, the close reason and
+// how many days were held.
+func notifyStructureClosed(s *spreadRecord, reason string, realized, pnlPct float64) {
+	telegramMu.RLock()
+	configured := telegramToken != "" && telegramChatID != ""
+	telegramMu.RUnlock()
+	if !configured || s == nil {
+		return
+	}
+	name := s.DisplayName
+	if name == "" {
+		name = s.Type
+	}
+	if name == "" {
+		name = "Структура"
+	}
+	days := 1
+	if t, err := time.Parse("2006-01-02T15:04:05", s.OpenedAt); err == nil {
+		days = int(time.Since(t).Hours() / 24)
+		if days < 1 {
+			days = 1
+		}
+	}
+	txt := fmt.Sprintf("📉 <b>Структура закрыта</b>: %s · %s · эксп. %s\n%s\nРеализованный P&L: <b>%s ₽</b> (%s%.1f%%) за %d дн.",
+		telegramEscape(name), telegramEscape(s.Symbol), telegramEscape(s.Expiry),
+		reason,
+		pnlSigned(realized), pnlSign(pnlPct), math.Abs(pnlPct), days)
+	_ = sendTelegramMessage(txt)
+}
+
+func pnlSign(v float64) string {
+	if v >= 0 {
+		return "+"
+	}
+	return ""
 }

@@ -841,6 +841,11 @@ func execSpreadAction(s *spreadRecord, run *managerRun) {
 		quant.AddTrade(stopTrade)
 		s.Status = "CLOSED"
 		saveSpreadRecord(*s)
+		reason := run.Detail
+		if reason == "" {
+			reason = "Закрыто авто-менеджером"
+		}
+		notifyStructureClosed(s, reason, stopTrade.RealizedPnL, stopTrade.PnLPercent)
 		run.Live = s.Live
 		run.Detail = "Стоп-лосс исполнен (" + run.Detail + ")"
 	case "REVIEW":

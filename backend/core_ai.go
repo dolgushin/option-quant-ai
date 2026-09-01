@@ -241,7 +241,8 @@ func shouldAutoOpen(v *coreVerdict) bool {
 	return v.AI.Confidence >= 0.6
 }
 
-// openPaperFromVerdict opens the top quant candidate as a paper spread.
+// openPaperFromVerdict opens the top quant candidate as a paper spread and
+// pushes a Telegram alert with the entry details.
 func openPaperFromVerdict(v coreVerdict) string {
 	top := v.QuantTop
 	plan, err := buildVerticalSpread(top.Symbol, top.Strategy, top.Expiry, 1)
@@ -261,7 +262,31 @@ func openPaperFromVerdict(v coreVerdict) string {
 	if !spreadManagerEnabled() {
 		startSpreadManager()
 	}
+	notifyStructureEntry(rec, plan)
 	return rec.ID
+}
+
+// notifyStructureEntry pushes a Telegram alert when the Core auto-entry opened
+// a new paper structure (автовход с согласием кванта и ИИ).
+func notifyStructureEntry(rec *spreadRecord, plan *spreadPlan) {
+	telegramMu.RLock()
+	configured := telegramToken != "" && telegramChatID != ""
+	telegramMu.RUnlock()
+	if !configured || rec == nil || plan == nil {
+		return
+	}
+	credit := plan.NetCredit
+	kind := "кредит"
+	if credit < 0 {
+		kind = "дебет"
+		credit = -credit
+	}
+	txt := fmt.Sprintf("🟢 <b>Автовход Ядро</b>: %s · %s\nэксп. %s (DTE %d)\nS %.0f / L %.0f · %s %0.2f",
+		telegramEscape(plan.DisplayName), telegramEscape(plan.Symbol),
+		telegramEscape(plan.Expiry), plan.DaysToExp,
+		plan.ShortStrike, plan.LongStrike,
+		kind, credit)
+	_ = sendTelegramMessage(txt)
 }
 
 // coreAutoScanLoop runs scheduled analyses when enabled.
@@ -283,7 +308,12 @@ func coreAutoScanLoop() {
 			if v.AI != nil && v.AI.Trade {
 				txt += " | ИИ: ВХОД"
 			}
-			_ = sendTelegramMessage(txt)
+			// A paper auto-entry already pushed its dedicated 🟢 message — skip
+			// the generic verdict to avoid a duplicate. Otherwise keep the
+			// scan verdict so non-entry scans still produce useful telemetry.
+			if v.PaperOpen == "" {
+				_ = sendTelegramMessage(txt)
+			}
 		}
 		time.Sleep(interval)
 	}
