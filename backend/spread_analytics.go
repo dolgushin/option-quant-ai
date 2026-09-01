@@ -192,6 +192,21 @@ func buildSpreadAnalytics(symbol, expiry string, spot float64, dte int, mult flo
 	span := math.Max((hi-lo)*0.8, spot*0.12)
 	lo, hi = lo-span*0.6, hi+span*0.6
 	const N = 61
+
+	// Reference BS prices for each option leg at the current spot. The "now"
+	// P&L curve is anchored to the position's actual market P&L at the current
+	// spot (Current-Entry) and only uses the theoretical prices to shape how
+	// that P&L changes as spot moves — so the chart always agrees with the
+	// totals/depth, not just a best-effort recomputation of the mark.
+	refs := make([]float64, len(a.Legs))
+	for i := range a.Legs {
+		l := &a.Legs[i]
+		if l.Kind == "FUTURES" {
+			refs[i] = spot
+			continue
+		}
+		refs[i] = quant.CalculateBlackScholes(l.IsCall, spot, l.Strike, t, r, ivs[i]).Price
+	}
 	c := analyticsCurves{
 		Spots: make([]float64, N), PnlNow: make([]float64, N), PnlExpiry: make([]float64, N),
 		DeltaNow: make([]float64, N), DeltaExp: make([]float64, N),
@@ -217,7 +232,7 @@ func buildSpreadAnalytics(symbol, expiry string, spot float64, dte int, mult flo
 				continue
 			}
 			g := quant.CalculateBlackScholes(l.IsCall, S, l.Strike, t, r, ivs[i])
-			pn += dir * (g.Price - l.Entry) * q * mult
+			pn += dir * ((g.Price - refs[i]) + (l.Current - l.Entry)) * q * mult
 			pe += dir * (intrinsicValue(S, l.Strike, l.IsCall) - l.Entry) * q * mult
 			dn += dir * g.Delta * q
 			gExp := quant.CalculateBlackScholes(l.IsCall, S, l.Strike, 1.0/3650.0, r, ivs[i])
@@ -319,6 +334,14 @@ func spreadAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 	// the series is available. Falls back silently to local Black-Scholes.
 	enriched, applied := enrichLegsFromMOEX(symbol, expiry, legsIn)
 
+	// For an open position price the "now" P&L at the exchange's theoretical
+	// price (the MOEX constructor's own mark), not the raw live mid — for
+	// illiquid legs the live book is wide/stale and its mid is noise (e.g. an
+	// ITM put must never be marked below intrinsic). Plans stay at entry (P&L 0).
+	if id != "" {
+		priceOpenLegsAtMOEXTheo(enriched)
+	}
+
 	a := buildSpreadAnalytics(symbol, expiry, spot, dte, mult, enriched)
 	a.Qty = qty
 	a.Central = central
@@ -328,6 +351,21 @@ func spreadAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		a.Source = "local"
 	}
 	json.NewEncoder(w).Encode(a)
+}
+
+// priceOpenLegsAtMOEXTheo re-marks open-position option legs at the MOEX
+// Options Calculator's theoretical price (used by the constructor for its own
+// P&L). Mutates Current in place so the "now" P&L matches the exchange rather
+// than a wide/stale live mid. Non-option legs and legs without MOEX data are
+// left untouched.
+func priceOpenLegsAtMOEXTheo(legs []analyticsLeg) {
+	for i := range legs {
+		l := &legs[i]
+		if l.Kind != "OPTION" || l.Moex == nil || l.Moex.Theo <= 0 {
+			continue
+		}
+		l.Current = l.Moex.Theo
+	}
 }
 
 // enrichLegsFromMOEX attaches each option leg's greeks/IV from the MOEX

@@ -61,6 +61,67 @@ func TestAnalyticsTotalsPnLZeroAtEntry(t *testing.T) {
 	}
 }
 
+// P&L-now curve must pass through the position's actual market P&L at the
+// current spot (not a recomputation of the mark from the local model), so the
+// chart agrees with the totals/depth panel.
+func TestAnalyticsPnlNowAnchoredToMarket(t *testing.T) {
+	legs := analyticsTestLegs()
+	// Simulate a live position where market marks moved away from entry:
+	// short leg 6.32 -> 7.50, long leg 3.72 -> 3.80.
+	legs[0].Current = 7.50
+	legs[1].Current = 3.80
+	mult := 100.0
+	spot := 273.76
+	a := buildSpreadAnalytics("SBERP", "2026-09-16", spot, 22, mult, legs)
+
+	want := 0.0
+	for _, l := range a.Legs {
+		dir := 1.0
+		if l.Side == "SELL" {
+			dir = -1
+		}
+		want += dir * (l.Current - l.Entry) * float64(l.Quantity) * mult
+	}
+	want = math.Round(want*100) / 100
+	if math.Abs(a.Totals["pnl"]-want) > 0.01 {
+		t.Fatalf("totals pnl = %.2f, want market %.2f", a.Totals["pnl"], want)
+	}
+	// Find the grid index nearest the current spot and check the now curve.
+	best := 0
+	bestD := math.MaxFloat64
+	pnlAtSpot := 0.0
+	for i, S := range a.Curves.Spots {
+		if d := math.Abs(S - spot); d < bestD {
+			bestD = d
+			best = i
+			pnlAtSpot = a.Curves.PnlNow[i]
+		}
+	}
+	if math.Abs(pnlAtSpot-a.Totals["pnl"]) > 20 {
+		t.Fatalf("pnl_now at spot = %.2f (%d), totals = %.2f; curve not anchored", pnlAtSpot, best, a.Totals["pnl"])
+	}
+}
+
+// Open-position legs enriched from the MOEX calculator must be re-marked at
+// the exchange's theo so the "now" P&L matches the constructor (not a wide or
+// stale live mid). Futures and unenriched legs are left untouched.
+func TestAnalyticsOpenLegsPricedAtMOEXTheo(t *testing.T) {
+	legs := analyticsTestLegs()
+	legs[0].Moex = &moexLegData{Theo: 9.10}
+	legs[1].Moex = &moexLegData{Theo: 4.40}
+	legs = append(legs, analyticsLeg{SecID: "RIM1", Side: "BUY", Kind: "FUTURES", Strike: 0, Quantity: 1, Entry: 90000, Current: 90100})
+	priceOpenLegsAtMOEXTheo(legs)
+	if math.Abs(legs[0].Current-9.10) > 1e-9 {
+		t.Fatalf("leg0 current = %.4f, want MOEX theo 9.10", legs[0].Current)
+	}
+	if math.Abs(legs[1].Current-4.40) > 1e-9 {
+		t.Fatalf("leg1 current = %.4f, want MOEX theo 4.40", legs[1].Current)
+	}
+	if legs[2].Current != 90100 {
+		t.Fatalf("futures leg current = %.4f, must stay untouched", legs[2].Current)
+	}
+}
+
 func TestAnalyticsUsesMOEXGreeksAndIV(t *testing.T) {
 	legs := analyticsTestLegs()
 	// Simulate the MOEX Options Calculator enrichment: IV and greeks from the

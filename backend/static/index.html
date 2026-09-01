@@ -2589,8 +2589,8 @@
                 const kindTag = l.kind === 'FUTURES' ? 'хедж' : (l.is_call ? 'CALL' : 'PUT');
                 const q = srcById[l.secid] || {};
                 const entryCell = q.entry_zero ? '<span class="text-amber-400" title="Вход не зафиксирован при открытии/ролле">⚠ 0</span>' : g2(l.entry);
-                const srcTag = q.quote_src === 'mid' ? 'стакан' : q.quote_src === 'last' ? 'сделка' : q.quote_src === 'settle' ? 'клиринг' : '';
-                const qBadge = srcTag ? `<div class="text-[10px] ${q.quote_stale ? 'text-amber-400' : 'text-slate-500'}">${srcTag}${q.quote_time ? ' ' + q.quote_time.slice(0, 5) : ''}${q.quote_stale ? ' ⚠' : ''}</div>` : '';
+                const srcTag = d.source === 'moex-optcalc' ? 'теор MOEX' : (q.quote_src === 'mid' ? 'стакан' : q.quote_src === 'last' ? 'сделка' : q.quote_src === 'settle' ? 'клиринг' : '');
+                const qBadge = srcTag ? `<div class="text-[10px] ${q.quote_stale && d.source !== 'moex-optcalc' ? 'text-amber-400' : 'text-slate-500'}">${srcTag}${q.quote_time && d.source !== 'moex-optcalc' ? ' ' + q.quote_time.slice(0, 5) : ''}${q.quote_stale && d.source !== 'moex-optcalc' ? ' ⚠' : ''}</div>` : '';
                 legRows += `<tr class="border-b border-slate-800">
                     <td class="py-1 pr-2 ${dirCls}">${l.side}</td>
                     <td class="py-1 pr-2">${l.secid || '—'}</td>
