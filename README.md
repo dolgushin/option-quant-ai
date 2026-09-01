@@ -3,7 +3,8 @@
 Терминал для торговли опционными стратегиями на MOEX FORTS: дашборд рынка,
 модуль вертикальных спредов с авто-менеджментом, аналитика конструкторского
 уровня, статистика сделок и прогнозирование. Один Go-бинарь отдаёт SPA без
-сборки фронтенда; рыночные данные — публичный MOEX ISS, исполнение — Alor OpenAPI.
+сборки фронтенда; рыночные данные — публичный MOEX ISS, формулы/греки/IV для
+конструкторской аналитики — MOEX Options Calculator (iss/option-calc), исполнение — Alor OpenAPI.
 
 ## Возможности
 
@@ -22,7 +23,9 @@
   откупы хвостов, сдвиг лестницы), ролл по DTE/кредиту/страйку —
   только за нет-кредит, защита от неограниченного риска;
 - **профиль позиции**: ноги (страйк/цены/IV/греки/теорцена), итоговая строка,
-  кривые P&L/Дельты/Теты как в опционном конструкторе MOEX;
+  кривые P&L/Дельты/Теты и поверхность волатильности — греки, теорцена и IV
+  берутся напрямую из MOEX Options Calculator (цена входа — из фактического
+  заполнения);
 - список серий из реальных экспираций опционов (W/M/Q), точные даты.
 
 **📈 Статистика** — весь журнал сделок: KPI (Net P&L, Win rate, Profit factor,
@@ -107,6 +110,7 @@ backend/
   forecast_module.go    Монте-Карло, t-статистика, режимные рекомендации
   expiry.go             серии/роллы по реальным экспирациям опционов
   backtest.go, iv_history.go, heatmap.go, stress.go, pnl_attribution.go, sizing.go
+  optioncalc/           MOEX Options Calculator (iss/option-calc): серии, борд, греки/IV
   quant/                портфель, Блэк-Шоулз, греки, персистентность
   alor/                 авторизация, рыночные данные, исполнение
   secure/               зашифрованное хранилище токена
@@ -119,8 +123,8 @@ backend/
 
 | Группа | Эндпоинты |
 |---|---|
-| Рынок | `/api/v1/series`, `/api/v1/series/set`, `/api/v1/moex/quote`, `/api/v1/spot` |
-| Спреды | `/api/v1/spreads/{plan,advice,analytics,open,close,hedge,roll,rules,manager}` |
+| Рынок | `/api/v1/series`, `/api/v1/series/set`, `/api/v1/moex/quote`, `/api/v1/spot`, `/api/v1/vol-surface` |
+| Спреды | `/api/v1/spreads/{plan,advice,analytics,open,close,hedge,roll,rules,manager}`, `/api/v1/mc-pnl` |
 | Портфель | `/api/v1/positions`, `/api/v1/positions/{close,hedge,sizing,expiry-risk,pnl-attribution}`, `/api/v1/portfolio`, `/api/v1/risk`, `/api/v1/risk/{heatmap,stress}` |
 | Опционы | `/api/v1/options/{skew,iv-rank,trend,recommendations,rolling-advice,gamma-step,exit-advice,vertical-spread}` |
 | Стратегии | `/api/v1/strategy/{build,ironcondor,parity,rotation}`, `/api/v1/backtest` |
