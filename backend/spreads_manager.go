@@ -57,17 +57,17 @@ type spreadRules struct {
 
 // managerRun is the snapshot of one auto-management pass for a spread.
 type managerRun struct {
-	SpreadID   string `json:"spread_id"`
-	CheckedAt  string `json:"checked_at"`
-	DTE        int    `json:"dte"`
-	NetDelta   float64 `json:"net_delta"`
-	Pnl        float64 `json:"pnl"`
-	MaxProfit  float64 `json:"max_profit"`
-	CapturedPct float64 `json:"captured_pct"`
-	Action     string `json:"action"` // ROLL / HEDGE / CLOSE / REVIEW / reconstruction actions
-	Detail     string `json:"detail"`
-	Orders     []string `json:"orders,omitempty"`
-	Live       bool   `json:"live"`
+	SpreadID    string   `json:"spread_id"`
+	CheckedAt   string   `json:"checked_at"`
+	DTE         int      `json:"dte"`
+	NetDelta    float64  `json:"net_delta"`
+	Pnl         float64  `json:"pnl"`
+	MaxProfit   float64  `json:"max_profit"`
+	CapturedPct float64  `json:"captured_pct"`
+	Action      string   `json:"action"` // ROLL / HEDGE / CLOSE / REVIEW / reconstruction actions
+	Detail      string   `json:"detail"`
+	Orders      []string `json:"orders,omitempty"`
+	Live        bool     `json:"live"`
 }
 
 var (
@@ -105,11 +105,15 @@ func startSpreadManager() {
 	}()
 }
 
-// runSpreadManagerPass evaluates all OPEN spreads once. Actions (roll/hedge)
-// are executed only when a rule fires; results are logged for the UI.
+// runSpreadManagerPass evaluates all OPEN live spreads once (paper spreads from
+// the Core autoscan, Live=false, are left untouched). Actions (roll/hedge) are
+// executed only when a rule fires; results are logged for the UI.
 func runSpreadManagerPass() {
 	runs := []managerRun{}
 	for _, s := range openSpreads() {
+		if !s.Live {
+			continue
+		}
 		r := evaluateSpread(s)
 		if r.Action != "NONE" {
 			execSpreadAction(&s, &r)
@@ -953,43 +957,43 @@ func createFromPlan(plan *spreadPlan, src *spreadRecord, qty, rollCount int) (*s
 	quant.SavePosition(p)
 
 	rec := spreadRecord{
-		ID:               fmt.Sprintf("spr-%d", time.Now().UnixNano()/1e6),
-		PositionID:       p.ID,
-		Symbol:           plan.Symbol,
-		Type:             plan.Type,
-		DisplayName:      plan.DisplayName,
-		Expiry:           plan.Expiry,
-		Qty:              qty,
-		ShortStrike:      plan.ShortStrike,
-		LongStrike:       plan.LongStrike,
-		WingWidth:        plan.WingWidth,
-		NetCredit:        plan.NetCredit,
-		MaxProfit:        plan.MaxProfit,
-		MaxLoss:          plan.MaxLoss,
-		Margin:           plan.MarginShort,
-		OpenedAt:         time.Now().Format(time.RFC3339),
-		Status:           "OPEN",
-		RollCount:        rollCount,
-		State:            "VERTICAL",
-		EntrySpot:        plan.Spot,
-		StopLossPct:      src.StopLossPct,
-		TakeProfitPct:    src.TakeProfitPct,
-		TrailingStopPct:  src.TrailingStopPct,
-		MaxHedgeDelta:    src.MaxHedgeDelta,
-		AutoRollDTE:      src.AutoRollDTE,
-		RollCreditPct:    src.RollCreditPct,
+		ID:                fmt.Sprintf("spr-%d", time.Now().UnixNano()/1e6),
+		PositionID:        p.ID,
+		Symbol:            plan.Symbol,
+		Type:              plan.Type,
+		DisplayName:       plan.DisplayName,
+		Expiry:            plan.Expiry,
+		Qty:               qty,
+		ShortStrike:       plan.ShortStrike,
+		LongStrike:        plan.LongStrike,
+		WingWidth:         plan.WingWidth,
+		NetCredit:         plan.NetCredit,
+		MaxProfit:         plan.MaxProfit,
+		MaxLoss:           plan.MaxLoss,
+		Margin:            plan.MarginShort,
+		OpenedAt:          time.Now().Format(time.RFC3339),
+		Status:            "OPEN",
+		RollCount:         rollCount,
+		State:             "VERTICAL",
+		EntrySpot:         plan.Spot,
+		StopLossPct:       src.StopLossPct,
+		TakeProfitPct:     src.TakeProfitPct,
+		TrailingStopPct:   src.TrailingStopPct,
+		MaxHedgeDelta:     src.MaxHedgeDelta,
+		AutoRollDTE:       src.AutoRollDTE,
+		RollCreditPct:     src.RollCreditPct,
 		RollStrikeRiskPct: src.RollStrikeRiskPct,
-		AutoHedge:        src.AutoHedge,
-		Live:             src.Live,
-		ProfitTargetPct:  src.ProfitTargetPct,
-		ProfitAction:     src.ProfitAction,
-		TPRMode:          src.TPRMode,
-		TPRSigmaMult:     src.TPRSigmaMult,
-		SigmaAnnual:      src.SigmaAnnual,
-		RollAlpha:        src.RollAlpha,
-		AllowUndefined:   src.AllowUndefined,
-		ViewOverride:     src.ViewOverride,
-		CentralStrike:    plan.CentralStrike,
+		AutoHedge:         src.AutoHedge,
+		Live:              src.Live,
+		ProfitTargetPct:   src.ProfitTargetPct,
+		ProfitAction:      src.ProfitAction,
+		TPRMode:           src.TPRMode,
+		TPRSigmaMult:      src.TPRSigmaMult,
+		SigmaAnnual:       src.SigmaAnnual,
+		RollAlpha:         src.RollAlpha,
+		AllowUndefined:    src.AllowUndefined,
+		ViewOverride:      src.ViewOverride,
+		CentralStrike:     plan.CentralStrike,
 	}
 	saveSpreadRecord(rec)
 	return &rec, nil

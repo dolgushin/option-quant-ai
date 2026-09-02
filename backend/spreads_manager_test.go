@@ -67,6 +67,44 @@ func TestDecideSpreadActionCapturedPctUnits(t *testing.T) {
 	}
 }
 
+func TestRunSpreadManagerPassSkipsPaper(t *testing.T) {
+	dataDir := t.TempDir()
+	initSpreads(dataDir)
+
+	paper := spreadRecord{
+		ID:          "spr-paper",
+		PositionID:  "pos-paper",
+		Symbol:      "SBER",
+		Type:        "bull_put",
+		Expiry:      "2026-09-16",
+		Qty:         1,
+		Status:      "OPEN",
+		Live:        false, // Core autoscan paper position
+		AutoRollDTE: 21,    // would fire ROLL at DTE ≤ 21
+		MaxProfit:   1,
+		MaxLoss:     9,
+	}
+	saveSpreadRecord(paper)
+
+	runSpreadManagerPass()
+
+	if _, found := spreadRecordByID("spr-paper"); !found {
+		t.Fatalf("paper spread should remain registered")
+	}
+	if s, _ := spreadRecordByID("spr-paper"); s.Status != "OPEN" {
+		t.Fatalf("paper spread status = %q, want OPEN (must not be managed)", s.Status)
+	}
+	if s, _ := spreadRecordByID("spr-paper"); s.RollCount != 0 {
+		t.Fatalf("paper spread rolled without permission: RollCount = %d", s.RollCount)
+	}
+	spreadManagerMu.Lock()
+	logLen := len(spreadManagerLog)
+	spreadManagerMu.Unlock()
+	if logLen != 0 {
+		t.Fatalf("manager log has %d entries, want 0 (paper spread must be skipped)", logLen)
+	}
+}
+
 func TestDefaultAutoRollDTE(t *testing.T) {
 	cases := map[int]int{60: 21, 46: 21, 45: 7, 14: 7, 9: 7, 8: 0, 3: 0}
 	for dte, want := range cases {
