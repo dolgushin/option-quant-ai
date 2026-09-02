@@ -20,44 +20,44 @@ import (
 )
 
 type coreAISettings struct {
-	BaseURL     string `json:"base_url"`       // e.g. https://api.openai.com/v1
-	APIKey      string `json:"api_key"`
-	Model       string `json:"model"`          // e.g. gpt-4o-mini
-	IntervalMin int    `json:"interval_min"`   // auto-scan interval, 0 = off
-	AutoPaper   bool   `json:"auto_paper"`     // auto-open paper spreads on strong verdicts
-	QuantWeight float64 `json:"quant_weight"`   // квантовый вес (0.0–1.0), по умолчанию 0.7
-	AiWeight    float64 `json:"ai_weight"`      // ИИ‑вес (0.0–1.0), по умолчанию 0.3
+	BaseURL     string  `json:"base_url"` // e.g. https://api.openai.com/v1
+	APIKey      string  `json:"api_key"`
+	Model       string  `json:"model"`        // e.g. gpt-4o-mini
+	IntervalMin int     `json:"interval_min"` // auto-scan interval, 0 = off
+	AutoPaper   bool    `json:"auto_paper"`   // auto-open paper spreads on strong verdicts
+	QuantWeight float64 `json:"quant_weight"` // квантовый вес (0.0–1.0), по умолчанию 0.7
+	AiWeight    float64 `json:"ai_weight"`    // ИИ‑вес (0.0–1.0), по умолчанию 0.3
 }
 
 type coreAIVerdict struct {
-	Trade           bool    `json:"trade"`
-	Confidence      float64 `json:"confidence"` // 0..1
-	Construction    string  `json:"construction"`
-	Symbol          string  `json:"symbol"`
-	Expiry          string  `json:"expiry"`
-	EntryPlan       string  `json:"entry_plan"`
-	ManagementPlan  string  `json:"management_plan"`
-	HedgePlan       string  `json:"hedge_plan"`
-	Invalidation    string  `json:"invalidation"`
-	Reasoning       string  `json:"reasoning"`
+	Trade          bool    `json:"trade"`
+	Confidence     float64 `json:"confidence"` // 0..1
+	Construction   string  `json:"construction"`
+	Symbol         string  `json:"symbol"`
+	Expiry         string  `json:"expiry"`
+	EntryPlan      string  `json:"entry_plan"`
+	ManagementPlan string  `json:"management_plan"`
+	HedgePlan      string  `json:"hedge_plan"`
+	Invalidation   string  `json:"invalidation"`
+	Reasoning      string  `json:"reasoning"`
 }
 
 type coreVerdict struct {
-	At        time.Time          `json:"at"`
-	Mode      string             `json:"mode"` // quant | ai
-	Brief     *coreBrief         `json:"brief"`
-	QuantTop  *coreCandidate     `json:"quant_top,omitempty"`
-	AI        *coreAIVerdict     `json:"ai,omitempty"`
-	AIError   string             `json:"ai_error,omitempty"`
-	PaperOpen string             `json:"paper_open,omitempty"`
+	At        time.Time      `json:"at"`
+	Mode      string         `json:"mode"` // quant | ai
+	Brief     *coreBrief     `json:"brief"`
+	QuantTop  *coreCandidate `json:"quant_top,omitempty"`
+	AI        *coreAIVerdict `json:"ai,omitempty"`
+	AIError   string         `json:"ai_error,omitempty"`
+	PaperOpen string         `json:"paper_open,omitempty"`
 }
 
 var (
-	coreMu           sync.Mutex
-	coreSet          = coreAISettings{BaseURL: "https://api.openai.com/v1", Model: "gpt-4o-mini"}
-	coreVerdictLog   []coreVerdict
-	coreFile         string
-	coreScanOn       bool
+	coreMu         sync.Mutex
+	coreSet        = coreAISettings{BaseURL: "https://api.openai.com/v1", Model: "gpt-4o-mini"}
+	coreVerdictLog []coreVerdict
+	coreFile       string
+	coreScanOn     bool
 )
 
 func initCore(dataDir string) {
@@ -138,7 +138,7 @@ func callLLM(brief *coreBrief) (*coreAIVerdict, error) {
 			{"role": "system", "content": coreKBDigest},
 			{"role": "user", "content": string(briefJSON)},
 		},
-		"temperature": 0.2,
+		"temperature":     0.2,
 		"response_format": map[string]string{"type": "json_object"},
 	}
 	body, _ := json.Marshal(payload)
@@ -372,7 +372,101 @@ func notifyStructureEntry(rec *spreadRecord, plan *spreadPlan) {
 	_ = sendTelegramMessage(txt)
 }
 
-// coreAutoScanLoop runs scheduled analyses when enabled.
+// lastCandidateKey is the dedup key of the last candidate chart pushed to
+// Telegram, so the periodic auto-scan does not resend the same construction.
+var (
+	lastCandidateKeyMu sync.Mutex
+	lastCandidateKey   string
+)
+
+// candidateDedupKey identifies a found construction regardless of score changes:
+// symbol + strategy + expiry + strike pair. Same construction found again on the
+// next scan is suppressed.
+func candidateDedupKey(c *coreCandidate) string {
+	if c == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s|%s|%s|%.0f|%.0f", c.Symbol, c.Strategy, c.Expiry, c.ShortStrike, c.LongStrike)
+}
+
+// notifyCandidateSpread pushes a Telegram photo of the spread payoff plus a
+// caption with every parameter of the found candidate. Deduped: a construction
+// already pushed is not resent (the scan may find the same one on every pass).
+func notifyCandidateSpread(c *coreCandidate) {
+	if c == nil {
+		return
+	}
+	telegramMu.RLock()
+	configured := telegramToken != "" && telegramChatID != ""
+	telegramMu.RUnlock()
+	if !configured {
+		return
+	}
+
+	key := candidateDedupKey(c)
+	lastCandidateKeyMu.Lock()
+	if key != "" && key == lastCandidateKey {
+		lastCandidateKeyMu.Unlock()
+		return
+	}
+	if key != "" {
+		lastCandidateKey = key
+	}
+	lastCandidateKeyMu.Unlock()
+
+	plan, err := buildVerticalSpread(c.Symbol, c.Strategy, c.Expiry, 1)
+	if err != nil {
+		// Falls back to a text-only alert if the plan cannot be rebuilt.
+		sendCandidateText(c)
+		return
+	}
+
+	pts := candidatePayoff(plan)
+	img, err := drawPayoffChart(pts, plan.Spot, plan.ShortStrike, plan.LongStrike)
+	if err != nil || len(img) == 0 {
+		sendCandidateText(c)
+		return
+	}
+
+	caption := candidateCaption(c, plan)
+	_ = sendTelegramPhoto(caption, img)
+}
+
+// candidateCaption formats a rich HTML caption with every candidate parameter.
+func candidateCaption(c *coreCandidate, plan *spreadPlan) string {
+	credit := c.NetCredit
+	kind := "кредит"
+	if credit < 0 {
+		kind = "дебет"
+		credit = -credit
+	}
+	var sb strings.Builder
+	sb.WriteString("🎯 <b>Найдено Ядром</b>: ")
+	sb.WriteString(telegramEscape(c.DisplayName))
+	sb.WriteString(" · ")
+	sb.WriteString(telegramEscape(c.Symbol))
+	sb.WriteString("\n")
+	sb.WriteString(fmt.Sprintf("эксп. %s (DTE %d)\n", telegramEscape(c.Expiry), c.DTE))
+	sb.WriteString(fmt.Sprintf("спот %.0f · короткая %.0f / длинная %.0f\n", plan.Spot, c.ShortStrike, c.LongStrike))
+	sb.WriteString(fmt.Sprintf("%s %0.2f ₽\n", kind, credit))
+	sb.WriteString(fmt.Sprintf("макс. прибыль %0.0f / макс. убыток %0.0f ₽\n", c.MaxProfit, c.MaxLoss))
+	sb.WriteString(fmt.Sprintf("шанс прибыли %d%%\n", c.PopProb))
+	sb.WriteString(fmt.Sprintf("оценка %d/100", c.Score))
+	if len(c.Reasons) > 0 {
+		sb.WriteString("\n· ")
+		sb.WriteString(telegramEscape(strings.Join(c.Reasons, " · ")))
+	}
+	return sb.String()
+}
+
+// sendCandidateText is a fallback when the chart cannot be rendered.
+func sendCandidateText(c *coreCandidate) {
+	plan, err := buildVerticalSpread(c.Symbol, c.Strategy, c.Expiry, 1)
+	if err != nil {
+		return
+	}
+	_ = sendTelegramMessage(candidateCaption(c, plan))
+}
 func coreAutoScanLoop() {
 	for {
 		coreMu.Lock()
@@ -384,6 +478,11 @@ func coreAutoScanLoop() {
 			continue
 		}
 		if v, err := runCoreAnalysis(false); err == nil {
+			// Push a chart of the top found construction (deduped) so the
+			// trader sees what the scan actually found, not just a score line.
+			if v.QuantTop != nil {
+				notifyCandidateSpread(v.QuantTop)
+			}
 			txt := fmt.Sprintf("🧠 Ядро: вердикт %s", v.Mode)
 			if v.QuantTop != nil {
 				txt += fmt.Sprintf(" | топ: %s %s (%d)", v.QuantTop.Symbol, v.QuantTop.DisplayName, v.QuantTop.Score)
@@ -436,10 +535,10 @@ func coreSettingsHandler(w http.ResponseWriter, r *http.Request) {
 			coreSet.Model = req.Model
 		}
 		coreSet.IntervalMin = int(math.Max(0, math.Min(float64(req.IntervalMin), 1440)))
-coreSet.AutoPaper = req.AutoPaper
+		coreSet.AutoPaper = req.AutoPaper
 		coreSet.QuantWeight = req.QuantWeight
 		coreSet.AiWeight = req.AiWeight
-	saveCoreStateLocked()
+		saveCoreStateLocked()
 	}
 	out := coreSet
 	if out.APIKey != "" {

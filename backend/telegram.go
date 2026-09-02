@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -74,6 +75,57 @@ func sendTelegramMessageWith(token, chat, text string) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("telegram api status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// sendTelegramPhoto sends an in-memory PNG/JPEG photo with an HTML caption via
+// the Bot API relay. Used for spread candidate charts.
+func sendTelegramPhoto(caption string, pngData []byte) error {
+	telegramMu.RLock()
+	token := telegramToken
+	chat := telegramChatID
+	telegramMu.RUnlock()
+	if token == "" || chat == "" {
+		return fmt.Errorf("telegram not configured")
+	}
+
+	// Build the multipart/form-data body manually (mime/multipart would be
+	// cleaner, but hand-building keeps behaviour explicit and version-free).
+	var body bytes.Buffer
+	const boundary = "oqboundary7MA4YWxkTrZu0gW"
+	body.WriteString("--" + boundary + "\r\n")
+	body.WriteString("Content-Disposition: form-data; name=\"chat_id\"\r\n\r\n")
+	body.WriteString(chat + "\r\n")
+	body.WriteString("--" + boundary + "\r\n")
+	body.WriteString("Content-Disposition: form-data; name=\"parse_mode\"\r\n\r\nHTML\r\n")
+	if caption != "" {
+		body.WriteString("--" + boundary + "\r\n")
+		body.WriteString("Content-Disposition: form-data; name=\"caption\"\r\n\r\n")
+		body.WriteString(caption + "\r\n")
+	}
+	body.WriteString("--" + boundary + "\r\n")
+	body.WriteString("Content-Disposition: form-data; name=\"photo\"; filename=\"spread.png\"\r\n")
+	body.WriteString("Content-Type: image/png\r\n\r\n")
+	body.Write(pngData)
+	body.WriteString("\r\n")
+	body.WriteString("--" + boundary + "--\r\n")
+
+	apiURL := telegramAPIBase + "/sendPhoto"
+	req, err := http.NewRequest(http.MethodPost, apiURL, &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("telegram api status %d: %s", resp.StatusCode, string(respBody))
 	}
 	return nil
 }
