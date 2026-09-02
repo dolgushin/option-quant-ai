@@ -868,6 +868,44 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				item["legs"] = legs
 
+				// Book-close: what closing the spread would actually cost
+				// using the Alor order book (shorts bought back at ask, longs
+				// sold at bid). Only meaningful when Alor is configured.
+				if bookVal, bookLegs, bookOK := bookCloseValue(p.Legs, mult); bookOK {
+					item["book_close_value"] = math.Round(bookVal*100) / 100
+					bookPnl := bookVal - p.EntryValue
+					item["book_close_pnl"] = math.Round(bookPnl*100) / 100
+					if p.EntryValue != 0 {
+						item["book_close_pnl_percent"] = math.Round(bookPnl/math.Abs(p.EntryValue)*100*100) / 100
+					}
+					type bookInfo struct {
+						Price float64 `json:"price"`
+						Depth int     `json:"depth"`
+					}
+					bookBySecid := map[string]bookInfo{}
+					for _, bl := range bookLegs {
+						bookBySecid[bl.SecID] = bookInfo{bl.Price, bl.Depth}
+					}
+					// Attach per-leg book price + depth so the UI can flag
+					// thin books (not enough lots to close the full qty).
+					for _, lm := range legs {
+						if bk, ok := bookBySecid[lm["secid"].(string)]; ok {
+							lm["book_close"] = math.Round(bk.Price*100) / 100
+							lm["book_depth"] = bk.Depth
+						}
+					}
+					depthOK := true
+					for _, l := range p.Legs {
+						if l.Kind != "OPTION" || l.SecID == "" {
+							continue
+						}
+						if bk, ok := bookBySecid[l.SecID]; ok && bk.Depth < l.Quantity {
+							depthOK = false
+						}
+					}
+					item["book_depth_ok"] = depthOK
+				}
+
 				// Theoretical PnL: BS fair value of the spread at current
 				// spot / IV / DTE so the UI can show how PnL responds to
 				// volatility and time decay.
@@ -963,6 +1001,78 @@ func quoteIsStale(updated, src string) bool {
 	}
 	now, _ := time.Parse("15:04:05", time.Now().Format("15:04:05"))
 	return now.Sub(t) > 30*time.Minute || now.Sub(t) < -time.Hour
+}
+
+// bookClosePrice returns the executable close price and depth for a single
+// option leg. To CLOSE a position you reverse the opening trade: a short
+// (SELL) leg is bought back at the best ask; a long (BUY) leg is sold at the
+// best bid. Returns 0 if Alor is unavailable or the relevant side is empty.
+func bookClosePrice(leg quant.PositionLeg) (price float64, depth int) {
+	if alorMarket == nil || leg.Kind != "OPTION" || leg.SecID == "" {
+		return 0, 0
+	}
+	ob, err := alorMarket.FetchOrderbook("MOEX", leg.SecID)
+	if err != nil {
+		return 0, 0
+	}
+	if leg.Side == "SELL" { // short: buy back at best ask
+		if len(ob.Asks) > 0 && ob.Asks[0].Price > 0 {
+			return ob.Asks[0].Price, ob.Asks[0].Volume
+		}
+	} else { // long: sell at best bid
+		if len(ob.Bids) > 0 && ob.Bids[0].Price > 0 {
+			return ob.Bids[0].Price, ob.Bids[0].Volume
+		}
+	}
+	return 0, 0
+}
+
+// bookCloseValue computes the total position value at executable book prices
+// and per-leg close details. The sign convention matches repricePosition: for
+// each leg, dir = −1 for SELL, +1 for BUY, value = dir × price × mult × qty.
+// A more-negative total means a more expensive close (worse for a credit
+// spread). depthPerLeg shows the number of lots available at the closing
+// price for each leg; the caller can compare against leg.Quantity to flag
+// insufficient depth.
+func bookCloseValue(legs []quant.PositionLeg, mult float64) (total float64, perLeg []bookCloseLeg, ok bool) {
+	candidates := make([]bookLegBook, 0, len(legs))
+	for _, l := range legs {
+		p, d := bookClosePrice(l)
+		if p > 0 {
+			candidates = append(candidates, bookLegBook{l, p, d})
+		}
+	}
+	return accumulateBookClose(candidates, mult)
+}
+
+// bookLegBook is a book price candidate for one leg.
+type bookLegBook struct {
+	leg   quant.PositionLeg
+	price float64
+	depth int
+}
+
+// bookCloseLeg is one leg's executable close detail for the card JSON.
+type bookCloseLeg struct {
+	SecID string  `json:"secid"`
+	Side  string  `json:"side"`
+	Price float64 `json:"price"`
+	Depth int     `json:"depth"`
+}
+
+// accumulateBookClose accumulates book-close values without touching the
+// network. Kept separate so the value/accounting math is hermetic-testable.
+func accumulateBookClose(candidates []bookLegBook, mult float64) (total float64, perLeg []bookCloseLeg, ok bool) {
+	for _, c := range candidates {
+		dir := 1.0
+		if c.leg.Side == "SELL" {
+			dir = -1
+		}
+		total += dir * c.price * mult * float64(c.leg.Quantity)
+		perLeg = append(perLeg, bookCloseLeg{c.leg.SecID, c.leg.Side, c.price, c.depth})
+		ok = true
+	}
+	return
 }
 
 // isSpreadPositionID reports whether the position belongs to a managed

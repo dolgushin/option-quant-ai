@@ -105,6 +105,45 @@ func TestRunSpreadManagerPassSkipsPaper(t *testing.T) {
 	}
 }
 
+func TestAccumulateBookClose(t *testing.T) {
+	// Bull put 86500/86000, qty 4, multiplier 100 → credit structure.
+	// Close: SELL (short put) bought back at ask 3003, BUY (long put) sold at
+	// bid 1297 → exorbitant debit, vastly worse than theo.
+	cands := []bookLegBook{
+		{leg: quant.PositionLeg{SecID: "Si86500BX6", Side: "SELL", Kind: "OPTION", Quantity: 4}, price: 3003.0, depth: 1},
+		{leg: quant.PositionLeg{SecID: "Si86000BX6", Side: "BUY", Kind: "OPTION", Quantity: 4}, price: 1297.0, depth: 1},
+	}
+	const mult = 100.0
+	total, perLeg, ok := accumulateBookClose(cands, mult)
+	if !ok {
+		t.Fatal("expected ok=true with two candidates")
+	}
+	// total = (−3003 + 1297) × 100 × 4 = −1706 × 400 = −682 400 ₽
+	want := (-3003.0 + 1297.0) * mult * 4
+	if math.Abs(total-want) > 1e-6 {
+		t.Fatalf("total = %.2f, want %.2f", total, want)
+	}
+	if len(perLeg) != 2 {
+		t.Fatalf("perLeg len = %d, want 2", len(perLeg))
+	}
+	// Depth: only 1 lot per book level < 4 qty → breaker flags thin book.
+	if perLeg[0].Depth != 1 {
+		t.Fatalf("short leg depth = %d, want 1", perLeg[0].Depth)
+	}
+	if perLeg[0].Price != 3003.0 {
+		t.Fatalf("short leg close price = %.2f, want 3003 (bought back at ask)", perLeg[0].Price)
+	}
+	if perLeg[1].Price != 1297.0 {
+		t.Fatalf("long leg close price = %.2f, want 1297 (sold at bid)", perLeg[1].Price)
+	}
+
+	// Empty candidates → not ok.
+	_, _, ok2 := accumulateBookClose(nil, mult)
+	if ok2 {
+		t.Fatal("expected ok=false with no candidates")
+	}
+}
+
 func TestDefaultAutoRollDTE(t *testing.T) {
 	cases := map[int]int{60: 21, 46: 21, 45: 7, 14: 7, 9: 7, 8: 0, 3: 0}
 	for dte, want := range cases {
