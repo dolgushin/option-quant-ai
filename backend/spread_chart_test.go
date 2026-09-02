@@ -125,3 +125,29 @@ func TestCandidateCaption(t *testing.T) {
 		t.Fatalf("caption has unescaped HTML:\n%s", caption)
 	}
 }
+
+// TestEntryCaption verifies the auto-entry caption carries the executable-priced
+// economics (ruble figures scaled by multiplier x qty) and the management rules.
+func TestEntryCaption(t *testing.T) {
+	rec := &spreadRecord{
+		DisplayName:     "Bull Put Spread",
+		AutoRollDTE:     7,
+		StopLossPct:     0.75,
+		ProfitTargetPct: 0.70,
+	}
+	plan := &spreadPlan{
+		Symbol: "SBER", DisplayName: "Bull Put Spread", Expiry: "2026-09-17", DaysToExp: 15,
+		Spot: 182, ShortStrike: 180, LongStrike: 175,
+		Multiplier: 100, Qty: 1,
+		NetCredit: -45000, MaxProfit: 0, MaxLoss: 55000,
+	}
+	caption := entryCaption(rec, plan)
+	for _, want := range []string{
+		"Автовход", "Bull Put Spread", "SBER", "2026-09-17", "15",
+		"180", "175", "дебет", "45000.00", "55000", "7", "75%", "70%",
+	} {
+		if !strings.Contains(caption, want) {
+			t.Fatalf("entry caption missing %q:\n%s", want, caption)
+		}
+	}
+}

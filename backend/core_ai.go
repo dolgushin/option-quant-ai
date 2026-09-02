@@ -350,7 +350,8 @@ func recomputePlanEconomics(plan *spreadPlan) {
 }
 
 // notifyStructureEntry pushes a Telegram alert when the Core auto-entry opened
-// a new paper structure (автовход с согласием кванта и ИИ).
+// a new paper structure (автовход с согласием кванта и ИИ). Sends a payoff
+// chart photo plus a full-parameter caption.
 func notifyStructureEntry(rec *spreadRecord, plan *spreadPlan) {
 	telegramMu.RLock()
 	configured := telegramToken != "" && telegramChatID != ""
@@ -358,18 +359,41 @@ func notifyStructureEntry(rec *spreadRecord, plan *spreadPlan) {
 	if !configured || rec == nil || plan == nil {
 		return
 	}
+
+	pts := candidatePayoff(plan)
+	img, err := drawPayoffChart(pts, plan.Spot, plan.ShortStrike, plan.LongStrike)
+	if err != nil || len(img) == 0 {
+		_ = sendTelegramMessage(entryCaption(rec, plan))
+		return
+	}
+	_ = sendTelegramPhoto(entryCaption(rec, plan), img)
+}
+
+// entryCaption formats the auto-entry Telegram caption from the opened paper
+// spread record and its plan (economics already marked at executable prices).
+func entryCaption(rec *spreadRecord, plan *spreadPlan) string {
 	credit := plan.NetCredit
 	kind := "кредит"
 	if credit < 0 {
 		kind = "дебет"
 		credit = -credit
 	}
-	txt := fmt.Sprintf("🟢 <b>Автовход Ядро</b>: %s · %s\nэксп. %s (DTE %d)\nS %.0f / L %.0f · %s %0.2f",
-		telegramEscape(plan.DisplayName), telegramEscape(plan.Symbol),
-		telegramEscape(plan.Expiry), plan.DaysToExp,
-		plan.ShortStrike, plan.LongStrike,
-		kind, credit)
-	_ = sendTelegramMessage(txt)
+	name := rec.DisplayName
+	if name == "" {
+		name = plan.DisplayName
+	}
+	var sb strings.Builder
+	sb.WriteString("🟢 <b>Автовход Ядро</b>: ")
+	sb.WriteString(telegramEscape(name))
+	sb.WriteString(" · ")
+	sb.WriteString(telegramEscape(plan.Symbol))
+	sb.WriteString("\n")
+	sb.WriteString(fmt.Sprintf("эксп. %s (DTE %d)\n", telegramEscape(plan.Expiry), plan.DaysToExp))
+	sb.WriteString(fmt.Sprintf("вход-спот %.0f · короткая %.0f / длинная %.0f\n", plan.Spot, plan.ShortStrike, plan.LongStrike))
+	sb.WriteString(fmt.Sprintf("%s %0.2f ₽\n", kind, credit))
+	sb.WriteString(fmt.Sprintf("макс. прибыль %0.0f / макс. убыток %0.0f ₽\n", plan.MaxProfit, plan.MaxLoss))
+	sb.WriteString(fmt.Sprintf("управление: авто-ролл DTE≤%d · стоп %0.0f%% · TPR %0.0f%%", rec.AutoRollDTE, rec.StopLossPct*100, rec.ProfitTargetPct*100))
+	return sb.String()
 }
 
 // lastCandidateKey is the dedup key of the last candidate chart pushed to
