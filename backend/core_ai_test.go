@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"math"
+	"os"
 	"strings"
 	"testing"
 )
@@ -161,6 +163,55 @@ func TestPopScoreAdjustBands(t *testing.T) {
 			t.Fatalf("popScoreAdjust(%d) line %q, want line=%v", tc.pop, line, tc.hasLine)
 		}
 	}
+}
+
+// TestMarkCandidateNotified verifies a successful push records the dedup key
+// both in memory and in core_state.json (the empty key is a no-op).
+func TestMarkCandidateNotified(t *testing.T) {
+	dir := t.TempDir()
+
+	coreMu.Lock()
+	prevFile := coreFile
+	prevVerdicts := coreVerdictLog
+	coreFile = dir + "/core_state.json"
+	coreVerdictLog = nil
+	coreMu.Unlock()
+
+	lastCandidateKeyMu.Lock()
+	prevKey := lastCandidateKey
+	lastCandidateKey = ""
+	lastCandidateKeyMu.Unlock()
+
+	markCandidateNotified("Si|bull_put|2026-09-24|85500|85000")
+	markCandidateNotified("")
+
+	lastCandidateKeyMu.Lock()
+	got := lastCandidateKey
+	lastCandidateKeyMu.Unlock()
+	if got != "Si|bull_put|2026-09-24|85500|85000" {
+		t.Fatalf("in-memory key = %q", got)
+	}
+	data, err := os.ReadFile(dir + "/core_state.json")
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	var st struct {
+		LastNotifiedKey string `json:"last_notified_key"`
+	}
+	if err := json.Unmarshal(data, &st); err != nil {
+		t.Fatalf("unmarshal state: %v", err)
+	}
+	if st.LastNotifiedKey != got {
+		t.Fatalf("persisted key = %q, want %q", st.LastNotifiedKey, got)
+	}
+
+	coreMu.Lock()
+	coreFile = prevFile
+	coreVerdictLog = prevVerdicts
+	coreMu.Unlock()
+	lastCandidateKeyMu.Lock()
+	lastCandidateKey = prevKey
+	lastCandidateKeyMu.Unlock()
 }
 
 // TestCandidatePopWeightMovesScore builds the same credit plan twice with only

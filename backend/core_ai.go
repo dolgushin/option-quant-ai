@@ -471,9 +471,25 @@ func candidateDedupKey(c *coreCandidate) string {
 	return fmt.Sprintf("%s|%s|%s|%.0f|%.0f", c.Symbol, c.Strategy, c.Expiry, c.ShortStrike, c.LongStrike)
 }
 
+// markCandidateNotified records a successfully pushed construction (in-memory
+// + persisted) so neither the next scan nor a restart resends it.
+func markCandidateNotified(key string) {
+	if key == "" {
+		return
+	}
+	lastCandidateKeyMu.Lock()
+	lastCandidateKey = key
+	lastCandidateKeyMu.Unlock()
+	coreMu.Lock()
+	saveCoreStateLocked()
+	coreMu.Unlock()
+}
+
 // notifyCandidateSpread pushes a Telegram photo of the spread payoff plus a
 // caption with every parameter of the found candidate. Deduped: a construction
 // already pushed is not resent (the scan may find the same one on every pass).
+// The dedup key is recorded only after a successful send, so a failed push is
+// retried on the next scan instead of being silently lost.
 func notifyCandidateSpread(c *coreCandidate) {
 	if c == nil {
 		return
@@ -486,39 +502,34 @@ func notifyCandidateSpread(c *coreCandidate) {
 	}
 
 	key := candidateDedupKey(c)
-	lastCandidateKeyMu.Lock()
-	if key != "" && key == lastCandidateKey {
+	if key != "" {
+		lastCandidateKeyMu.Lock()
+		dup := key == lastCandidateKey
 		lastCandidateKeyMu.Unlock()
-		return
-	}
-	if key != "" {
-		lastCandidateKey = key
-	}
-	lastCandidateKeyMu.Unlock()
-	if key != "" {
-		// Persist the dedup key so a server restart does not resend the
-		// same construction on the next scan.
-		coreMu.Lock()
-		saveCoreStateLocked()
-		coreMu.Unlock()
+		if dup {
+			return
+		}
 	}
 
 	plan, err := buildVerticalSpread(c.Symbol, c.Strategy, c.Expiry, 1)
 	if err != nil {
 		// Falls back to a text-only alert if the plan cannot be rebuilt.
-		sendCandidateText(c)
+		sendCandidateText(c, key)
 		return
 	}
 
 	pts := candidatePayoff(plan)
 	img, err := drawPayoffChart(chartTitle(c.Symbol, c.DisplayName, c.Expiry), pts, plan.Spot, plan.ShortStrike, plan.LongStrike)
 	if err != nil || len(img) == 0 {
-		sendCandidateText(c)
+		sendCandidateText(c, key)
 		return
 	}
 
 	caption := candidateCaption(c, plan)
-	_ = sendTelegramPhoto(caption, img)
+	if err := sendTelegramPhoto(caption, img); err != nil {
+		return
+	}
+	markCandidateNotified(key)
 }
 
 // candidateCaption formats a rich HTML caption with every candidate parameter.
@@ -547,12 +558,15 @@ func candidateCaption(c *coreCandidate, plan *spreadPlan) string {
 }
 
 // sendCandidateText is a fallback when the chart cannot be rendered.
-func sendCandidateText(c *coreCandidate) {
+func sendCandidateText(c *coreCandidate, key string) {
 	plan, err := buildVerticalSpread(c.Symbol, c.Strategy, c.Expiry, 1)
 	if err != nil {
 		return
 	}
-	_ = sendTelegramMessage(candidateCaption(c, plan))
+	if err := sendTelegramMessage(candidateCaption(c, plan)); err != nil {
+		return
+	}
+	markCandidateNotified(key)
 }
 func coreAutoScanLoop() {
 	for {
