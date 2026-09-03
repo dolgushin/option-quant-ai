@@ -587,6 +587,27 @@ func buildSpreadFromLegs(symbol, expiry string, qty int, legs []rollLegSpec, isD
 	return plan, nil
 }
 
+// planEconomicsSane reports whether a spread plan's quoted economics are
+// possible: a credit spread cannot pay more than the wing width, and a debit
+// spread cannot cost more than the wing (the max payout). Violations mean the
+// leg marks are broken (stale/wide books) — e.g. a 3415 credit on a 2500 wing
+// with max loss clamped to 0 is an artefact, not an edge. Pure and qty-safe:
+// NetCredit scales with Qty while WingWidth is per-share.
+func planEconomicsSane(plan *spreadPlan) bool {
+	if plan == nil || plan.WingWidth <= 0 {
+		return false
+	}
+	q := float64(plan.Qty)
+	if q < 1 {
+		q = 1
+	}
+	wing := plan.WingWidth * q
+	if plan.IsDebit {
+		return -plan.NetCredit <= wing
+	}
+	return plan.NetCredit <= wing
+}
+
 // spreadPlanHandler returns the full economics of a vertical spread.
 // URL: /api/v1/spreads/plan?symbol=Si&type=bull_put&qty=1&expiry=2026-09-17
 func spreadPlanHandler(w http.ResponseWriter, r *http.Request) {

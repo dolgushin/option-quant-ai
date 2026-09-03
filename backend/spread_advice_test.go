@@ -101,3 +101,32 @@ func TestHVAndTrendStatsPure(t *testing.T) {
 		t.Fatalf("hv = %v out of range", hv)
 	}
 }
+
+func TestPlanEconomicsSane(t *testing.T) {
+	// The RI bear_call artefact: 3415 credit on a 2500 wing.
+	broken := &spreadPlan{Symbol: "RI", Qty: 1, WingWidth: 2500, NetCredit: 3415}
+	if planEconomicsSane(broken) {
+		t.Fatal("credit above wing width must be insane")
+	}
+	// Sane credit spread scaled by qty.
+	ok := &spreadPlan{Symbol: "Si", Qty: 2, WingWidth: 500, NetCredit: 541}
+	if !planEconomicsSane(ok) {
+		t.Fatal("credit inside wing width must be sane")
+	}
+	// Sane debit spread: 1500 debit on a 2500 wing.
+	debitOK := &spreadPlan{Symbol: "RI", Qty: 1, IsDebit: true, WingWidth: 2500, NetCredit: -1500}
+	if !planEconomicsSane(debitOK) {
+		t.Fatal("debit inside wing width must be sane")
+	}
+	// Broken debit: paying more than the max payout.
+	debitBad := &spreadPlan{Symbol: "RI", Qty: 1, IsDebit: true, WingWidth: 2500, NetCredit: -2600}
+	if planEconomicsSane(debitBad) {
+		t.Fatal("debit above wing width must be insane")
+	}
+	if planEconomicsSane(nil) {
+		t.Fatal("nil plan must be insane")
+	}
+	if planEconomicsSane(&spreadPlan{WingWidth: 0}) {
+		t.Fatal("zero wing must be insane")
+	}
+}

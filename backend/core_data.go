@@ -19,7 +19,7 @@ const coreSymbols = "Si,RI,CR,NG,SBER,SBERP"
 type coreInstrument struct {
 	Symbol       string  `json:"symbol"`
 	Spot         float64 `json:"spot"`
-	Regime       string  `json:"regime"`  // BULLISH / BEARISH / SIDEWAYS / ""
+	Regime       string  `json:"regime"` // BULLISH / BEARISH / SIDEWAYS / ""
 	Strength     string  `json:"strength"`
 	SMA20        float64 `json:"sma20"`
 	SMA50        float64 `json:"sma50"`
@@ -37,7 +37,7 @@ type coreInstrument struct {
 	ExpiryFront  string  `json:"expiry_front"`
 	DTEFront     int     `json:"dte_front"`
 	Err          string  `json:"err,omitempty"`
-	ATR14        float64 `json:"atr14"` // average true range proxy: avg |Δclose| over 14 sessions
+	ATR14        float64 `json:"atr14"`  // average true range proxy: avg |Δclose| over 14 sessions
 	Volume       int     `json:"volume"` // last trade volume from MOEX ISS
 }
 
@@ -60,9 +60,9 @@ type coreCandidate struct {
 }
 
 type coreBrief struct {
-	GeneratedAt string          `json:"generated_at"`
-	Instruments []coreInstrument `json:"instruments"`
-	Candidates  []coreCandidate `json:"candidates"`
+	GeneratedAt string             `json:"generated_at"`
+	Instruments []coreInstrument   `json:"instruments"`
+	Candidates  []coreCandidate    `json:"candidates"`
 	Portfolio   map[string]float64 `json:"portfolio"`
 	KB          []string           `json:"kb"`
 }
@@ -150,9 +150,9 @@ func monteCarloPop(netCredit, maxLoss, spot, ivAnnual, shortStrike, longStrike f
 		// generate standard normal
 		z := rng.NormFloat64()
 		// terminal price under GBM with zero drift
-		finalSpot := spot * math.Expm1( -0.5*ivAnnual*ivAnnual*T + ivAnnual*math.Sqrt(T)*z )
+		finalSpot := spot * math.Expm1(-0.5*ivAnnual*ivAnnual*T+ivAnnual*math.Sqrt(T)*z)
 		// actually Expm1 is e^x -1, we need e^x. Use math.Exp.
-		finalSpot = spot * math.Exp( -0.5*ivAnnual*ivAnnual*T + ivAnnual*math.Sqrt(T)*z )
+		finalSpot = spot * math.Exp(-0.5*ivAnnual*ivAnnual*T+ivAnnual*math.Sqrt(T)*z)
 		profit := 0.0
 		if netCredit > 0 {
 			// credit spread
@@ -447,6 +447,13 @@ func coreBuildCandidates(instruments []coreInstrument) []coreCandidate {
 			if err != nil {
 				continue
 			}
+			// Drop constructions with impossible economics (credit above the
+			// wing, debit above the max payout): the leg marks are broken and
+			// the "candidate" would be garbage in the table, Telegram alerts
+			// and paper auto-entry alike.
+			if !planEconomicsSane(plan) {
+				continue
+			}
 			// Do not recommend a construction whose twin (same symbol, type and
 			// strike pair) is already open — reopening the same position just
 			// multiplies exposure on an existing trade.
@@ -556,7 +563,7 @@ func candidateFromPlan(plan *spreadPlan, in coreInstrument) coreCandidate {
 	if in.ATR14 > 0 {
 		// base levels (from earlier implementation)
 		baseStop := plan.NetCredit - 1.3*in.ATR14
-		baseTP   := plan.NetCredit + 0.5*plan.MaxProfit
+		baseTP := plan.NetCredit + 0.5*plan.MaxProfit
 
 		// adjust according to PoP
 		if pop >= 70 {
