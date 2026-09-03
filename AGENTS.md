@@ -34,6 +34,7 @@
 - `KNOWLEDGE.md` is the trading knowledge base; manager defaults and rule semantics reference it by section. Update it together with management-rule changes. `README.md` is the user-facing overview (features, quick start, API map) — keep both in sync when adding modules.
 - Commit style: short imperative English ("Add ...", "Fix ...").
 - Tests are hermetic where possible: decision logic lives in pure functions (`decideSpreadAction`, `classifyExpiry`, `computeStatsOverview`, `mcFan`, `scoreSpreadAdvice`, `buildSpreadAnalytics`) so no network is needed; use `quant.SetDataFile` + temp dirs for store tests.
+- The module is no longer stdlib-only: `golang.org/x/image` (basicfont) is used for Telegram payoff-chart labels. Fresh clones need network once for `go mod download`; after that builds/tests are offline via the module cache.
 
 ## Environment gotchas (Windows / PowerShell 5.1)
 - **Never rewrite source files through console pipes (`Get-Content | Set-Content`, `Add-Content` here-strings) if they contain non-ASCII text** — the console mangles UTF-8 Cyrillic and corrupts files. Use the Edit tool.
