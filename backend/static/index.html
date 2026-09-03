@@ -1694,7 +1694,7 @@
                         <td class="py-1 pr-2 text-right text-amber-300">${c.stop_loss ? Math.round(c.stop_loss).toLocaleString('ru-RU') : '—'}</td>
                         <td class="py-1 pr-2 text-right text-emerald-300">${c.take_profit ? Math.round(c.take_profit).toLocaleString('ru-RU') : '—'}</td>
                         <td class="py-1 text-slate-500 text-[10px]">${(c.reasons || []).slice(0, 2).join(' · ')}</td>
-                        <td class="py-1">${idx === 0 ? `<button onclick="candidateToBuilder('${c.symbol}','${c.strategy}','${c.expiry}')" class="px-2 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded text-[10px]">→ конструктор</button>` : ''}</td>
+                        <td class="py-1"><button onclick="candidateToBuilder('${c.symbol}','${c.strategy}','${c.expiry}')" class="px-2 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded text-[10px]">→ конструктор</button></td>
                     </tr>`;
                 });
                 cd.innerHTML = ch + '</tbody></table>';
