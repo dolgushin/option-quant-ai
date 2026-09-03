@@ -2276,6 +2276,35 @@ func tradesHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// profileRange returns the underlying-price window for a payoff chart,
+// anchored on the option strikes (futures legs anchor on entry). Falls back
+// to ±20% of spot when there is nothing to anchor on. Pure — unit-tested.
+func profileRange(legs []quant.PositionLeg, spot float64) (float64, float64) {
+	lo, hi := math.Inf(1), math.Inf(-1)
+	for _, l := range legs {
+		switch l.Kind {
+		case "OPTION":
+			if l.Strike > 0 {
+				lo = math.Min(lo, l.Strike)
+				hi = math.Max(hi, l.Strike)
+			}
+		case "FUTURES":
+			if l.EntryPrice > 0 {
+				lo = math.Min(lo, l.EntryPrice)
+				hi = math.Max(hi, l.EntryPrice)
+			}
+		}
+	}
+	if math.IsInf(lo, 1) || math.IsInf(hi, -1) || hi <= lo {
+		if spot > 0 {
+			return spot * 0.8, spot * 1.2
+		}
+		return 0, 1
+	}
+	pad := math.Max((hi-lo)*0.6, hi*0.04)
+	return lo - pad, hi + pad
+}
+
 // positionProfileHandler returns the payoff profile (P&L vs underlying price at
 // expiration) for a single open position, computed from its real legs.
 func positionProfileHandler(w http.ResponseWriter, r *http.Request) {
@@ -2306,9 +2335,11 @@ func positionProfileHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	mult := contractMultiplier(pos.Symbol)
 
-	lo := spot * 0.8
-	hi := spot * 1.2
-	steps := 40
+	// Strike-anchored plot range: a fixed ±20% of spot compresses a narrow
+	// vertical wing into a single pixel and the chart looks like a flat
+	// line. Anchor on the strikes (futures entry for futures legs) instead.
+	lo, hi := profileRange(pos.Legs, spot)
+	steps := 60
 	type profPoint struct {
 		Spot float64 `json:"spot"`
 		PnL  float64 `json:"pnl"`
