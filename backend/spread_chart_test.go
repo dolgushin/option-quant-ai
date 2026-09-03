@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"image/color"
 	"image/png"
 	"os"
 	"strings"
@@ -86,7 +87,7 @@ func TestDrawPayoffChartPNG(t *testing.T) {
 		{S: 86500, PnL: 100000},
 		{S: 87000, PnL: 100000},
 	}
-	data, err := drawPayoffChart(pts, 86800, 86500, 86000)
+	data, err := drawPayoffChart("Si Bull Put Spread 2026-09-17", pts, 86800, 86500, 86000)
 	if err != nil {
 		t.Fatalf("drawPayoffChart: %v", err)
 	}
@@ -107,6 +108,128 @@ func TestDrawPayoffChartPNG(t *testing.T) {
 	}
 }
 
+// TestDrawPayoffChartAllPositive covers a degenerate credit spread whose
+// curve never goes below zero (the whole range clamps minY to 0).
+func TestDrawPayoffChartAllPositive(t *testing.T) {
+	plan := &spreadPlan{
+		Symbol: "Si", Multiplier: 1, Qty: 1, Spot: 86184,
+		ShortStrike: 85500, LongStrike: 85000,
+		Legs: []spreadLeg{
+			{Side: "SELL", Strike: 85500, IsCall: false, Price: 1500},
+			{Side: "BUY", Strike: 85000, IsCall: false, Price: 279.5},
+		},
+	}
+	pts := candidatePayoff(plan)
+	if len(pts) == 0 {
+		t.Fatal("no payoff points")
+	}
+	data, err := drawPayoffChart(chartTitle("Si", "Bull Put Spread", "2026-09-24"), pts, plan.Spot, plan.ShortStrike, plan.LongStrike)
+	if err != nil || len(data) == 0 {
+		t.Fatalf("drawPayoffChart: %v (len %d)", err, len(data))
+	}
+	if _, err := png.Decode(bytes.NewReader(data)); err != nil {
+		t.Fatalf("decoding PNG: %v", err)
+	}
+}
+
+// TestChartGeomMapping pins the fixed Y-scale: min maps to the plot bottom,
+// max to the plot top (regression for the collapsed-curve bug).
+func TestChartGeomMapping(t *testing.T) {
+	pts := []payoffPoint{{S: 1, PnL: -400}, {S: 2, PnL: 100}}
+	g := newChartGeom(pts)
+	if got := g.y(g.minY); got != g.plotBottom() {
+		t.Fatalf("y(min) = %d, want plot bottom %d", got, g.plotBottom())
+	}
+	if got := g.y(g.maxY); got != g.plotTop() {
+		t.Fatalf("y(max) = %d, want plot top %d", got, g.plotTop())
+	}
+	mid := g.y((g.minY + g.maxY) / 2)
+	if mid <= g.plotTop() || mid >= g.plotBottom() {
+		t.Fatalf("y(mid) = %d outside plot (%d..%d)", mid, g.plotTop(), g.plotBottom())
+	}
+	if got := g.x(g.lo); got != chartMarginL {
+		t.Fatalf("x(lo) = %d, want %d", got, chartMarginL)
+	}
+}
+
+// TestChartLightBackground asserts the plot background is light (not the old
+// dark theme) and the payoff curve is actually drawn inside the plot area
+// (regression for the collapsed-curve bug).
+func TestChartLightBackground(t *testing.T) {
+	pts := []payoffPoint{
+		{S: 85000, PnL: -400000},
+		{S: 86000, PnL: -200000},
+		{S: 86500, PnL: 100000},
+		{S: 87000, PnL: 100000},
+	}
+	data, err := drawPayoffChart("Si Bull Put Spread 2026-09-17", pts, 86800, 86500, 86000)
+	if err != nil {
+		t.Fatalf("drawPayoffChart: %v", err)
+	}
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("decoding PNG: %v", err)
+	}
+	at := func(x, y int) color.RGBA {
+		return color.RGBAModel.Convert(img.At(x, y)).(color.RGBA)
+	}
+	// Outer corner must be white.
+	if c := at(2, 2); c.R < 250 || c.G < 250 || c.B < 250 {
+		t.Fatalf("image corner not white: %+v", c)
+	}
+	// Plot interior (top-left, away from markers) must be light.
+	if c := at(chartMarginL+3, chartMarginT+3); c.R < 200 || c.G < 200 || c.B < 200 {
+		t.Fatalf("plot background too dark: %+v", c)
+	}
+	// Indigo curve pixels must exist strictly inside the plot (not snapped
+	// to the top/bottom edge as with the old broken Y-scale).
+	inside := 0
+	for y := chartMarginT + 2; y < chartH-chartMarginB-2; y++ {
+		for x := chartMarginL; x < chartW-chartMarginR; x++ {
+			c := at(x, y)
+			if c.B > 150 && c.R < 150 && c.G < 150 {
+				inside++
+			}
+		}
+	}
+	if inside < 50 {
+		t.Fatalf("only %d curve pixels inside plot, want >= 50", inside)
+	}
+	// Title band must contain dark text pixels.
+	dark := 0
+	for y := 4; y < chartMarginT; y++ {
+		for x := chartMarginL; x < chartMarginL+300; x++ {
+			c := at(x, y)
+			if c.R < 80 && c.G < 80 && c.B < 80 {
+				dark++
+			}
+		}
+	}
+	if dark < 30 {
+		t.Fatalf("only %d title text pixels, want >= 30", dark)
+	}
+}
+
+// TestFormatRub checks space grouping of ruble amounts.
+func TestFormatRub(t *testing.T) {
+	cases := map[float64]string{
+		86184:   "86 184.00",
+		1220.5:  "1 220.50",
+		0:       "0.00",
+		-45000:  "-45 000.00",
+		55000:   "55 000.00",
+		1000000: "1 000 000.00",
+	}
+	for in, want := range cases {
+		if got := formatRub(in, 2); got != want {
+			t.Fatalf("formatRub(%v) = %q, want %q", in, got, want)
+		}
+	}
+	if got := formatRub(86184, 0); got != "86 184" {
+		t.Fatalf("formatRub(86184,0) = %q", got)
+	}
+}
+
 // TestCandidateCaption covers the caption builder including HTML escaping of
 // Cyrillic display names.
 func TestCandidateCaption(t *testing.T) {
@@ -118,7 +241,11 @@ func TestCandidateCaption(t *testing.T) {
 	}
 	plan := &spreadPlan{Symbol: "SBER", Spot: 182, ShortStrike: 180, LongStrike: 175}
 	caption := candidateCaption(c, plan)
-	for _, want := range []string{"180", "175", "Bull Put Spread", "SBER", "450", "550", "72%", "88/100"} {
+	for _, want := range []string{
+		"Найдено Ядром", "Bull Put Spread", "SBER", "2026-09-17", "DTE",
+		"182", "180", "175", "450.00", "550", "72%", "88/100",
+		"• iv rank 60", "• bullish",
+	} {
 		if !strings.Contains(caption, want) {
 			t.Fatalf("caption missing %q:\n%s", want, caption)
 		}
@@ -146,7 +273,7 @@ func TestEntryCaption(t *testing.T) {
 	caption := entryCaption(rec, plan)
 	for _, want := range []string{
 		"Автовход", "Bull Put Spread", "SBER", "2026-09-17", "15",
-		"180", "175", "дебет", "45000.00", "55000", "7", "75%", "70%",
+		"180", "175", "Дебет", "45 000.00", "55 000", "7", "75%", "70%",
 	} {
 		if !strings.Contains(caption, want) {
 			t.Fatalf("entry caption missing %q:\n%s", want, caption)

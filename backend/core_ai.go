@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -371,7 +372,11 @@ func notifyStructureEntry(rec *spreadRecord, plan *spreadPlan) {
 	}
 
 	pts := candidatePayoff(plan)
-	img, err := drawPayoffChart(pts, plan.Spot, plan.ShortStrike, plan.LongStrike)
+	name := rec.DisplayName
+	if name == "" {
+		name = plan.DisplayName
+	}
+	img, err := drawPayoffChart(chartTitle(plan.Symbol, name, plan.Expiry), pts, plan.Spot, plan.ShortStrike, plan.LongStrike)
 	if err != nil || len(img) == 0 {
 		_ = sendTelegramMessage(entryCaption(rec, plan))
 		return
@@ -379,13 +384,57 @@ func notifyStructureEntry(rec *spreadRecord, plan *spreadPlan) {
 	_ = sendTelegramPhoto(entryCaption(rec, plan), img)
 }
 
+// formatRub renders a ruble amount with space grouping: 86184 -> "86 184",
+// 1220.5 with 2 decimals -> "1 220.50".
+func formatRub(v float64, dec int) string {
+	neg := v < 0
+	if neg {
+		v = -v
+	}
+	s := strconv.FormatFloat(v, 'f', dec, 64)
+	intPart, fracPart := s, ""
+	if i := strings.IndexByte(s, '.'); i >= 0 {
+		intPart, fracPart = s[:i], s[i+1:]
+	}
+	n := len(intPart)
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		if i > 0 && (n-i)%3 == 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteByte(intPart[i])
+	}
+	out := b.String()
+	if dec > 0 {
+		out += "." + fracPart
+	}
+	if neg {
+		out = "-" + out
+	}
+	return out
+}
+
+// captionBullets splits reason strings (which may themselves contain " · ")
+// into one bullet per line.
+func captionBullets(reasons []string) string {
+	var lines []string
+	for _, r := range reasons {
+		for _, part := range strings.Split(r, " · ") {
+			if p := strings.TrimSpace(part); p != "" {
+				lines = append(lines, "• "+telegramEscape(p))
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // entryCaption formats the auto-entry Telegram caption from the opened paper
 // spread record and its plan (economics already marked at executable prices).
 func entryCaption(rec *spreadRecord, plan *spreadPlan) string {
 	credit := plan.NetCredit
-	kind := "кредит"
+	kind := "Кредит"
 	if credit < 0 {
-		kind = "дебет"
+		kind = "Дебет"
 		credit = -credit
 	}
 	name := rec.DisplayName
@@ -393,16 +442,15 @@ func entryCaption(rec *spreadRecord, plan *spreadPlan) string {
 		name = plan.DisplayName
 	}
 	var sb strings.Builder
-	sb.WriteString("🟢 <b>Автовход Ядро</b>: ")
-	sb.WriteString(telegramEscape(name))
-	sb.WriteString(" · ")
-	sb.WriteString(telegramEscape(plan.Symbol))
-	sb.WriteString("\n")
-	sb.WriteString(fmt.Sprintf("эксп. %s (DTE %d)\n", telegramEscape(plan.Expiry), plan.DaysToExp))
-	sb.WriteString(fmt.Sprintf("вход-спот %.0f · короткая %.0f / длинная %.0f\n", plan.Spot, plan.ShortStrike, plan.LongStrike))
-	sb.WriteString(fmt.Sprintf("%s %0.2f ₽\n", kind, credit))
-	sb.WriteString(fmt.Sprintf("макс. прибыль %0.0f / макс. убыток %0.0f ₽\n", plan.MaxProfit, plan.MaxLoss))
-	sb.WriteString(fmt.Sprintf("управление: авто-ролл DTE≤%d · стоп %0.0f%% · TPR %0.0f%%", rec.AutoRollDTE, rec.StopLossPct*100, rec.ProfitTargetPct*100))
+	sb.WriteString("🟢 <b>Автовход Ядро</b>\n")
+	sb.WriteString("<b>" + telegramEscape(name) + " · " + telegramEscape(plan.Symbol) + "</b>\n")
+	sb.WriteString(fmt.Sprintf("📅 Экспирация: %s (DTE %d)\n", telegramEscape(plan.Expiry), plan.DaysToExp))
+	sb.WriteString(fmt.Sprintf("📍 Вход-спот: %s\n", formatRub(plan.Spot, 0)))
+	sb.WriteString(fmt.Sprintf("📉 Шорт: %s / Лонг: %s\n", formatRub(plan.ShortStrike, 0), formatRub(plan.LongStrike, 0)))
+	sb.WriteString(fmt.Sprintf("💰 %s: %s ₽\n", kind, formatRub(credit, 2)))
+	sb.WriteString(fmt.Sprintf("📈 Макс. прибыль: %s ₽\n", formatRub(plan.MaxProfit, 0)))
+	sb.WriteString(fmt.Sprintf("📉 Макс. убыток: %s ₽\n", formatRub(plan.MaxLoss, 0)))
+	sb.WriteString(fmt.Sprintf("⚙️ Управление: авторолл при DTE≤%d · стоп %0.0f%% · цель %0.0f%%", rec.AutoRollDTE, rec.StopLossPct*100, rec.ProfitTargetPct*100))
 	return sb.String()
 }
 
@@ -463,7 +511,7 @@ func notifyCandidateSpread(c *coreCandidate) {
 	}
 
 	pts := candidatePayoff(plan)
-	img, err := drawPayoffChart(pts, plan.Spot, plan.ShortStrike, plan.LongStrike)
+	img, err := drawPayoffChart(chartTitle(c.Symbol, c.DisplayName, c.Expiry), pts, plan.Spot, plan.ShortStrike, plan.LongStrike)
 	if err != nil || len(img) == 0 {
 		sendCandidateText(c)
 		return
@@ -476,26 +524,24 @@ func notifyCandidateSpread(c *coreCandidate) {
 // candidateCaption formats a rich HTML caption with every candidate parameter.
 func candidateCaption(c *coreCandidate, plan *spreadPlan) string {
 	credit := c.NetCredit
-	kind := "кредит"
+	kind := "Кредит"
 	if credit < 0 {
-		kind = "дебет"
+		kind = "Дебет"
 		credit = -credit
 	}
 	var sb strings.Builder
-	sb.WriteString("🎯 <b>Найдено Ядром</b>: ")
-	sb.WriteString(telegramEscape(c.DisplayName))
-	sb.WriteString(" · ")
-	sb.WriteString(telegramEscape(c.Symbol))
-	sb.WriteString("\n")
-	sb.WriteString(fmt.Sprintf("эксп. %s (DTE %d)\n", telegramEscape(c.Expiry), c.DTE))
-	sb.WriteString(fmt.Sprintf("спот %.0f · короткая %.0f / длинная %.0f\n", plan.Spot, c.ShortStrike, c.LongStrike))
-	sb.WriteString(fmt.Sprintf("%s %0.2f ₽\n", kind, credit))
-	sb.WriteString(fmt.Sprintf("макс. прибыль %0.0f / макс. убыток %0.0f ₽\n", c.MaxProfit, c.MaxLoss))
-	sb.WriteString(fmt.Sprintf("шанс прибыли %d%%\n", c.PopProb))
-	sb.WriteString(fmt.Sprintf("оценка %d/100", c.Score))
-	if len(c.Reasons) > 0 {
-		sb.WriteString("\n· ")
-		sb.WriteString(telegramEscape(strings.Join(c.Reasons, " · ")))
+	sb.WriteString("🎯 <b>Найдено Ядром</b>\n")
+	sb.WriteString("<b>" + telegramEscape(c.DisplayName) + " · " + telegramEscape(c.Symbol) + "</b>\n")
+	sb.WriteString(fmt.Sprintf("📅 Экспирация: %s (DTE %d)\n", telegramEscape(c.Expiry), c.DTE))
+	sb.WriteString(fmt.Sprintf("📍 Спот: %s\n", formatRub(plan.Spot, 0)))
+	sb.WriteString(fmt.Sprintf("📉 Шорт: %s / Лонг: %s\n", formatRub(c.ShortStrike, 0), formatRub(c.LongStrike, 0)))
+	sb.WriteString(fmt.Sprintf("💰 %s: %s ₽\n", kind, formatRub(credit, 2)))
+	sb.WriteString(fmt.Sprintf("📈 Макс. прибыль: %s ₽\n", formatRub(c.MaxProfit, 0)))
+	sb.WriteString(fmt.Sprintf("📉 Макс. убыток: %s ₽\n", formatRub(c.MaxLoss, 0)))
+	sb.WriteString(fmt.Sprintf("🎲 Шанс прибыли: %d%%\n", c.PopProb))
+	sb.WriteString(fmt.Sprintf("⭐ Оценка: %d/100", c.Score))
+	if bullets := captionBullets(c.Reasons); bullets != "" {
+		sb.WriteString("\n📝 Причины:\n" + bullets)
 	}
 	return sb.String()
 }
