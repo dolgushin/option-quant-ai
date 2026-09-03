@@ -1,5 +1,5 @@
 module option-quant-ai
 
-go 1.25.0
+go 1.22
 
-require golang.org/x/image v0.45.0 // indirect
+require golang.org/x/image v0.14.0
