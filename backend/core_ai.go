@@ -489,16 +489,18 @@ func markCandidateNotified(key string) {
 // caption with every parameter of the found candidate. Deduped: a construction
 // already pushed is not resent (the scan may find the same one on every pass).
 // The dedup key is recorded only after a successful send, so a failed push is
-// retried on the next scan instead of being silently lost.
-func notifyCandidateSpread(c *coreCandidate) {
+// retried on the next scan instead of being silently lost. Reports whether a
+// fresh alert actually went out (false = suppressed duplicate, failure, or no
+// Telegram config).
+func notifyCandidateSpread(c *coreCandidate) bool {
 	if c == nil {
-		return
+		return false
 	}
 	telegramMu.RLock()
 	configured := telegramToken != "" && telegramChatID != ""
 	telegramMu.RUnlock()
 	if !configured {
-		return
+		return false
 	}
 
 	key := candidateDedupKey(c)
@@ -507,29 +509,28 @@ func notifyCandidateSpread(c *coreCandidate) {
 		dup := key == lastCandidateKey
 		lastCandidateKeyMu.Unlock()
 		if dup {
-			return
+			return false
 		}
 	}
 
 	plan, err := buildVerticalSpread(c.Symbol, c.Strategy, c.Expiry, 1)
 	if err != nil {
 		// Falls back to a text-only alert if the plan cannot be rebuilt.
-		sendCandidateText(c, key)
-		return
+		return sendCandidateText(c, key)
 	}
 
 	pts := candidatePayoff(plan)
 	img, err := drawPayoffChart(chartTitle(c.Symbol, c.DisplayName, c.Expiry), pts, plan.Spot, plan.ShortStrike, plan.LongStrike)
 	if err != nil || len(img) == 0 {
-		sendCandidateText(c, key)
-		return
+		return sendCandidateText(c, key)
 	}
 
 	caption := candidateCaption(c, plan)
 	if err := sendTelegramPhoto(caption, img); err != nil {
-		return
+		return false
 	}
 	markCandidateNotified(key)
+	return true
 }
 
 // candidateCaption formats a rich HTML caption with every candidate parameter.
@@ -558,15 +559,30 @@ func candidateCaption(c *coreCandidate, plan *spreadPlan) string {
 }
 
 // sendCandidateText is a fallback when the chart cannot be rendered.
-func sendCandidateText(c *coreCandidate, key string) {
+func sendCandidateText(c *coreCandidate, key string) bool {
 	plan, err := buildVerticalSpread(c.Symbol, c.Strategy, c.Expiry, 1)
 	if err != nil {
-		return
+		return false
 	}
 	if err := sendTelegramMessage(candidateCaption(c, plan)); err != nil {
-		return
+		return false
 	}
 	markCandidateNotified(key)
+	return true
+}
+
+// scanVerdictNeedsText decides whether the generic scan line adds anything
+// over the candidate chart: skip it when the chart was just pushed and there
+// is no AI trade signal to report. Paper opens already have their dedicated
+// entry message, so they never need the generic line either.
+func scanVerdictNeedsText(pushed bool, v *coreVerdict) bool {
+	if v == nil || v.PaperOpen != "" {
+		return false
+	}
+	if pushed && (v.AI == nil || !v.AI.Trade) {
+		return false
+	}
+	return true
 }
 func coreAutoScanLoop() {
 	for {
@@ -581,8 +597,9 @@ func coreAutoScanLoop() {
 		if v, err := runCoreAnalysis(false); err == nil {
 			// Push a chart of the top found construction (deduped) so the
 			// trader sees what the scan actually found, not just a score line.
+			pushed := false
 			if v.QuantTop != nil {
-				notifyCandidateSpread(v.QuantTop)
+				pushed = notifyCandidateSpread(v.QuantTop)
 			}
 			txt := fmt.Sprintf("🧠 Ядро: вердикт %s", v.Mode)
 			if v.QuantTop != nil {
@@ -591,10 +608,9 @@ func coreAutoScanLoop() {
 			if v.AI != nil && v.AI.Trade {
 				txt += " | ИИ: ВХОД"
 			}
-			// A paper auto-entry already pushed its dedicated 🟢 message — skip
-			// the generic verdict to avoid a duplicate. Otherwise keep the
-			// scan verdict so non-entry scans still produce useful telemetry.
-			if v.PaperOpen == "" {
+			// Skip the generic line when it would only repeat the chart that
+			// just went out (paper entries have their own 🟢 message anyway).
+			if scanVerdictNeedsText(pushed, v) {
 				_ = sendTelegramMessage(txt)
 			}
 		}
