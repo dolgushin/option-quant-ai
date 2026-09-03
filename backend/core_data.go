@@ -140,12 +140,17 @@ func computeATR14(closes []float64, period int) float64 {
 //
 // For a debit spread (netCredit <= 0) the rule is analogous with the signs flipped.
 // The function returns the proportion of simulations where profit > 0.
+// mcSeed pins the Monte-Carlo RNG so PoP — and therefore the candidate score
+// and ranking — is reproducible scan after scan. A fixed stream is fine: each
+// call gets a fresh RNG, and different inputs still yield different PoPs.
+const mcSeed = 42
+
 func monteCarloPop(netCredit, maxLoss, spot, ivAnnual, shortStrike, longStrike float64, dte int, simulations int) int {
 	if dte <= 0 || simulations <= 0 {
 		return 0
 	}
 	T := float64(dte) / 365.0
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	rng := rand.New(rand.NewSource(mcSeed))
 	profitable := 0
 	for i := 0; i < simulations; i++ {
 		// generate standard normal

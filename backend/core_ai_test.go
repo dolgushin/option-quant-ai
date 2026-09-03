@@ -118,6 +118,23 @@ func TestInAiQuietHoursBoundaries(t *testing.T) {
 	}
 }
 
+// TestMonteCarloPopDeterministic pins the fixed-seed contract: identical
+// inputs must give identical PoP on every call and every process start.
+func TestMonteCarloPopDeterministic(t *testing.T) {
+	a := monteCarloPop(100, 400, 85000, 0.30, 86000, 87000, 20, 2000)
+	b := monteCarloPop(100, 400, 85000, 0.30, 86000, 87000, 20, 2000)
+	if a != b {
+		t.Fatalf("PoP not deterministic: %d vs %d", a, b)
+	}
+	if a < 0 || a > 100 {
+		t.Fatalf("PoP = %d out of 0..100", a)
+	}
+	c := monteCarloPop(100, 400, 60000, 0.30, 86000, 87000, 20, 2000)
+	if c == a {
+		t.Fatalf("different inputs must give different PoP, both %d", a)
+	}
+}
+
 func TestPopScoreAdjustBands(t *testing.T) {
 	cases := []struct {
 		pop     int
