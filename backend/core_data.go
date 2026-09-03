@@ -5,6 +5,7 @@ package main
 // generates ranked trade candidates filtered by the KNOWLEDGE.md rules.
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"sort"
@@ -133,9 +134,9 @@ func computeATR14(closes []float64, period int) float64 {
 // model with zero drift, annualised volatility = iv, and dte days to expiration.
 // For a credit spread (netCredit > 0) the payoff is:
 //
-//   profit = netCredit   if finalSpot <= shortStrike
-//            netCredit - (finalSpot - shortStrike)   if finalSpot > shortStrike && finalSpot <= longStrike
-//            -maxLoss   if finalSpot > longStrike
+//	profit = netCredit   if finalSpot <= shortStrike
+//	         netCredit - (finalSpot - shortStrike)   if finalSpot > shortStrike && finalSpot <= longStrike
+//	         -maxLoss   if finalSpot > longStrike
 //
 // For a debit spread (netCredit <= 0) the rule is analogous with the signs flipped.
 // The function returns the proportion of simulations where profit > 0.
@@ -181,6 +182,25 @@ func monteCarloPop(netCredit, maxLoss, spot, ivAnnual, shortStrike, longStrike f
 		}
 	}
 	return profitable * 100 / simulations // return percent
+}
+
+// popScoreAdjust converts a Monte-Carlo PoP (0–100) into a score adjustment
+// around the neutral 50%: high chance of profit adds up to +8, low chance
+// subtracts up to −8. It also returns a reason line for the visible bands
+// (empty for the neutral 40–54 zone). Pure — covered by unit tests.
+func popScoreAdjust(pop int) (int, string) {
+	switch {
+	case pop >= 70:
+		return 8, fmt.Sprintf("Шанс прибыли %d%% — высокий", pop)
+	case pop >= 55:
+		return 4, ""
+	case pop >= 40:
+		return 0, ""
+	case pop >= 30:
+		return -4, ""
+	default:
+		return -8, fmt.Sprintf("✗ Шанс прибыли %d%% — низкий", pop)
+	}
 }
 
 // collectCoreInstrument builds the market brief for one instrument.
@@ -547,15 +567,28 @@ func candidateFromPlan(plan *spreadPlan, in coreInstrument) coreCandidate {
 	}
 	// Monte Carlo probability of profit (PoP).
 	var pop int
-	if plan.DaysToExp > 0 && plan.NetCredit != 0 {
+	popComputed := plan.DaysToExp > 0 && plan.NetCredit != 0
+	if popComputed {
 		ivAnnual := in.IVATM / 100.0 // IVATM is already a percent; convert to fraction
 		if ivAnnual <= 0 {
 			ivAnnual = in.HV20 / 100.0
 		}
 		pop = monteCarloPop(plan.NetCredit, plan.MaxLoss, in.Spot, ivAnnual,
 			plan.ShortStrike, plan.LongStrike, plan.DaysToExp, 2000)
-	} else {
-		pop = 0
+	}
+	// PoP weight: the Monte-Carlo chance of profit nudges the score around
+	// the neutral 50% (±8 points). High PoP is listed in the reasons, low
+	// PoP is flagged — so the number shown in the table actually moves the
+	// ranking instead of being decoration.
+	if popComputed {
+		adj, line := popScoreAdjust(pop)
+		total += adj
+		if line != "" {
+			reasons = append(reasons, line)
+		}
+		if total < 0 {
+			total = 0
+		}
 	}
 	// Dynamic stop / take‑profit based on ATR14 and Monte‑Carlo PoP.
 	stopPrice := 0.0

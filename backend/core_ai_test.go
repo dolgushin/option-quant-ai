@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -114,5 +115,79 @@ func TestInAiQuietHoursBoundaries(t *testing.T) {
 	}
 	if inAiQuietHours(21) {
 		t.Error("21:59 должен быть рабочим часом")
+	}
+}
+
+func TestPopScoreAdjustBands(t *testing.T) {
+	cases := []struct {
+		pop     int
+		adj     int
+		hasLine bool
+	}{
+		{100, 8, true},
+		{70, 8, true},
+		{69, 4, false},
+		{55, 4, false},
+		{54, 0, false},
+		{40, 0, false},
+		{39, -4, false},
+		{30, -4, false},
+		{29, -8, true},
+		{0, -8, true},
+	}
+	for _, tc := range cases {
+		adj, line := popScoreAdjust(tc.pop)
+		if adj != tc.adj {
+			t.Fatalf("popScoreAdjust(%d) adj = %d, want %d", tc.pop, adj, tc.adj)
+		}
+		if (line != "") != tc.hasLine {
+			t.Fatalf("popScoreAdjust(%d) line %q, want line=%v", tc.pop, line, tc.hasLine)
+		}
+	}
+}
+
+// TestCandidatePopWeightMovesScore builds the same credit plan twice with only
+// the entry spot moved to opposite extremes: Monte-Carlo PoP lands at ~100 vs
+// ~0, so the scores must differ by exactly the +8/−8 band swing. The extremes
+// sit ~5σ out, so the MC outcome is practically deterministic.
+func TestCandidatePopWeightMovesScore(t *testing.T) {
+	plan := &spreadPlan{
+		Symbol: "Si", Type: "bull_put", DisplayName: "Bull Put Spread",
+		Expiry: "2026-09-24", DaysToExp: 20, Spot: 60000,
+		ShortStrike: 86000, LongStrike: 87000, WingWidth: 1000,
+		NetCredit: 100, MaxProfit: 100, MaxLoss: 400, Qty: 1,
+	}
+	in := coreInstrument{
+		Symbol: "Si", Spot: 60000, Regime: "BULLISH", Strength: "rising",
+		IVATM: 30, HV20: 25, ATR14: 0, LiquidityPct: 5,
+	}
+	hi := candidateFromPlan(plan, in)
+	if hi.PopProb < 70 {
+		t.Fatalf("high-pop setup PopProb = %d, want >= 70", hi.PopProb)
+	}
+	in.Spot = 120000
+	lo := candidateFromPlan(plan, in)
+	if lo.PopProb >= 30 {
+		t.Fatalf("low-pop setup PopProb = %d, want < 30", lo.PopProb)
+	}
+	if d := hi.Score - lo.Score; d != 16 {
+		t.Fatalf("score swing = %d, want 16 (+8 vs −8)", d)
+	}
+	foundHi, foundLo := false, false
+	for _, r := range hi.Reasons {
+		if strings.Contains(r, "высокий") {
+			foundHi = true
+		}
+	}
+	for _, r := range lo.Reasons {
+		if strings.Contains(r, "низкий") {
+			foundLo = true
+		}
+	}
+	if !foundHi {
+		t.Fatalf("high-pop reasons missing PoP line: %v", hi.Reasons)
+	}
+	if !foundLo {
+		t.Fatalf("low-pop reasons missing PoP flag: %v", lo.Reasons)
 	}
 }
