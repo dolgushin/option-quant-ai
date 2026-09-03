@@ -123,6 +123,22 @@ func TestPlanEconomicsSane(t *testing.T) {
 	if planEconomicsSane(debitBad) {
 		t.Fatal("debit above wing width must be insane")
 	}
+	// Live artefact: negative "credit" on a credit spread (Si bull put
+	// quoted at −163.5 on a 500 wing — paying to enter).
+	negCredit := &spreadPlan{Symbol: "Si", Qty: 1, WingWidth: 500, NetCredit: -163.5}
+	if planEconomicsSane(negCredit) {
+		t.Fatal("negative credit on a credit spread must be insane")
+	}
+	// Zero credit is not a trade.
+	zeroCredit := &spreadPlan{Symbol: "Si", Qty: 1, WingWidth: 500, NetCredit: 0}
+	if planEconomicsSane(zeroCredit) {
+		t.Fatal("zero credit must be insane")
+	}
+	// Debit spread quoted at zero or positive net (getting paid to buy).
+	freeDebit := &spreadPlan{Symbol: "RI", Qty: 1, IsDebit: true, WingWidth: 2500, NetCredit: 0}
+	if planEconomicsSane(freeDebit) {
+		t.Fatal("non-negative net on a debit spread must be insane")
+	}
 	if planEconomicsSane(nil) {
 		t.Fatal("nil plan must be insane")
 	}
