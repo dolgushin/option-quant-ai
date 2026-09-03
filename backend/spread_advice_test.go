@@ -49,6 +49,24 @@ func TestScoreStrongCreditBullSetup(t *testing.T) {
 	}
 }
 
+func TestScoreNegativeCreditIsBad(t *testing.T) {
+	// Live artefact: bull_put quoted at −163.5 "credit" must fail loudly,
+	// not hide behind "not enough data".
+	in := adviceTestBase()
+	in.CreditPerShare = -163.5
+	in.Width = 500
+	adv := runFullScoring(in)
+	for _, c := range adv.Checks {
+		if c.ID == "quality" {
+			if c.Status != "bad" {
+				t.Fatalf("quality status = %q, want bad: %s", c.Status, c.Detail)
+			}
+			return
+		}
+	}
+	t.Fatal("quality check missing")
+}
+
 func TestScoreWeakDebitAgainstTrend(t *testing.T) {
 	in := adviceInputs{
 		spreadType: "bull_call", IsDebit: true,

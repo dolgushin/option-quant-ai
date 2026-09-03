@@ -227,6 +227,10 @@ func scoreSpreadAdvice(in adviceInputs) *spreadAdvice {
 
 	// 4) Credit/debit quality (KNOWLEDGE.md §1.1).
 	switch {
+	case !in.IsDebit && in.Width > 0 && in.CreditPerShare <= 0:
+		add("quality", "Экономика структуры", "bad", fmt.Sprintf("Кредит %0.2f — за вход в кредитный спред платить нельзя, метки ног битые", in.CreditPerShare), 2, 20)
+	case in.IsDebit && in.Width > 0 && in.CreditPerShare >= 0:
+		add("quality", "Экономика структуры", "bad", "За покупку дебетного спреда вам платят — метки ног битые", 2, 20)
 	case in.CreditPerShare > 0 && in.Width > 0 && !in.IsDebit:
 		q := in.CreditPerShare / in.Width * 100
 		switch {
