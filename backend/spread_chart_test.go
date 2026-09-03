@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"image/png"
+	"os"
 	"strings"
 	"testing"
 )
@@ -150,4 +152,66 @@ func TestEntryCaption(t *testing.T) {
 			t.Fatalf("entry caption missing %q:\n%s", want, caption)
 		}
 	}
+}
+
+// TestLastNotifiedKeyPersistence verifies the scan dedup key survives a
+// restart via core_state.json, so the same construction is not resent.
+func TestLastNotifiedKeyPersistence(t *testing.T) {
+	dir := t.TempDir()
+
+	coreMu.Lock()
+	prevFile := coreFile
+	prevVerdicts := coreVerdictLog
+	coreFile = dir + "/core_state.json"
+	coreVerdictLog = nil
+	coreMu.Unlock()
+
+	lastCandidateKeyMu.Lock()
+	prevKey := lastCandidateKey
+	lastCandidateKey = "Si|bull_put|2026-09-17|86500|86000"
+	lastCandidateKeyMu.Unlock()
+
+	coreMu.Lock()
+	saveCoreStateLocked()
+	coreMu.Unlock()
+
+	data, err := os.ReadFile(dir + "/core_state.json")
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	var st struct {
+		LastNotifiedKey string `json:"last_notified_key"`
+	}
+	if err := json.Unmarshal(data, &st); err != nil {
+		t.Fatalf("unmarshal state: %v", err)
+	}
+	if st.LastNotifiedKey != "Si|bull_put|2026-09-17|86500|86000" {
+		t.Fatalf("persisted key = %q, want dedup key", st.LastNotifiedKey)
+	}
+
+	// Simulate a restart: clear the in-memory key, reload from disk.
+	lastCandidateKeyMu.Lock()
+	lastCandidateKey = ""
+	lastCandidateKeyMu.Unlock()
+	var st2 struct {
+		LastNotifiedKey string `json:"last_notified_key"`
+	}
+	if err := json.Unmarshal(data, &st2); err != nil {
+		t.Fatalf("unmarshal for reload: %v", err)
+	}
+	lastCandidateKeyMu.Lock()
+	lastCandidateKey = st2.LastNotifiedKey
+	got := lastCandidateKey
+	lastCandidateKeyMu.Unlock()
+	if got != "Si|bull_put|2026-09-17|86500|86000" {
+		t.Fatalf("reloaded key = %q, want dedup key", got)
+	}
+
+	coreMu.Lock()
+	coreFile = prevFile
+	coreVerdictLog = prevVerdicts
+	coreMu.Unlock()
+	lastCandidateKeyMu.Lock()
+	lastCandidateKey = prevKey
+	lastCandidateKeyMu.Unlock()
 }

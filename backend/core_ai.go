@@ -64,12 +64,18 @@ func initCore(dataDir string) {
 	coreFile = filepath.Join(dataDir, "core_state.json")
 	if b, err := os.ReadFile(coreFile); err == nil {
 		var st struct {
-			Settings coreAISettings `json:"settings"`
-			Verdicts []coreVerdict  `json:"verdicts"`
+			Settings        coreAISettings `json:"settings"`
+			Verdicts        []coreVerdict  `json:"verdicts"`
+			LastNotifiedKey string         `json:"last_notified_key"`
 		}
 		if json.Unmarshal(b, &st) == nil {
 			coreSet = st.Settings
 			coreVerdictLog = st.Verdicts
+			if st.LastNotifiedKey != "" {
+				lastCandidateKeyMu.Lock()
+				lastCandidateKey = st.LastNotifiedKey
+				lastCandidateKeyMu.Unlock()
+			}
 		}
 	}
 	// Устанавливаем значения по умолчанию, если они не загружены из файла
@@ -86,10 +92,14 @@ func saveCoreStateLocked() {
 	if coreFile == "" {
 		return
 	}
+	lastCandidateKeyMu.Lock()
+	notifiedKey := lastCandidateKey
+	lastCandidateKeyMu.Unlock()
 	b, _ := json.MarshalIndent(struct {
-		Settings coreAISettings `json:"settings"`
-		Verdicts []coreVerdict  `json:"verdicts"`
-	}{coreSet, coreVerdictLog}, "", "  ")
+		Settings        coreAISettings `json:"settings"`
+		Verdicts        []coreVerdict  `json:"verdicts"`
+		LastNotifiedKey string         `json:"last_notified_key"`
+	}{coreSet, coreVerdictLog, notifiedKey}, "", "  ")
 	_ = os.WriteFile(coreFile, b, 0600)
 }
 
@@ -437,6 +447,13 @@ func notifyCandidateSpread(c *coreCandidate) {
 		lastCandidateKey = key
 	}
 	lastCandidateKeyMu.Unlock()
+	if key != "" {
+		// Persist the dedup key so a server restart does not resend the
+		// same construction on the next scan.
+		coreMu.Lock()
+		saveCoreStateLocked()
+		coreMu.Unlock()
+	}
 
 	plan, err := buildVerticalSpread(c.Symbol, c.Strategy, c.Expiry, 1)
 	if err != nil {
