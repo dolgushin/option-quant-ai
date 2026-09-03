@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"net/url"
@@ -301,7 +302,15 @@ func notifyStructureClosed(s *spreadRecord, reason string, realized, pnlPct floa
 		telegramEscape(name), telegramEscape(s.Symbol), telegramEscape(s.Expiry),
 		reason,
 		pnlSigned(realized), pnlSign(pnlPct), math.Abs(pnlPct), days)
-	_ = sendTelegramMessage(txt)
+	logTelegramErr("structure-closed", sendTelegramMessage(txt))
+}
+
+// logTelegramErr records a failed Telegram push in the server log so silent
+// delivery failures can be told apart from dedup suppression via docker logs.
+func logTelegramErr(what string, err error) {
+	if err != nil {
+		log.Printf("telegram: %s failed: %v", what, err)
+	}
 }
 
 func pnlSign(v float64) string {

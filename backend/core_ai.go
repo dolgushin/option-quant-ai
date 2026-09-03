@@ -378,10 +378,10 @@ func notifyStructureEntry(rec *spreadRecord, plan *spreadPlan) {
 	}
 	img, err := drawPayoffChart(chartTitle(plan.Symbol, name, plan.Expiry), pts, plan.Spot, plan.ShortStrike, plan.LongStrike)
 	if err != nil || len(img) == 0 {
-		_ = sendTelegramMessage(entryCaption(rec, plan))
+		logTelegramErr("auto-entry-text", sendTelegramMessage(entryCaption(rec, plan)))
 		return
 	}
-	_ = sendTelegramPhoto(entryCaption(rec, plan), img)
+	logTelegramErr("auto-entry-photo", sendTelegramPhoto(entryCaption(rec, plan), img))
 }
 
 // formatRub renders a ruble amount with space grouping: 86184 -> "86 184",
@@ -527,6 +527,7 @@ func notifyCandidateSpread(c *coreCandidate) bool {
 
 	caption := candidateCaption(c, plan)
 	if err := sendTelegramPhoto(caption, img); err != nil {
+		logTelegramErr("candidate-photo", err)
 		return false
 	}
 	markCandidateNotified(key)
@@ -565,6 +566,7 @@ func sendCandidateText(c *coreCandidate, key string) bool {
 		return false
 	}
 	if err := sendTelegramMessage(candidateCaption(c, plan)); err != nil {
+		logTelegramErr("candidate-text", err)
 		return false
 	}
 	markCandidateNotified(key)
@@ -611,7 +613,7 @@ func coreAutoScanLoop() {
 			// Skip the generic line when it would only repeat the chart that
 			// just went out (paper entries have their own 🟢 message anyway).
 			if scanVerdictNeedsText(pushed, v) {
-				_ = sendTelegramMessage(txt)
+				logTelegramErr("scan-verdict", sendTelegramMessage(txt))
 			}
 		}
 		time.Sleep(interval)
