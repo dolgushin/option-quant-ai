@@ -1,7 +1,7 @@
 package main
 
 // Depth-of-market for every option leg of an open spread. The profile view
-// shows two full exchange order books (5 bids + 5 asks each) side by side,
+// shows each leg as a compact vertical book (asks on top, bids below),
 // sourced live from Alor so the trader sees real resting liquidity before
 // rolling / closing / hedging.
 

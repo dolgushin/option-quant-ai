@@ -2715,7 +2715,8 @@
         }
 
         // Fetch and render the live Alor order books (5 levels) for every option
-        // leg of the spread, side by side under the legs table.
+        // leg as a compact vertical book: asks on top (worst first), spread
+        // row, bids below (best first).
         async function loadSpreadDepth(id) {
             const el = document.getElementById(`spr-depth-${id}`);
             if (!el) return;
@@ -2727,25 +2728,38 @@
                 if (d.note) { el.innerHTML = `<span class="text-amber-400">⚠ ${d.note}</span>`; return; }
                 if (!d.legs || !d.legs.length) { el.innerHTML = '<span class="text-slate-500">Нет ног-опционов для стакана.</span>'; return; }
                 const fmt = v => Math.round(v).toLocaleString('ru-RU');
-                let html = '<div class="grid grid-cols-1 md:grid-cols-2 gap-2">';
+                const row = (lv, cls, bold) => `<tr class="border-b border-slate-800/60">
+                    <td class="py-0.5 pr-3 text-right ${cls}${bold ? ' font-bold' : ''}">${lv ? fmt(lv.price) : '·'}</td>
+                    <td class="py-0.5 text-right text-slate-400">${lv ? lv.volume : ''}</td></tr>`;
+                let html = '<div class="grid grid-cols-1 md:grid-cols-2 gap-2 justify-items-start items-start">';
                 d.legs.forEach(lg => {
                     const sideCls = lg.side === 'SELL' ? 'text-rose-300' : 'text-emerald-300';
-                    html += `<div class="bg-slate-800/60 rounded border border-slate-700 p-2">
-                        <div class="text-[10px] font-mono ${sideCls} mb-1">${lg.side} ${lg.secid}</div>
-                        <table class="w-full text-left text-[10px] font-mono text-slate-300">
-                            <thead class="text-slate-500 uppercase">
-                                <tr><th class="py-0.5 pr-2">Бид</th><th class="py-0.5 pr-2 text-right">Объём</th><th class="py-0.5 pr-2">Аск</th><th class="py-0.5 text-right">Объём</th></tr>
-                            </thead><tbody>`;
-                    for (let i = 0; i < 5; i++) {
-                        const b = lg.bids[i];
-                        const a = lg.asks[i];
-                        html += `<tr class="border-b border-slate-800/60">
-                            <td class="py-0.5 pr-2 text-emerald-400">${b ? fmt(b.price) : '·'}</td>
-                            <td class="py-0.5 pr-2 text-right text-slate-400">${b ? b.volume : ''}</td>
-                            <td class="py-0.5 pr-2 text-rose-400">${a ? fmt(a.price) : '·'}</td>
-                            <td class="py-0.5 text-right text-slate-400">${a ? a.volume : ''}</td>
-                        </tr>`;
+                    const bids = (lg.bids || []).slice(0, 5);
+                    const asks = (lg.asks || []).slice(0, 5);
+                    const bestB = bids[0], bestA = asks[0];
+                    let spreadRow = '';
+                    if (bestB && bestA && bestA.price >= bestB.price) {
+                        const spr = bestA.price - bestB.price;
+                        const mid = (bestA.price + bestB.price) / 2;
+                        const pct = mid > 0 ? (spr / mid * 100).toFixed(1) : '—';
+                        spreadRow = `<tr class="border-y border-slate-600">
+                            <td colspan="2" class="py-0.5 text-center text-slate-400">↕ ${fmt(spr)} (${pct}%)</td></tr>`;
                     }
+                    html += `<div class="bg-slate-800/60 rounded border border-slate-700 p-2 w-auto max-w-full overflow-x-auto">
+                        <div class="text-[10px] font-mono ${sideCls} mb-1 whitespace-nowrap">${lg.side} ${lg.secid}</div>
+                        <table class="text-[10px] font-mono text-slate-300 whitespace-nowrap">
+                            <thead class="text-slate-500 uppercase">
+                                <tr><th class="py-0.5 pr-3 text-right">Цена, ₽</th><th class="py-0.5 text-right">Объём</th></tr>
+                            </thead><tbody>`;
+                    // Asks on top, worst first, best ask last (adjacent to spread).
+                    asks.slice().reverse().forEach((a, ri) => {
+                        html += row(a, 'text-rose-400', ri === asks.length - 1);
+                    });
+                    html += spreadRow;
+                    // Bids below, best first (adjacent to spread).
+                    bids.forEach((b, i) => {
+                        html += row(b, 'text-emerald-400', i === 0);
+                    });
                     html += '</tbody></table></div>';
                 });
                 html += '</div>';
