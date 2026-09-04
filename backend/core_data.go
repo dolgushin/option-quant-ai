@@ -150,36 +150,51 @@ func monteCarloPop(netCredit, maxLoss, spot, ivAnnual, shortStrike, longStrike f
 		return 0
 	}
 	T := float64(dte) / 365.0
+	vol := ivAnnual * math.Sqrt(T)
 	rng := rand.New(rand.NewSource(mcSeed))
+	// Vertical-spread P&L at expiry from aggregates only. Orientation comes
+	// from the strikes: bull spreads (short above long) profit when the
+	// underlying ends HIGH, bear spreads (short below long) when it ends
+	// LOW. K_hi/K_lo bracket the slope zone; outside it the position pays
+	// the capped max profit or max loss.
+	kHi := math.Max(shortStrike, longStrike)
+	kLo := math.Min(shortStrike, longStrike)
+	bull := shortStrike > longStrike
 	profitable := 0
 	for i := 0; i < simulations; i++ {
-		// generate standard normal
-		z := rng.NormFloat64()
 		// terminal price under GBM with zero drift
-		finalSpot := spot * math.Expm1(-0.5*ivAnnual*ivAnnual*T+ivAnnual*math.Sqrt(T)*z)
-		// actually Expm1 is e^x -1, we need e^x. Use math.Exp.
-		finalSpot = spot * math.Exp(-0.5*ivAnnual*ivAnnual*T+ivAnnual*math.Sqrt(T)*z)
-		profit := 0.0
+		z := rng.NormFloat64()
+		finalSpot := spot * math.Exp(-0.5*ivAnnual*ivAnnual*T+vol*z)
+		var profit float64
 		if netCredit > 0 {
-			// credit spread
-			if finalSpot <= shortStrike {
+			// Credit spread: capped upside is the credit itself.
+			switch {
+			case bull && finalSpot >= kHi:
 				profit = netCredit
-			} else if finalSpot <= longStrike {
-				profit = netCredit - (finalSpot - shortStrike)
-			} else {
+			case bull && finalSpot > kLo:
+				profit = netCredit - (kHi - finalSpot)
+			case !bull && finalSpot <= kLo:
+				profit = netCredit
+			case !bull && finalSpot < kHi:
+				profit = netCredit - (finalSpot - kLo)
+			default:
 				profit = -maxLoss
 			}
 		} else {
-			// debit spread
-			if finalSpot >= shortStrike {
-				profit = -netCredit // negative of debit = max loss? Actually debit spread profit = maxProfit = longStrike - shortStrike - netCredit. For simplicity we treat profit >0 if finalSpot near middle.
-				// We'll just use a simple rule: profit = netCredit + (shortStrike - finalSpot) if finalSpot < shortStrike else netCredit - (finalSpot - shortStrike)
-				// To keep it simple, skip detailed debit logic and just count if finalSpot between strikes.
-				if finalSpot >= shortStrike && finalSpot <= longStrike {
-					profit = -netCredit + (longStrike - shortStrike) // roughly max profit
-				} else {
-					profit = -maxLoss
-				}
+			// Debit spread: capped upside is wing minus the debit paid.
+			debit := -netCredit
+			maxProfit := (kHi - kLo) - debit
+			switch {
+			case bull && finalSpot >= kHi:
+				profit = maxProfit
+			case bull && finalSpot > kLo:
+				profit = maxProfit - (kHi - finalSpot)
+			case !bull && finalSpot <= kLo:
+				profit = maxProfit
+			case !bull && finalSpot < kHi:
+				profit = maxProfit - (finalSpot - kLo)
+			default:
+				profit = -debit
 			}
 		}
 		if profit > 0 {

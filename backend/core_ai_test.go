@@ -137,6 +137,25 @@ func TestMonteCarloPopDeterministic(t *testing.T) {
 	}
 }
 
+// TestMonteCarloPopOrientation pins direction-aware payoffs: a bull spread
+// with spot above its strikes must show high PoP (the old code scored the
+// upside as max loss), and a bear debit spread with spot below must too
+// (the old code gated profit on final >= short and paid wing+debit).
+func TestMonteCarloPopOrientation(t *testing.T) {
+	bull := monteCarloPop(100, 400, 90000, 0.30, 86000, 85000, 20, 2000)
+	if bull < 55 {
+		t.Fatalf("bull_put upside PoP = %d, want > 55", bull)
+	}
+	bearDebit := monteCarloPop(-100, 100, 81000, 0.30, 85000, 86000, 20, 2000)
+	if bearDebit < 55 {
+		t.Fatalf("bear_put downside PoP = %d, want > 55", bearDebit)
+	}
+	bearDown := monteCarloPop(100, 400, 81000, 0.30, 85000, 86000, 20, 2000)
+	if bearDown < 55 {
+		t.Fatalf("bear_call downside PoP = %d, want > 55", bearDown)
+	}
+}
+
 func TestPopScoreAdjustBands(t *testing.T) {
 	cases := []struct {
 		pop     int
