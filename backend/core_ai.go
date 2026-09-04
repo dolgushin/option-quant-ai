@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"net/http"
 	"os"
@@ -596,7 +597,9 @@ func coreAutoScanLoop() {
 			time.Sleep(30 * time.Second)
 			continue
 		}
-		if v, err := runCoreAnalysis(false); err == nil {
+		if v, err := runCoreAnalysis(false); err != nil {
+			log.Printf("core: auto-scan failed: %v", err)
+		} else {
 			// Push a chart of the top found construction (deduped) so the
 			// trader sees what the scan actually found, not just a score line.
 			pushed := false
