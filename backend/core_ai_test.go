@@ -263,6 +263,25 @@ func TestScanVerdictNeedsText(t *testing.T) {
 	}
 }
 
+// TestCountPricedInstruments pins the scan-blind detector: an empty or
+// unpriced brief must report zero.
+func TestCountPricedInstruments(t *testing.T) {
+	if got := countPricedInstruments(nil); got != 0 {
+		t.Fatalf("nil brief = %d, want 0", got)
+	}
+	if got := countPricedInstruments(&coreBrief{}); got != 0 {
+		t.Fatalf("empty brief = %d, want 0", got)
+	}
+	b := &coreBrief{Instruments: []coreInstrument{
+		{Symbol: "Si", Spot: 86258},
+		{Symbol: "RI"},
+		{Symbol: "CR", Spot: 12.872},
+	}}
+	if got := countPricedInstruments(b); got != 2 {
+		t.Fatalf("got %d, want 2", got)
+	}
+}
+
 // TestCandidatePopWeightMovesScore builds the same credit plan twice with only
 // the entry spot moved to opposite extremes: Monte-Carlo PoP lands at ~100 vs
 // ~0, so the scores must differ by exactly the +8/−8 band swing. The extremes

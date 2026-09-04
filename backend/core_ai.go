@@ -587,6 +587,21 @@ func scanVerdictNeedsText(pushed bool, v *coreVerdict) bool {
 	}
 	return true
 }
+
+// countPricedInstruments counts brief instruments with a live spot — zero
+// means the market-data fetch failed and the scan ran blind. Pure.
+func countPricedInstruments(b *coreBrief) int {
+	if b == nil {
+		return 0
+	}
+	n := 0
+	for _, in := range b.Instruments {
+		if in.Spot > 0 {
+			n++
+		}
+	}
+	return n
+}
 func coreAutoScanLoop() {
 	for {
 		coreMu.Lock()
@@ -600,6 +615,12 @@ func coreAutoScanLoop() {
 		if v, err := runCoreAnalysis(false); err != nil {
 			log.Printf("core: auto-scan failed: %v", err)
 		} else {
+			// runCoreAnalysis never returns an error today — the real
+			// outage signal is a brief with no priced instruments (MOEX
+			// unreachable): candidates are empty and Telegram stays silent.
+			if countPricedInstruments(v.Brief) == 0 {
+				log.Printf("core: auto-scan has no market data (MOEX unreachable?)")
+			}
 			// Push a chart of the top found construction (deduped) so the
 			// trader sees what the scan actually found, not just a score line.
 			pushed := false
