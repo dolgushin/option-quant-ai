@@ -48,6 +48,22 @@ var spreadTypes = map[string]struct {
 	},
 }
 
+// shortLegIsCall reports whether the spread type's short leg is a call
+// (bear_call, bull_call) or a put (bull_put, bear_put). Unknown types
+// report ok=false so callers can fall back to direction-blind behaviour.
+func shortLegIsCall(spreadType string) (isCall, ok bool) {
+	meta, found := spreadTypes[spreadType]
+	if !found {
+		return false, false
+	}
+	for _, sp := range meta.Specs {
+		if sp.isShort {
+			return sp.isCall, true
+		}
+	}
+	return false, false
+}
+
 // spreadLeg is a planned/executed leg of a vertical spread.
 type spreadLeg struct {
 	SecID       string  `json:"secid"`

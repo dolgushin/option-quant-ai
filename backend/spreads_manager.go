@@ -314,12 +314,26 @@ func decideSpreadAction(s spreadRecord, dte int, netDelta, pnl, spot, ivATM floa
 		return run
 	}
 
-	// 6) Short-strike proximity trigger.
-	if s.RollStrikeRiskPct > 0 && spotOK && s.ShortStrike > 0 {
-		dist := math.Abs(spot-s.ShortStrike) / s.ShortStrike
-		if dist <= s.RollStrikeRiskPct {
+	// 6) Short-strike proximity trigger (credit spreads only, threatening
+	// side). A short put is attacked from above (spot sinking onto it), a
+	// short call from below. Firing on the safe side just churns a winning
+	// position, and debit spreads never need it — short-leg ITM is their
+	// profit zone, owned by take-profit. Unknown types keep the legacy
+	// direction-blind distance check.
+	if s.RollStrikeRiskPct > 0 && spotOK && s.ShortStrike > 0 && !isDebitSpreadType(s.Type) {
+		pct := s.RollStrikeRiskPct
+		threatening := false
+		if isCall, ok := shortLegIsCall(s.Type); !ok {
+			threatening = math.Abs(spot-s.ShortStrike)/s.ShortStrike <= pct
+		} else if isCall {
+			threatening = spot >= s.ShortStrike*(1-pct)
+		} else {
+			threatening = spot <= s.ShortStrike*(1+pct)
+		}
+		if threatening {
+			dist := math.Abs(spot-s.ShortStrike) / s.ShortStrike
 			run.Action = "ROLL"
-			run.Detail = fmt.Sprintf("Цена %.2f подошла к стрику %.2f (дист. %.2f%%)", spot, s.ShortStrike, dist*100)
+			run.Detail = fmt.Sprintf("Цена %.2f угрожает короткому стрику %.2f (дист. %.2f%%)", spot, s.ShortStrike, dist*100)
 			return run
 		}
 	}

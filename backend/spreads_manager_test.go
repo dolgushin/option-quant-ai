@@ -43,6 +43,10 @@ func TestDecideSpreadActionPriority(t *testing.T) {
 		{"captured credit ignores debit spreads", withRules(base, func(r *spreadRecord) { r.RollCreditPct = 0.5; r.Type = "bull_call" }), 30, 0, 60, 0, false, "NONE"},
 		{"strike proximity trigger", withRules(base, func(r *spreadRecord) { r.RollStrikeRiskPct = 0.02 }), 30, 0, 0, 258, true, "ROLL"},
 		{"strike proximity needs spot", withRules(base, func(r *spreadRecord) { r.RollStrikeRiskPct = 0.02 }), 30, 0, 0, 258, false, "NONE"},
+		{"strike proximity safe side no roll", withRules(base, func(r *spreadRecord) { r.RollStrikeRiskPct = 0.02 }), 30, 0, 0, 270, true, "NONE"},
+		{"strike proximity bear_call from below", withRules(base, func(r *spreadRecord) { r.Type = "bear_call"; r.RollStrikeRiskPct = 0.02 }), 30, 0, 0, 259, true, "ROLL"},
+		{"strike proximity bear_call safe side", withRules(base, func(r *spreadRecord) { r.Type = "bear_call"; r.RollStrikeRiskPct = 0.02 }), 30, 0, 0, 240, true, "NONE"},
+		{"strike proximity ignores debit spreads", withRules(base, func(r *spreadRecord) { r.Type = "bull_call"; r.RollStrikeRiskPct = 0.02 }), 30, 0, 0, 260, true, "NONE"},
 		{"hedge trigger", withRules(base, func(r *spreadRecord) { r.AutoHedge = true; r.MaxHedgeDelta = 1 }), 30, 2.5, 0, 0, false, "HEDGE"},
 	}
 
