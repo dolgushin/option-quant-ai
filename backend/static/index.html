@@ -2526,6 +2526,33 @@
         }
 
         // Generic multi-line chart over a spot grid with optional vertical markers.
+        // Bright zero reference line (P&L = 0) across curve charts: the
+        // default grid hides it, so draw it explicitly with a "0" tag.
+        const zeroLinePlugin = {
+            id: 'zeroLine',
+            afterDraw(chart) {
+                const yScale = chart.scales.y;
+                if (!yScale) return;
+                const y0 = yScale.getPixelForValue(0);
+                const area = chart.chartArea;
+                if (y0 < area.top || y0 > area.bottom) return;
+                const ctx = chart.ctx;
+                ctx.save();
+                ctx.strokeStyle = '#e2e8f0';
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([6, 3]);
+                ctx.beginPath();
+                ctx.moveTo(area.left, y0);
+                ctx.lineTo(area.right, y0);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.fillStyle = '#e2e8f0';
+                ctx.font = '9px monospace';
+                ctx.fillText('0', area.left + 3, y0 - 4);
+                ctx.restore();
+            }
+        };
+
         function drawCurvesChart(canvasId, spots, series, markers) {
             const canvas = document.getElementById(canvasId);
             if (!canvas || typeof Chart === 'undefined' || !spots || !spots.length) return;
@@ -2557,6 +2584,7 @@
             profileCharts[canvasId] = new Chart(ctx, {
                 type: 'line',
                 data: { datasets },
+                plugins: [zeroLinePlugin],
                 options: {
                     animation: false,
                     scales: {
@@ -4046,6 +4074,7 @@
                             pointRadius: 0
                         }]
                     },
+                    plugins: [zeroLinePlugin],
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
