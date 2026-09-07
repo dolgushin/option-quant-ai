@@ -155,136 +155,6 @@
             </div>
         </div>
 
-        <!-- 2. Put-Call Parity Arbitrage Detector -->
-        <div id="arb-card" class="bg-slate-800/80 p-6 rounded-xl border border-slate-700 space-y-3">
-            <div class="flex justify-between items-center">
-                <h2 class="text-lg font-semibold text-slate-200">2. Put-Call Parity Arbitrage Detector (Conversion / Reversal)</h2>
-                <div class="flex items-center gap-3">
-                    <span id="arb-badge" class="px-3 py-1 text-xs font-bold rounded-md bg-slate-700 text-slate-300 font-mono">Scanning...</span>
-                    <button onclick="openParityStrategyModal()" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition">📊 View Profile & Trade</button>
-                </div>
-            </div>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 font-mono">
-                <div>
-                    <span class="text-xs text-slate-400">Theoretical Diff (S - K*e^-rT)</span>
-                    <p id="theoretical-diff" class="text-lg font-medium text-slate-200">₽0.00</p>
-                </div>
-                <div>
-                    <span class="text-xs text-slate-400">Actual Market Diff (C - P)</span>
-                    <p id="actual-diff" class="text-lg font-medium text-slate-200">₽0.00</p>
-                </div>
-                <div>
-                    <span class="text-xs text-slate-400">Spread / Expected Profit</span>
-                    <p id="arb-spread" class="text-lg font-bold text-emerald-400">₽0.00</p>
-                </div>
-            </div>
-            <div id="arb-strategy" class="mt-3 p-3 bg-slate-900/60 rounded-lg text-sm text-slate-300 font-mono">
-                Strategy: Analyzing market data...
-            </div>
-        </div>
-
-        <!-- 3. ATM Option Greeks & Ratio Spreads -->
-        <div class="bg-slate-800/60 p-6 rounded-xl border border-slate-700/50 space-y-4">
-            <h2 class="text-lg font-semibold text-slate-200">3. ATM Option Greeks & Delta-Neutral Matrix</h2>
-            <div class="grid grid-cols-2 md:grid-cols-5 gap-4 text-center font-mono">
-                <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
-                    <span class="text-xs text-slate-500 block">DELTA</span>
-                    <span id="greek-delta" class="text-lg font-bold text-indigo-400">0.00</span>
-                </div>
-                <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
-                    <span class="text-xs text-slate-500 block">GAMMA</span>
-                    <span id="greek-gamma" class="text-lg font-bold text-indigo-400">0.00</span>
-                </div>
-                <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
-                    <span class="text-xs text-slate-500 block">THETA (Day)</span>
-                    <span id="greek-theta" class="text-lg font-bold text-rose-400">₽0.00</span>
-                </div>
-                <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
-                    <span class="text-xs text-slate-500 block">VEGA</span>
-                    <span id="greek-vega" class="text-lg font-bold text-emerald-400">0.00</span>
-                </div>
-                <div class="p-3 bg-slate-900/40 rounded-lg border border-slate-800">
-                    <span class="text-xs text-slate-500 block">RHO</span>
-                    <span id="greek-rho" class="text-lg font-bold text-amber-400">0.00</span>
-                </div>
-            </div>
-        </div>
-
-
-
-        <!-- 3.5 Position Sizing -->
-        <div class="bg-slate-800/80 p-6 rounded-xl border border-slate-700 space-y-4">
-            <div class="flex justify-between items-center border-b border-slate-700 pb-3">
-                <h2 class="text-lg font-semibold text-slate-200">Position Sizing — риск-бюджет и размер позиции</h2>
-                <span class="px-3 py-1 text-xs font-bold rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-mono">Risk Budget</span>
-            </div>
-
-            <div class="flex flex-wrap items-end gap-3 font-mono">
-                <div>
-                    <label class="text-xs text-slate-400 block mb-1">Актив</label>
-                    <select id="sz-symbol" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm focus:outline-none focus:border-indigo-500">
-                        <option value="Si">Si — доллар</option>
-                        <option value="RI">RI — индекс РТС</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="text-xs text-slate-400 block mb-1">Стратегия</label>
-                    <select id="sz-strategy" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm focus:outline-none focus:border-indigo-500">
-                        <option value="iron_condor">Iron Condor</option>
-                        <option value="iron_butterfly">Iron Butterfly</option>
-                        <option value="bull_put_spread">Bull Put Spread</option>
-                        <option value="bear_call_spread">Bear Call Spread</option>
-                        <option value="bull_call_spread">Bull Call Spread</option>
-                        <option value="bear_put_spread">Bear Put Spread</option>
-                        <option value="long_strangle">Long Strangle</option>
-                        <option value="long_straddle">Long Straddle</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="text-xs text-slate-400 block mb-1">Риск-бюджет, % капитала</label>
-                    <input id="sz-risk" type="number" step="0.5" min="0.1" max="50" value="2" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-24 focus:outline-none focus:border-indigo-500">
-                </div>
-                <div>
-                    <label class="text-xs text-slate-400 block mb-1">Стоп-лосс, % от макс. убытка</label>
-                    <input id="sz-stop" type="number" step="5" min="1" max="100" value="25" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm w-24 focus:outline-none focus:border-indigo-500" title="При какой доле максимального убытка срабатывает стоп (реализованный риск на контракт)">
-                </div>
-                <button onclick="runSizing()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-md transition">▶ Рассчитать размер</button>
-            </div>
-
-            <div id="sizing-result" class="hidden font-mono">
-                <div class="grid grid-cols-2 md:grid-cols-6 gap-3 text-center">
-                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span class="text-xs text-slate-500 block">МАКС. УБЫТОК / КОНТРАКТ</span>
-                        <span id="sz-maxloss" class="text-lg font-bold text-rose-400">₽0</span>
-                    </div>
-                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span class="text-xs text-slate-500 block">ГО / КОНТРАКТ</span>
-                        <span id="sz-margin" class="text-lg font-bold text-amber-400">₽0</span>
-                    </div>
-                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span class="text-xs text-slate-500 block">РИСК-БЮДЖЕТ</span>
-                        <span id="sz-budget" class="text-lg font-bold text-indigo-400">₽0</span>
-                    </div>
-                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span class="text-xs text-slate-500 block">ПО РИСКУ</span>
-                        <span id="sz-byrisk" class="text-lg font-bold text-slate-200">0</span>
-                    </div>
-                    <div class="p-3 bg-slate-900/60 rounded-lg border border-slate-800">
-                        <span class="text-xs text-slate-500 block">ПО ГО</span>
-                        <span id="sz-bymargin" class="text-lg font-bold text-slate-200">0</span>
-                    </div>
-                    <div class="p-3 bg-emerald-500/10 rounded-lg border border-emerald-500/40">
-                        <span class="text-xs text-emerald-400/80 block">РЕКОМЕНДУЕМЫЙ РАЗМЕР</span>
-                        <span id="sz-recommended" class="text-lg font-bold text-emerald-400">0</span>
-                    </div>
-                </div>
-                <div id="sz-warnings" class="text-[11px] text-amber-400 mt-2 space-y-1"></div>
-                <div class="mt-3 flex gap-3">
-                    <button onclick="openStrategyWithSizing()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-md transition">🚀 Открыть позицию с этим размером</button>
-                </div>
-            </div>
-        </div>
-
         <!-- 4. Volatility Skew Chart -->
         <div class="bg-slate-800/60 p-6 rounded-xl border border-slate-700/50">
             <div class="flex justify-between items-center mb-4">
@@ -3201,77 +3071,6 @@
             );
         }
 
-        function openParityStrategyModal() {
-            const spot = currentSpotPrice;
-            const strike = Math.round(spot / 1000) * 1000;
-
-            // Live real data from MOEX ISS (prices, GO, implied vol, theta).
-            fetch(`/api/v1/strategy/parity?symbol=${currentAsset}`)
-                .then(res => res.json())
-                .then(data => {
-                    if (data && data.call_found && data.put_found && data.call.price > 0 && data.put.price > 0) {
-                        const callPrice = Math.round(data.call.price);
-                        const putPrice = Math.round(data.put.price);
-                        const futurePrice = Math.round(data.spot_price);
-                        const callSecid = data.call.secid;
-                        const putSecid = data.put.secid;
-                        const seriesCode = data.series || `${currentAsset}U6`;
-
-                        const pnlPerContract = Math.round((data.reversal_pnl > data.conversion_pnl ? data.reversal_pnl : data.conversion_pnl) * 100) / 100;
-                        const useReversal = data.reversal_pnl >= data.conversion_pnl;
-                        const legs = useReversal ? [
-                            { action: 'BUY', symbol: `${callSecid} (Call)`, secid: callSecid, kind: 'OPTION', strike: data.strike, isCall: true, qty: 1, price: `${callPrice.toLocaleString()} ₽` },
-                            { action: 'SELL', symbol: `${putSecid} (Put)`, secid: putSecid, kind: 'OPTION', strike: data.strike, isCall: false, qty: 1, price: `${putPrice.toLocaleString()} ₽` },
-                            { action: 'SELL', symbol: `${seriesCode} Futures`, secid: seriesCode, kind: 'FUTURES', strike: 0, isCall: false, qty: 1, price: `${futurePrice.toLocaleString()} ₽` }
-                        ] : [
-                            { action: 'SELL', symbol: `${callSecid} (Call)`, secid: callSecid, kind: 'OPTION', strike: data.strike, isCall: true, qty: 1, price: `${callPrice.toLocaleString()} ₽` },
-                            { action: 'BUY', symbol: `${putSecid} (Put)`, secid: putSecid, kind: 'OPTION', strike: data.strike, isCall: false, qty: 1, price: `${putPrice.toLocaleString()} ₽` },
-                            { action: 'BUY', symbol: `${seriesCode} Futures`, secid: seriesCode, kind: 'FUTURES', strike: 0, isCall: false, qty: 1, price: `${futurePrice.toLocaleString()} ₽` }
-                        ];
-
-                        openStrategyModal(
-                            `Put-Call Parity Arbitrage (${currentAsset}) — ${useReversal ? 'Reversal' : 'Conversion'}`,
-                            'Conversion / Reversal',
-                            legs,
-                            Math.max(0, pnlPerContract),
-                            Math.max(pnlPerContract, 0),
-                            data.total_margin,
-                            Math.max(data.theta_per_contract, 0)
-                        );
-                    } else {
-                        // Fallback to approximate modal if live chain is unavailable.
-                        openStrategyModal(
-                            `Put-Call Parity Arbitrage (${currentAsset})`,
-                            'Conversion / Reversal',
-                            [
-                                { action: 'SELL', symbol: `${currentAsset}${strike}C (Call)`, qty: 1, price: '≈ 0.5% премии' },
-                                { action: 'BUY', symbol: `${currentAsset}${strike}P (Put)`, qty: 1, price: '≈ 0.5% премии' },
-                                { action: 'BUY', symbol: `${currentAsset} Futures`, qty: 1, price: `${Math.round(spot).toLocaleString()} ₽` }
-                            ],
-                            800,
-                            1700,
-                            4400,
-                            70
-                        );
-                    }
-                })
-                .catch(() => {
-                    openStrategyModal(
-                        `Put-Call Parity Arbitrage (${currentAsset})`,
-                        'Conversion / Reversal',
-                        [
-                            { action: 'SELL', symbol: `${currentAsset}${strike}C (Call)`, qty: 1, price: '≈ 0.5% премии' },
-                            { action: 'BUY', symbol: `${currentAsset}${strike}P (Put)`, qty: 1, price: '≈ 0.5% премии' },
-                            { action: 'BUY', symbol: `${currentAsset} Futures`, qty: 1, price: `${Math.round(spot).toLocaleString()} ₽` }
-                        ],
-                        800,
-                        1700,
-                        4400,
-                        70
-                    );
-                });
-        }
-
         function strategyTypeFromName(name) {
             const n = name.toLowerCase();
             if (n.includes('condor')) return 'iron_condor';
@@ -3938,53 +3737,6 @@
             }
         }
 
-        let lastSizing = null;
-
-        async function runSizing() {
-            const symbol = document.getElementById('sz-symbol').value;
-            const strategy = document.getElementById('sz-strategy').value;
-            const riskPct = document.getElementById('sz-risk').value || '2';
-            const stopPct = document.getElementById('sz-stop').value || '25';
-            try {
-                const res = await fetch(`/api/v1/positions/sizing?symbol=${symbol}&strategy=${strategy}&risk_budget_pct=${riskPct}&stop_loss_pct=${stopPct}`);
-                const s = await res.json();
-                lastSizing = s;
-                document.getElementById('sizing-result').classList.remove('hidden');
-                document.getElementById('sz-maxloss').innerText = `₽${Math.round(s.max_loss_rub).toLocaleString('ru-RU')}`;
-                document.getElementById('sz-margin').innerText = `₽${Math.round(s.margin_per_contract).toLocaleString('ru-RU')}`;
-                document.getElementById('sz-budget').innerText = `₽${Math.round(s.risk_budget_rub).toLocaleString('ru-RU')}`;
-                document.getElementById('sz-byrisk').innerText = s.qty_by_risk;
-                document.getElementById('sz-bymargin').innerText = s.qty_by_margin;
-                document.getElementById('sz-recommended').innerText = s.recommended_qty;
-
-                // All warnings come from the backend (s.warnings) — no local
-                // duplicates: the GO-cap note used to render twice.
-                let warn = '';
-                (s.warnings || []).forEach(w => { warn += `<div>⚠ ${w}</div>`; });
-                document.getElementById('sz-warnings').innerHTML = warn;
-
-                const openBtn = document.querySelector('#sizing-result button');
-                if (openBtn) openBtn.disabled = !s.feasible;
-            } catch (e) {
-                // Never fail silently: unhide the panel and show the error —
-                // otherwise a dead backend looks like "nothing happens".
-                console.error("Sizing failed", e);
-                document.getElementById('sizing-result').classList.remove('hidden');
-                document.getElementById('sz-warnings').innerHTML =
-                    `<div>❌ Расчёт не удался: ${e.message}. Проверьте, что сервер доступен.</div>`;
-            }
-        }
-
-        function openStrategyWithSizing() {
-            if (!lastSizing || lastSizing.recommended_qty < 1) {
-                alert('Сначала рассчитайте размер: рекомендуемое количество = 0.');
-                return;
-            }
-            const strategy = lastSizing.strategy;
-            currentAsset = lastSizing.symbol;
-            openTdssStrategyModal(strategy, lastSizing.recommended_qty);
-        }
-
         async function updateRisk() {
             try {
                 const res = await fetch('/api/v1/risk');
@@ -4223,37 +3975,43 @@
                     perpBadge.className = 'px-3 py-1 text-xs font-bold rounded-md bg-slate-700 text-slate-300 font-mono';
                 }
 
+                // Null-safe text setter: dashboard cards for these metrics were
+                // removed, but the data still feeds the header prices.
+                const setT = (id, v) => { const el = document.getElementById(id); if (el) el.innerText = v; };
+
                 // 2. Put-Call Parity Arbitrage Data
                 const arbRes = await fetch(`/api/v1/arbitrage/check?symbol=${currentAsset}`);
                 const arb = await arbRes.json();
 
-                document.getElementById('spot-price').innerText = `₽${arb.spot_price.toLocaleString()}`;
+                setT('spot-price', `₽${arb.spot_price.toLocaleString()}`);
                 currentSpotPrice = arb.spot_price;
-                document.getElementById('call-price').innerText = `₽${arb.actual_call_price.toLocaleString()}`;
-                document.getElementById('put-price').innerText = `₽${arb.actual_put_price.toLocaleString()}`;
-                document.getElementById('theoretical-diff').innerText = `₽${arb.theoretical_diff}`;
-                document.getElementById('actual-diff').innerText = `₽${arb.actual_diff}`;
-                document.getElementById('arb-spread').innerText = `₽${arb.spread}`;
-                document.getElementById('arb-strategy').innerText = `Strategy: ${arb.strategy}`;
+                setT('call-price', `₽${arb.actual_call_price.toLocaleString()}`);
+                setT('put-price', `₽${arb.actual_put_price.toLocaleString()}`);
+                setT('theoretical-diff', `₽${arb.theoretical_diff}`);
+                setT('actual-diff', `₽${arb.actual_diff}`);
+                setT('arb-spread', `₽${arb.spread}`);
+                setT('arb-strategy', `Strategy: ${arb.strategy}`);
 
                 const badge = document.getElementById('arb-badge');
-                if (arb.expected_profit > 0) {
-                    badge.innerText = 'PARITY ARBITRAGE';
-                    badge.className = 'px-3 py-1 text-xs font-bold rounded-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-mono';
-                } else {
-                    badge.innerText = 'NO ARBITRAGE';
-                    badge.className = 'px-3 py-1 text-xs font-bold rounded-md bg-slate-700 text-slate-300 font-mono';
+                if (badge) {
+                    if (arb.expected_profit > 0) {
+                        badge.innerText = 'PARITY ARBITRAGE';
+                        badge.className = 'px-3 py-1 text-xs font-bold rounded-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-mono';
+                    } else {
+                        badge.innerText = 'NO ARBITRAGE';
+                        badge.className = 'px-3 py-1 text-xs font-bold rounded-md bg-slate-700 text-slate-300 font-mono';
+                    }
                 }
 
                 // 3. Greeks Data
                 const greeksRes = await fetch(`/api/v1/greeks/live?symbol=${currentAsset}`);
                 const greeksData = await greeksRes.json();
-                
-                document.getElementById('greek-delta').innerText = greeksData.greeks.delta;
-                document.getElementById('greek-gamma').innerText = greeksData.greeks.gamma;
-                document.getElementById('greek-theta').innerText = `₽${greeksData.greeks.theta}`;
-                document.getElementById('greek-vega').innerText = greeksData.greeks.vega;
-                document.getElementById('greek-rho').innerText = greeksData.greeks.rho;
+
+                setT('greek-delta', greeksData.greeks.delta);
+                setT('greek-gamma', greeksData.greeks.gamma);
+                setT('greek-theta', `₽${greeksData.greeks.theta}`);
+                setT('greek-vega', greeksData.greeks.vega);
+                setT('greek-rho', greeksData.greeks.rho);
 
                 // 4. Update TDSS Strategies & Exit Advice
                 await updateTDSS();
