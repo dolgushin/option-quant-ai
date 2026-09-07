@@ -1548,15 +1548,21 @@
         async function scanML() {
             const btn = document.getElementById('ml-scan');
             const el = document.getElementById('ml-scanres');
+            // The form defines the candidate: its symbol+strategy stay fixed,
+            // the scan varies DTE × IV × trend × vol and returns the best.
+            const sym = document.getElementById('ml-sym').value;
+            const strat = document.getElementById('ml-strat').value;
+            const stratRu = mlStratRu[strat] || strat;
             btn.disabled = true;
             btn.innerText = '⏳ Перебор...';
-            el.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Считаю сетку Si/Ri × стратегии × DTE × IV × тренд × vol...</div>';
+            el.innerHTML = `<div class="text-slate-500 font-mono text-[11px]">Перебираю DTE × IV × тренд × vol для ${sym} · ${stratRu}...</div>`;
             try {
-                const res = await fetch('/api/v2/ml/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                const body = JSON.stringify({ symbols: [sym], strategies: [strat], top: 8 });
+                const res = await fetch('/api/v2/ml/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
                 const d = await res.json();
                 if (d.error) { el.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${d.error}</div>`; return; }
                 if (!d.rows || !d.rows.length) { el.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Пусто.</div>'; return; }
-                let html = `<div class="text-[11px] text-slate-400 font-mono mb-1">Топ-${d.rows.length} из ${d.scanned} комбинаций (сделок в обучении: ${d.train_size})</div>
+                let html = `<div class="text-[11px] text-slate-400 font-mono mb-1">Топ-${d.rows.length} вариантов ${sym} · ${stratRu} (перебрано ${d.scanned}, сделок в обучении: ${d.train_size})</div>
                     <table class="w-full text-left text-[11px] font-mono text-slate-300">
                     <thead class="text-slate-500 border-b border-slate-700 uppercase">
                     <tr><th class="py-1 pr-2">#</th><th class="py-1 pr-2">Инстр.</th><th class="py-1 pr-2">Стратегия</th><th class="py-1 pr-2 text-right">DTE</th><th class="py-1 pr-2 text-right">IV%</th><th class="py-1 pr-2">Тренд</th><th class="py-1 pr-2">Vol</th><th class="py-1 pr-2 text-right">Win%</th><th class="py-1">Увер.</th></tr>
