@@ -171,7 +171,19 @@ func evaluateSpread(s spreadRecord) managerRun {
 		ivATM = ivSum / float64(ivN)
 	}
 
-	run := decideSpreadAction(s, dte, netDelta, pnl, spot, ivATM, spotOK)
+	// Quant regime for the TPR auto-view (shared 5-min brief cache — no extra
+	// network per spread).
+	regime, strength := "", ""
+	if br := collectCoreBrief(false); br != nil {
+		for _, in := range br.Instruments {
+			if in.Symbol == s.Symbol {
+				regime, strength = in.Regime, in.Strength
+				break
+			}
+		}
+	}
+
+	run := decideSpreadAction(s, dte, netDelta, pnl, spot, ivATM, spotOK, regime, strength)
 	run.CheckedAt = time.Now().Format(time.RFC3339)
 	return run
 }
@@ -181,12 +193,29 @@ func isBullishType(t string) bool {
 	return t == "bull_call" || t == "bull_put"
 }
 
+// autoMarketView derives the TPR reconstruction view from the quant regime
+// (trend + impulse) instead of asking the human: a known regime maps straight
+// to a view, an unknown one falls back to REVIEW. Pure — unit-tested.
+func autoMarketView(regime, strength string) (string, bool) {
+	switch regime {
+	case "BULLISH":
+		return "BULLISH", true
+	case "BEARISH":
+		return "BEARISH", true
+	case "SIDEWAYS":
+		return "SIDEWAYS", true
+	default:
+		return "", false
+	}
+}
+
 // decideSpreadAction implements the vertical-spread management state machine
 // (KNOWLEDGE.md §5). Priority: survival (time stop, stop-loss) → T/P → TPR →
-// legacy roll triggers → delta hedge. Reconstruction actions fire only for
-// VERTICAL state with an explicit market view; without a view the manager
-// raises REVIEW and waits for the user's decision.
-func decideSpreadAction(s spreadRecord, dte int, netDelta, pnl, spot, ivATM float64, spotOK bool) managerRun {
+// legacy roll triggers → delta hedge. Reconstruction actions fire for VERTICAL
+// state with a market view: an explicit ViewOverride wins, otherwise the view
+// comes from the quant regime (autoMarketView); only an unknown regime raises
+// REVIEW and waits for the user's decision.
+func decideSpreadAction(s spreadRecord, dte int, netDelta, pnl, spot, ivATM float64, spotOK bool, regime, strength string) managerRun {
 	units := float64(s.Qty)
 	if units < 1 {
 		units = 1
@@ -282,19 +311,29 @@ func decideSpreadAction(s spreadRecord, dte int, netDelta, pnl, spot, ivATM floa
 			adverse = -move
 		}
 		if adverse >= k*sigma/math.Sqrt(252) {
-			switch strings.ToUpper(s.ViewOverride) {
+			// Explicit human view wins; otherwise the quant regime decides
+			// (autoMarketView) and only an unknown regime waits for REVIEW.
+			view := strings.ToUpper(s.ViewOverride)
+			viewSrc := "вручную"
+			if view == "" {
+				if v, ok := autoMarketView(regime, strength); ok {
+					view = v
+					viewSrc = "авто (квант)"
+				}
+			}
+			switch view {
 			case "BULLISH":
 				run.Action = "CONVERT_LADDER"
-				run.Detail = fmt.Sprintf("TPR (−%.1f%% ≥ %.0fσ): прогноз рост — строим лестницу", adverse*100, k)
+				run.Detail = fmt.Sprintf("TPR (−%.1f%% ≥ %.0fσ): прогноз рост — строим лестницу (прогноз %s)", adverse*100, k, viewSrc)
 			case "SIDEWAYS":
 				run.Action = "CONVERT_RATIO"
-				run.Detail = fmt.Sprintf("TPR (−%.1f%% ≥ %.0fσ): прогноз боковик — ratio/front spread", adverse*100, k)
+				run.Detail = fmt.Sprintf("TPR (−%.1f%% ≥ %.0fσ): прогноз боковик — ratio/front spread (прогноз %s)", adverse*100, k, viewSrc)
 			case "BEARISH":
 				run.Action = "ADD_ATM_PUT"
-				run.Detail = fmt.Sprintf("TPR (−%.1f%% ≥ %.0fσ): прогноз падение — покупаем ATM put", adverse*100, k)
+				run.Detail = fmt.Sprintf("TPR (−%.1f%% ≥ %.0fσ): прогноз падение — покупаем ATM put (прогноз %s)", adverse*100, k, viewSrc)
 			default:
 				run.Action = "REVIEW"
-				run.Detail = fmt.Sprintf("TPR: движение %.1f%% (≥%.0fσ дневной σ=%.0f%%). Задайте прогноз: BULLISH→лестница, SIDEWAYS→ratio, BEARISH→put", adverse*100, k, sigma*100)
+				run.Detail = fmt.Sprintf("TPR: движение %.1f%% (≥%.0fσ дневной σ=%.0f%%), режим не определён. Задайте прогноз: BULLISH→лестница, SIDEWAYS→ratio, BEARISH→put", adverse*100, k, sigma*100)
 			}
 			return run
 		}

@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,24 +22,42 @@ import (
 // --- Feature engineering ---
 
 type mlFeature struct {
-	DTE      float64 // days to expiry
-	IV       float64 // IV at entry (fraction, e.g. 0.20)
-	Trend    float64 // +1 bullish, -1 bearish, 0 sideways
+	DTE       float64 // days to expiry
+	IV        float64 // IV at entry (fraction, e.g. 0.20)
+	Trend     float64 // +1 bullish, -1 bearish, 0 sideways
 	VolRegime float64 // +1 IV>HV, -1 IV<HV, 0 neutral
-	Strategy float64 // encoded: iron_condor=0, bull_put=1, bear_call=2, etc.
-	Symbol   float64 // encoded symbol index
+	Strategy  float64 // encoded: iron_condor=0, bull_put=1, bear_call=2, etc.
+	Symbol    float64 // encoded symbol index
 }
 
 var strategyEncodings = map[string]float64{
 	"iron_condor":    0,
 	"iron_butterfly": 1,
-	"bull_put_spread": 2,
-	"bear_call_spread": 3,
-	"bull_call_spread": 4,
-	"bear_put_spread": 5,
+	"bull_put":       2,
+	"bear_call":      3,
+	"bull_call":      4,
+	"bear_put":       5,
 	"long_strangle":  6,
 	"long_straddle":  7,
 	"vertical":       8,
+}
+
+// encodeStrategyName normalizes strategy names from all sources — trade
+// journal display names ("Bull Put Spread"), API keys ("bull_put_spread"),
+// short codes ("IC") — to the canonical encoding. Unknown names yield -1
+// (distinct from every known class) instead of silently collapsing to
+// iron_condor=0, which used to flatten the whole strategy axis in training.
+func encodeStrategyName(s string) (float64, bool) {
+	norm := strings.ToLower(strings.TrimSpace(s))
+	norm = strings.ReplaceAll(norm, " ", "_")
+	norm = strings.TrimSuffix(norm, "_spread")
+	if v, ok := strategyEncodings[norm]; ok {
+		return v, true
+	}
+	if norm == "ic" {
+		return strategyEncodings["iron_condor"], true
+	}
+	return -1, false
 }
 
 var symbolList = []string{"Si", "RI", "CR", "NG", "SBER", "SBERP"}
@@ -75,7 +94,7 @@ func tradeToFeatures(t quant.Trade) mlFeature {
 	default:
 		f.VolRegime = 0.0
 	}
-	f.Strategy = strategyEncodings[t.Strategy]
+	f.Strategy, _ = encodeStrategyName(t.Strategy)
 	f.Symbol = symbolEncodings[t.Symbol]
 	return f
 }
@@ -126,15 +145,15 @@ func computeMinMax(features []mlFeature) featureMinMax {
 // --- Logistic Regression ---
 
 type logisticModel struct {
-	Weights   []float64      `json:"weights"`   // len = nFeatures + 1 (bias)
-	Accuracy  float64        `json:"accuracy"`   // train accuracy
-	Precision float64        `json:"precision"`  // precision on train set
-	Recall    float64        `json:"recall"`     // recall on train set
-	F1        float64        `json:"f1"`
-	TrainSize int            `json:"train_size"`
-	MinMM     featureMinMax  `json:"-"`
-	FeatureImportance []float64 `json:"feature_importance"` // abs weight
-	FeatureNames     []string   `json:"feature_names"`
+	Weights           []float64     `json:"weights"`   // len = nFeatures + 1 (bias)
+	Accuracy          float64       `json:"accuracy"`  // train accuracy
+	Precision         float64       `json:"precision"` // precision on train set
+	Recall            float64       `json:"recall"`    // recall on train set
+	F1                float64       `json:"f1"`
+	TrainSize         int           `json:"train_size"`
+	MinMM             featureMinMax `json:"-"`
+	FeatureImportance []float64     `json:"feature_importance"` // abs weight
+	FeatureNames      []string      `json:"feature_names"`
 }
 
 func sigmoid(z float64) float64 {
@@ -217,15 +236,15 @@ func trainLogistic(features []mlFeature, labels []float64, lr float64, epochs in
 	}
 
 	return logisticModel{
-		Weights:   w,
-		Accuracy:  math.Round(acc*1000) / 1000,
-		Precision: math.Round(prec*1000) / 1000,
-		Recall:    math.Round(rec*1000) / 1000,
-		F1:        math.Round(f1*1000) / 1000,
-		TrainSize: len(features),
-		MinMM:     mm,
+		Weights:           w,
+		Accuracy:          math.Round(acc*1000) / 1000,
+		Precision:         math.Round(prec*1000) / 1000,
+		Recall:            math.Round(rec*1000) / 1000,
+		F1:                math.Round(f1*1000) / 1000,
+		TrainSize:         len(features),
+		MinMM:             mm,
 		FeatureImportance: importance,
-		FeatureNames:     featureNames,
+		FeatureNames:      featureNames,
 	}
 }
 
@@ -244,7 +263,7 @@ func saveModel() {
 		return
 	}
 	data, _ := json.Marshal(map[string]interface{}{
-		"model":     mlModel,
+		"model":      mlModel,
 		"trained_at": mlTrainedAt,
 	})
 	saveCoreStateLocked() // reuse core state file for simplicity
@@ -264,19 +283,19 @@ type mlTrainResponse struct {
 }
 
 type mlPredictRequest struct {
-	Symbol   string  `json:"symbol"`
-	Strategy string  `json:"strategy"`
-	DTE      int     `json:"dte"`
-	IV       float64 `json:"iv"`        // percent
-	Trend    string  `json:"trend"`     // BULLISH/BEARISH/SIDEWAYS
-	VolRegime string `json:"vol_regime"` // IV>HV / IV<HV / neutral
+	Symbol    string  `json:"symbol"`
+	Strategy  string  `json:"strategy"`
+	DTE       int     `json:"dte"`
+	IV        float64 `json:"iv"`         // percent
+	Trend     string  `json:"trend"`      // BULLISH/BEARISH/SIDEWAYS
+	VolRegime string  `json:"vol_regime"` // IV>HV / IV<HV / neutral
 }
 
 type mlPredictResponse struct {
-	WinProb    float64           `json:"win_prob"`    // 0..1
-	Confidence string            `json:"confidence"`  // HIGH / MEDIUM / LOW
+	WinProb    float64            `json:"win_prob"`   // 0..1
+	Confidence string             `json:"confidence"` // HIGH / MEDIUM / LOW
 	Features   map[string]float64 `json:"features"`
-	Error      string            `json:"error,omitempty"`
+	Error      string             `json:"error,omitempty"`
 }
 
 // mlTrainHandler trains a logistic regression model on historical trades.
@@ -308,7 +327,7 @@ func mlTrainHandler(w http.ResponseWriter, r *http.Request) {
 
 	mlModelMu.Lock()
 	mlModel = &model
-		mlTrainedAt = time.Now().Format("2006-01-02 15:04")
+	mlTrainedAt = time.Now().Format("2006-01-02 15:04")
 	mlModelMu.Unlock()
 
 	json.NewEncoder(w).Encode(mlTrainResponse{
@@ -343,11 +362,16 @@ func mlPredictHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	stratCode, ok := encodeStrategyName(req.Strategy)
+	if !ok {
+		json.NewEncoder(w).Encode(mlPredictResponse{Error: "неизвестная стратегия: " + req.Strategy})
+		return
+	}
 	f := mlFeature{
-		DTE:       float64(req.DTE),
-		IV:        req.IV / 100.0,
-		Strategy:  strategyEncodings[req.Strategy],
-		Symbol:    symbolEncodings[req.Symbol],
+		DTE:      float64(req.DTE),
+		IV:       req.IV / 100.0,
+		Strategy: stratCode,
+		Symbol:   symbolEncodings[req.Symbol],
 	}
 	switch req.Trend {
 	case "BULLISH":
@@ -366,15 +390,7 @@ func mlPredictHandler(w http.ResponseWriter, r *http.Request) {
 		f.VolRegime = 0.0
 	}
 
-	x := model.MinMM.normalize(f)
-	prob := predictLogistic(model.Weights, x)
-
-	conf := "LOW"
-	if prob >= 0.7 || prob <= 0.3 {
-		conf = "HIGH"
-	} else if prob >= 0.6 || prob <= 0.4 {
-		conf = "MEDIUM"
-	}
+	prob, conf := scoreMLFeature(model, f)
 
 	featureVals := map[string]float64{
 		"DTE":       f.DTE,
@@ -389,6 +405,191 @@ func mlPredictHandler(w http.ResponseWriter, r *http.Request) {
 		WinProb:    math.Round(prob*1000) / 1000,
 		Confidence: conf,
 		Features:   featureVals,
+	})
+}
+
+// scoreMLFeature runs the model on one feature vector: win probability plus
+// the HIGH/MEDIUM/LOW confidence band shared by single predict and grid scan.
+func scoreMLFeature(model *logisticModel, f mlFeature) (float64, string) {
+	x := model.MinMM.normalize(f)
+	prob := predictLogistic(model.Weights, x)
+	conf := "LOW"
+	if prob >= 0.7 || prob <= 0.3 {
+		conf = "HIGH"
+	} else if prob >= 0.6 || prob <= 0.4 {
+		conf = "MEDIUM"
+	}
+	return prob, conf
+}
+
+// Default scan grid: Si/RI universe, six traded strategies, and compact
+// DTE/IV/trend/vol axes (2×6×5×5×3×3 = 2700 combos — milliseconds).
+var (
+	defaultScanSymbols    = []string{"Si", "RI"}
+	defaultScanStrategies = []string{"iron_condor", "bull_put_spread", "bear_call_spread", "bull_call_spread", "bear_put_spread", "long_strangle"}
+	defaultScanDTEs       = []int{7, 14, 21, 30, 45}
+	defaultScanIVs        = []float64{15, 20, 30, 45, 60}
+	defaultScanTrends     = []string{"BULLISH", "BEARISH", "SIDEWAYS"}
+	defaultScanVols       = []string{"IV>HV", "IV<HV", "neutral"}
+)
+
+type mlScanRequest struct {
+	Symbols    []string  `json:"symbols"`
+	Strategies []string  `json:"strategies"`
+	DTEs       []int     `json:"dtes"`
+	IVs        []float64 `json:"ivs"`
+	Trends     []string  `json:"trends"`
+	Vols       []string  `json:"vols"`
+	Top        int       `json:"top"`
+}
+
+type mlScanRow struct {
+	Symbol     string  `json:"symbol"`
+	Strategy   string  `json:"strategy"`
+	DTE        int     `json:"dte"`
+	IV         float64 `json:"iv"`
+	Trend      string  `json:"trend"`
+	VolRegime  string  `json:"vol_regime"`
+	WinProb    float64 `json:"win_prob"`
+	Confidence string  `json:"confidence"`
+}
+
+// scanMLCombinations scores every grid combination with the model and returns
+// the top-N rows by win probability. Pure — unit-tested.
+func scanMLCombinations(model *logisticModel, symbols, strategies []string, dtes []int, ivs []float64, trends, vols []string, top int) []mlScanRow {
+	rows := []mlScanRow{}
+	for _, sym := range symbols {
+		for _, strat := range strategies {
+			stratCode, ok := encodeStrategyName(strat)
+			if !ok {
+				continue
+			}
+			for _, dte := range dtes {
+				for _, iv := range ivs {
+					for _, trend := range trends {
+						var tr float64
+						switch trend {
+						case "BULLISH":
+							tr = 1.0
+						case "BEARISH":
+							tr = -1.0
+						}
+						for _, vol := range vols {
+							var vr float64
+							switch vol {
+							case "IV>HV":
+								vr = 1.0
+							case "IV<HV":
+								vr = -1.0
+							}
+							f := mlFeature{
+								DTE: float64(dte), IV: iv / 100.0,
+								Trend: tr, VolRegime: vr,
+								Strategy: stratCode, Symbol: symbolEncodings[sym],
+							}
+							prob, conf := scoreMLFeature(model, f)
+							rows = append(rows, mlScanRow{
+								Symbol: sym, Strategy: strat,
+								DTE: dte, IV: iv, Trend: trend, VolRegime: vol,
+								WinProb: math.Round(prob*1000) / 1000, Confidence: conf,
+							})
+						}
+					}
+				}
+			}
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].WinProb > rows[j].WinProb })
+	if top > 0 && len(rows) > top {
+		rows = rows[:top]
+	}
+	return rows
+}
+
+// mlScanHandler scores a full parameter grid with the trained model and
+// returns the best combinations — "перебрать всё и выдать лучшие".
+// POST /api/v2/ml/scan
+func mlScanHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	mlModelMu.RLock()
+	model := mlModel
+	mlModelMu.RUnlock()
+
+	if model == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "Модель не обучена. Нажмите «Обучить» на вкладке ML."})
+		return
+	}
+
+	var req mlScanRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	symbols := req.Symbols
+	if len(symbols) == 0 {
+		symbols = defaultScanSymbols
+	}
+	strategies := req.Strategies
+	if len(strategies) == 0 {
+		strategies = defaultScanStrategies
+	}
+	dtes := req.DTEs
+	if len(dtes) == 0 {
+		dtes = defaultScanDTEs
+	}
+	ivs := req.IVs
+	if len(ivs) == 0 {
+		ivs = defaultScanIVs
+	}
+	trends := req.Trends
+	if len(trends) == 0 {
+		trends = defaultScanTrends
+	}
+	vols := req.Vols
+	if len(vols) == 0 {
+		vols = defaultScanVols
+	}
+	top := req.Top
+	if top <= 0 {
+		top = 8
+	}
+	if top > 20 {
+		top = 20
+	}
+	// Validate axes: known symbols/strategies only, sane ranges, grid cap.
+	for _, s := range symbols {
+		if _, ok := symbolEncodings[s]; !ok {
+			json.NewEncoder(w).Encode(map[string]interface{}{"error": "неизвестный инструмент: " + s})
+			return
+		}
+	}
+	for _, s := range strategies {
+		if _, ok := encodeStrategyName(s); !ok {
+			json.NewEncoder(w).Encode(map[string]interface{}{"error": "неизвестная стратегия: " + s})
+			return
+		}
+	}
+	for _, d := range dtes {
+		if d < 1 || d > 365 {
+			json.NewEncoder(w).Encode(map[string]interface{}{"error": "DTE вне 1..365"})
+			return
+		}
+	}
+	for _, v := range ivs {
+		if v < 1 || v > 300 {
+			json.NewEncoder(w).Encode(map[string]interface{}{"error": "IV вне 1..300"})
+			return
+		}
+	}
+	if len(symbols)*len(strategies)*len(dtes)*len(ivs)*len(trends)*len(vols) > 20000 {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "сетка больше 20000 комбинаций — сузьте оси"})
+		return
+	}
+
+	rows := scanMLCombinations(model, symbols, strategies, dtes, ivs, trends, vols, top)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"rows": rows, "scanned": len(symbols) * len(strategies) * len(dtes) * len(ivs) * len(trends) * len(vols),
+		"train_size": model.TrainSize,
 	})
 }
 
@@ -422,15 +623,15 @@ func mlStatusHandler(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(fis, func(i, j int) bool { return fis[i].Importance > fis[j].Importance })
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"trained":          true,
-		"trained_at":       trained,
-		"accuracy":         model.Accuracy,
-		"precision":        model.Precision,
-		"recall":           model.Recall,
-		"f1":               model.F1,
-		"train_size":       model.TrainSize,
+		"trained":            true,
+		"trained_at":         trained,
+		"accuracy":           model.Accuracy,
+		"precision":          model.Precision,
+		"recall":             model.Recall,
+		"f1":                 model.F1,
+		"train_size":         model.TrainSize,
 		"feature_importance": fis,
-		"available_trades": len(quant.GetTrades()),
+		"available_trades":   len(quant.GetTrades()),
 	})
 }
 

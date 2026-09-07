@@ -3561,6 +3561,7 @@ func main() {
 	http.HandleFunc("/api/v1/mc-pnl", mcPLHandler)
 	http.HandleFunc("/api/v2/ml/train", mlTrainHandler)
 	http.HandleFunc("/api/v2/ml/predict", mlPredictHandler)
+	http.HandleFunc("/api/v2/ml/scan", mlScanHandler)
 	http.HandleFunc("/api/v2/ml/status", mlStatusHandler)
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

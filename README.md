@@ -119,6 +119,7 @@ backend/
   spread_advice.go      панель решений перед входом (весовая модель 0–100)
   spread_analytics.go   P&L-кривые, дельта/тета-кривые, греки ног (как в МОЕХ)
   core_ai.go, core_data.go «Ядро»: скоринг/PoP-вес кандидатов, вердикты, автоскан и автовход
+  ml_module.go            логистическая регрессия исхода сделок + перебор сетки (/api/v2/ml/scan)
   telegram.go, spread_chart.go Telegram-уведомления через релей, PNG-график P&L для находок
   stats_module.go       агрегаторы статистики (KPI, equity, разрезы)
   forecast_module.go    Монте-Карло, t-статистика, режимные рекомендации
