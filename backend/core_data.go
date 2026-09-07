@@ -494,6 +494,12 @@ func coreBuildCandidates(instruments []coreInstrument) []coreCandidate {
 			if !planEconomicsSane(plan) {
 				continue
 			}
+			// Hard quality veto: single-digit percent of the wing (or a
+			// debit eating almost the whole payout) is never a trade —
+			// a bad quality check alone still lets it through on total.
+			if !planMeetsQualityFloor(plan) {
+				continue
+			}
 			// Do not recommend a construction whose twin (same symbol, type and
 			// strike pair) is already open — reopening the same position just
 			// multiplies exposure on an existing trade.
@@ -503,9 +509,6 @@ func coreBuildCandidates(instruments []coreInstrument) []coreCandidate {
 			in2 := in
 			in2.ExpiryFront = expiry
 			cand := candidateFromPlan(plan, in2)
-			if cand.Score < 45 {
-				continue
-			}
 			// Risk‑adjusted score: penalise candidates whose max loss is large
 			// relative to the recent ATR14 (proxy for expected daily move in %).
 			if in.ATR14 > 0 {
@@ -520,6 +523,12 @@ func coreBuildCandidates(instruments []coreInstrument) []coreCandidate {
 			// Apply quant weight to the candidate score
 			if coreSet.QuantWeight > 0 {
 				cand.Score = int(float64(cand.Score) * coreSet.QuantWeight)
+			}
+			// Gate on the FINAL score: adjustments above can drag a candidate
+			// below the bar, and a sub-45 score must never reach the table
+			// or Telegram (previously the gate ran before them).
+			if cand.Score < 45 {
+				continue
 			}
 			out = append(out, cand)
 		}

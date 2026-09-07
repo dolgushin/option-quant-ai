@@ -152,6 +152,41 @@ func TestPlanEconomicsSane(t *testing.T) {
 	if planEconomicsSane(zeroCredit) {
 		t.Fatal("zero credit must be insane")
 	}
+}
+
+func TestPlanMeetsQualityFloor(t *testing.T) {
+	// Live artefact: 10 credit on a 500 wing (2%) must be vetoed.
+	thin := &spreadPlan{Symbol: "Si", Qty: 1, WingWidth: 500, NetCredit: 10}
+	if planMeetsQualityFloor(thin) {
+		t.Fatal("2% of wing must be vetoed")
+	}
+	// Boundary: exactly 10% passes.
+	edge := &spreadPlan{Symbol: "Si", Qty: 1, WingWidth: 500, NetCredit: 50}
+	if !planMeetsQualityFloor(edge) {
+		t.Fatal("10% of wing must pass")
+	}
+	// Thin-but-possible 18.5pct (live SBER bear_call) is left to scoring.
+	sber := &spreadPlan{Symbol: "SBER", Qty: 1, WingWidth: 10, NetCredit: 1.85}
+	if !planMeetsQualityFloor(sber) {
+		t.Fatal("thin-but-possible credit must pass")
+	}
+	// Qty scaling: 10 per share × 2 on a 500 wing = 20 total ≥ 100 floor.
+	scaled := &spreadPlan{Symbol: "Si", Qty: 2, WingWidth: 500, NetCredit: 20}
+	if planMeetsQualityFloor(scaled) {
+		t.Fatal("2% per-share credit must be vetoed regardless of qty")
+	}
+	// Debit costing four fifths of the payout passes; above it is vetoed.
+	dOk := &spreadPlan{Symbol: "RI", Qty: 1, IsDebit: true, WingWidth: 2500, NetCredit: -2000}
+	if !planMeetsQualityFloor(dOk) {
+		t.Fatal("boundary debit must pass")
+	}
+	dBad := &spreadPlan{Symbol: "RI", Qty: 1, IsDebit: true, WingWidth: 2500, NetCredit: -2001}
+	if planMeetsQualityFloor(dBad) {
+		t.Fatal("oversized debit must be vetoed")
+	}
+	if planMeetsQualityFloor(nil) {
+		t.Fatal("nil plan must be vetoed")
+	}
 	// Debit spread quoted at zero or positive net (getting paid to buy).
 	freeDebit := &spreadPlan{Symbol: "RI", Qty: 1, IsDebit: true, WingWidth: 2500, NetCredit: 0}
 	if planEconomicsSane(freeDebit) {

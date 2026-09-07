@@ -625,6 +625,26 @@ func planEconomicsSane(plan *spreadPlan) bool {
 	return plan.NetCredit > 0 && plan.NetCredit <= wing
 }
 
+// planMeetsQualityFloor is the hard quality veto for candidates: a credit
+// spread keeping less than 10% of the wing (risk:reward worse than 1:9), or
+// a debit spread costing more than 80% of the max payout, is never a trade
+// however nice the rest looks. Thin-but-possible constructions (e.g. 18% of
+// the wing) still pass and are left to scoring. Pure and qty-safe.
+func planMeetsQualityFloor(plan *spreadPlan) bool {
+	if plan == nil || plan.WingWidth <= 0 {
+		return false
+	}
+	q := float64(plan.Qty)
+	if q < 1 {
+		q = 1
+	}
+	wing := plan.WingWidth * q
+	if plan.IsDebit {
+		return -plan.NetCredit <= wing*0.8
+	}
+	return plan.NetCredit >= wing*0.1
+}
+
 // spreadPlanHandler returns the full economics of a vertical spread.
 // URL: /api/v1/spreads/plan?symbol=Si&type=bull_put&qty=1&expiry=2026-09-17
 func spreadPlanHandler(w http.ResponseWriter, r *http.Request) {
