@@ -3966,7 +3966,12 @@
                 const openBtn = document.querySelector('#sizing-result button');
                 if (openBtn) openBtn.disabled = !s.feasible;
             } catch (e) {
+                // Never fail silently: unhide the panel and show the error —
+                // otherwise a dead backend looks like "nothing happens".
                 console.error("Sizing failed", e);
+                document.getElementById('sizing-result').classList.remove('hidden');
+                document.getElementById('sz-warnings').innerHTML =
+                    `<div>❌ Расчёт не удался: ${e.message}. Проверьте, что сервер доступен.</div>`;
             }
         }
 
