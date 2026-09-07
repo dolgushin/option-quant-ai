@@ -422,8 +422,9 @@ func scoreMLFeature(model *logisticModel, f mlFeature) (float64, string) {
 	return prob, conf
 }
 
-// Default scan grid: Si/RI universe, six traded strategies, and compact
-// DTE/IV/trend/vol axes (2×6×5×5×3×3 = 2700 combos — milliseconds).
+// Default scan grid: Si/RI universe, six traded strategies; the DTE axis
+// defaults to live exchange expiries (weeklies/monthlies/quarterlies),
+// other axes are compact fixed grids.
 var (
 	defaultScanSymbols    = []string{"Si", "RI"}
 	defaultScanStrategies = []string{"iron_condor", "bull_put_spread", "bear_call_spread", "bull_call_spread", "bear_put_spread", "long_strangle"}
@@ -432,6 +433,53 @@ var (
 	defaultScanTrends     = []string{"BULLISH", "BEARISH", "SIDEWAYS"}
 	defaultScanVols       = []string{"IV>HV", "IV<HV", "neutral"}
 )
+
+// filterSeriesDTEs keeps tradeable tenors from a series date list: DTE
+// within 1..120 days, deduplicated and sorted. Pure — unit-tested.
+func filterSeriesDTEs(dates []string, today time.Time) []int {
+	seen := map[int]bool{}
+	out := []int{}
+	for _, d := range dates {
+		dte := dteInDays(d, today)
+		if dte < 1 || dte > 120 {
+			continue
+		}
+		if !seen[dte] {
+			seen[dte] = true
+			out = append(out, dte)
+		}
+	}
+	sort.Ints(out)
+	return out
+}
+
+// liveSeriesDTEs resolves the DTE axis from real option expiries of the given
+// symbols (union, sorted). Falls back to the fixed grid when the chain is
+// unreachable. Returns the DTEs and the source label for the UI.
+func liveSeriesDTEs(symbols []string) ([]int, string) {
+	now := time.Now()
+	seen := map[int]bool{}
+	out := []int{}
+	for _, sym := range symbols {
+		for _, s := range optionSeriesForSymbol(sym) {
+			dte := dteInDays(s.LastDelDate, now)
+			if dte < 1 || dte > 120 {
+				continue
+			}
+			if !seen[dte] {
+				seen[dte] = true
+				out = append(out, dte)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return defaultScanDTEs, "grid"
+	}
+	// No tenor truncation here (weeklies AND quarterlies must survive);
+	// the handler's 20000-combo grid cap bounds the cost instead.
+	sort.Ints(out)
+	return out, "series"
+}
 
 type mlScanRequest struct {
 	Symbols    []string  `json:"symbols"`
@@ -534,8 +582,11 @@ func mlScanHandler(w http.ResponseWriter, r *http.Request) {
 		strategies = defaultScanStrategies
 	}
 	dtes := req.DTEs
+	dteSource := "custom"
 	if len(dtes) == 0 {
-		dtes = defaultScanDTEs
+		// Default: real exchange expiries, not the fixed grid — weeklies,
+		// monthlies and quarterlies all take part.
+		dtes, dteSource = liveSeriesDTEs(symbols)
 	}
 	ivs := req.IVs
 	if len(ivs) == 0 {
@@ -589,7 +640,7 @@ func mlScanHandler(w http.ResponseWriter, r *http.Request) {
 	rows := scanMLCombinations(model, symbols, strategies, dtes, ivs, trends, vols, top)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"rows": rows, "scanned": len(symbols) * len(strategies) * len(dtes) * len(ivs) * len(trends) * len(vols),
-		"train_size": model.TrainSize,
+		"train_size": model.TrainSize, "dtes": dtes, "dte_source": dteSource,
 	})
 }
 

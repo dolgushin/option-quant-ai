@@ -1432,7 +1432,8 @@
                 const d = await res.json();
                 if (d.error) { el.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${d.error}</div>`; return; }
                 if (!d.rows || !d.rows.length) { el.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Пусто.</div>'; return; }
-                let html = `<div class="text-[11px] text-slate-400 font-mono mb-1">Топ-${d.rows.length} вариантов ${sym} · ${stratRu} (перебрано ${d.scanned}, сделок в обучении: ${d.train_size})</div>
+                const dteNote = d.dte_source === 'series' ? `DTE по экспирациям биржи: ${(d.dtes || []).join(', ')}` : 'DTE по фикс. сетке';
+                let html = `<div class="text-[11px] text-slate-400 font-mono mb-1">Топ-${d.rows.length} вариантов ${sym} · ${stratRu} (перебрано ${d.scanned}, сделок в обучении: ${d.train_size}; ${dteNote})</div>
                     <table class="w-full text-left text-[11px] font-mono text-slate-300">
                     <thead class="text-slate-500 border-b border-slate-700 uppercase">
                     <tr><th class="py-1 pr-2">#</th><th class="py-1 pr-2">Инстр.</th><th class="py-1 pr-2">Стратегия</th><th class="py-1 pr-2 text-right">DTE</th><th class="py-1 pr-2 text-right">IV%</th><th class="py-1 pr-2">Тренд</th><th class="py-1 pr-2">Vol</th><th class="py-1 pr-2 text-right">Win%</th><th class="py-1">Увер.</th></tr>

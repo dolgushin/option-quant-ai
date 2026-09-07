@@ -1,7 +1,9 @@
 package main
 
 import (
+	"reflect"
 	"testing"
+	"time"
 )
 
 func TestEncodeStrategyName(t *testing.T) {
@@ -116,6 +118,26 @@ func TestScanTrainedModelStructure(t *testing.T) {
 		if r.Confidence != "HIGH" && r.Confidence != "MEDIUM" && r.Confidence != "LOW" {
 			t.Fatalf("row %d bad confidence %q", i, r.Confidence)
 		}
+	}
+}
+
+// TestFilterSeriesDTEs pins the expiry axis: expired/today/far series drop
+// out, the rest is deduplicated and sorted (weeklies through quarterlies).
+func TestFilterSeriesDTEs(t *testing.T) {
+	today := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)
+	dates := []string{
+		"2026-09-09", "2026-09-09", // weekly twice → once
+		"2026-09-03", // expired → drop
+		"2026-09-07", // today (dte 0) → drop
+		"2026-09-24", // monthly
+		"2026-12-17", // quarterly
+		"2028-01-01", // absurd far → drop
+		"not-a-date", // garbage → drop
+	}
+	got := filterSeriesDTEs(dates, today)
+	want := []int{1, 16, 100}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("filterSeriesDTEs = %v, want %v", got, want)
 	}
 }
 
