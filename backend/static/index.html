@@ -41,10 +41,6 @@
                 <div class="flex bg-slate-800 p-1 rounded-lg border border-slate-700">
                     <button onclick="switchAsset('Si')" id="btn-Si" class="px-3 py-1.5 text-xs font-bold rounded-md bg-emerald-600 text-white transition">Si (USD/RUB)</button>
                     <button onclick="switchAsset('RI')" id="btn-RI" class="px-3 py-1.5 text-xs font-bold rounded-md text-slate-400 hover:text-white transition">RI (RTS)</button>
-                    <button onclick="switchAsset('CR')" id="btn-CR" class="px-3 py-1.5 text-xs font-bold rounded-md text-slate-400 hover:text-white transition">CR (Yuan)</button>
-                    <button onclick="switchAsset('SBER')" id="btn-SBER" class="px-3 py-1.5 text-xs font-bold rounded-md text-slate-400 hover:text-white transition">SBER (Сбер)</button>
-                    <button onclick="switchAsset('SBERP')" id="btn-SBERP" class="px-3 py-1.5 text-xs font-bold rounded-md text-slate-400 hover:text-white transition">SBERP (Сбер пр.)</button>
-                    <button onclick="switchAsset('BTC')" id="btn-BTC" class="px-3 py-1.5 text-xs font-bold rounded-md text-slate-400 hover:text-white transition">BTC (Crypto)</button>
                 </div>
 
                 <div id="connection-status" class="px-3 py-2 bg-emerald-500/10 text-emerald-400 text-xs rounded-lg border border-emerald-500/20 font-mono flex items-center gap-2">
@@ -229,9 +225,6 @@
                     <select id="sz-symbol" class="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-white text-sm focus:outline-none focus:border-indigo-500">
                         <option value="Si">Si — доллар</option>
                         <option value="RI">RI — индекс РТС</option>
-                        <option value="CR">CR — юань</option>
-                        <option value="SBER">SBER — Сбербанк обыкн.</option>
-                        <option value="SBERP">SBERP — Сбербанк прив.</option>
                     </select>
                 </div>
                 <div>
@@ -892,9 +885,6 @@
                         <select id="spr-symbol" class="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm font-mono">
                             <option value="Si">Si (USD/RUB)</option>
                             <option value="RI">RI (RTS)</option>
-                            <option value="CR">CR (Yuan)</option>
-                            <option value="SBER">SBER (Сбер)</option>
-                            <option value="SBERP">SBERP (Сбер пр.)</option>
                         </select>
                     </div>
                     <div class="col-span-2">
@@ -1085,7 +1075,7 @@
                     <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">Предсказание для кандидата</div>
                     <div class="flex flex-wrap items-end gap-2 font-mono text-[11px] mb-3">
                         <label class="text-slate-400">Инстр.
-                            <select id="ml-sym" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option>Si</option><option>RI</option><option>CR</option><option>NG</option><option>SBER</option><option>SBERP</option></select></label>
+                            <select id="ml-sym" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option>Si</option><option>RI</option></select></label>
                         <label class="text-slate-400">Стратегия
                             <select id="ml-strat" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white">
                                 <option value="iron_condor">Iron Condor</option><option value="bull_put_spread">Bull Put</option><option value="bear_call_spread">Bear Call</option>
@@ -1158,8 +1148,7 @@
                     <div class="text-[11px] text-slate-400 font-mono uppercase">Поверхность волатильности (Skew / Term Structure)</div>
                     <div class="flex gap-2 items-center">
                         <select id="volsurf-symbol" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white text-[11px]">
-                            <option value="Si">Si</option><option value="RI">RI</option><option value="CR">CR</option>
-                            <option value="NG">NG</option><option value="SBER">SBER</option><option value="SBERP">SBERP</option>
+                            <option value="Si">Si</option><option value="RI">RI</option>
                         </select>
                         <button onclick="loadVolSurface()" class="px-3 py-1 bg-violet-600 hover:bg-violet-500 text-white text-[11px] font-bold rounded transition">📈 Показать</button>
                     </div>
@@ -2898,7 +2887,7 @@
 
         function switchAsset(asset) {
             currentAsset = asset;
-            ['Si', 'RI', 'CR', 'SBER', 'SBERP', 'BTC'].forEach(a => {
+            ['Si', 'RI'].forEach(a => {
                 const btn = document.getElementById(`btn-${a}`);
                 if (btn) {
                     if (a === asset) {

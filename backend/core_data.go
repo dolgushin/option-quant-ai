@@ -15,7 +15,9 @@ import (
 	"option-quant-ai/quant"
 )
 
-const coreSymbols = "Si,RI,CR,NG,SBER,SBERP"
+// Trade universe: Si + RI only (CR/NG/SBER/SBERP hidden for now;
+// crypto gets its own module later).
+const coreSymbols = "Si,RI"
 
 type coreInstrument struct {
 	Symbol       string  `json:"symbol"`
@@ -384,7 +386,7 @@ func collectCoreBrief(force bool) *coreBrief {
 	}
 	coreBriefMu.Unlock()
 
-	symbols := []string{"Si", "RI", "CR", "NG", "SBER", "SBERP"}
+	symbols := []string{"Si", "RI"}
 	var wg sync.WaitGroup
 	instruments := make([]coreInstrument, len(symbols))
 	for i, s := range symbols {
