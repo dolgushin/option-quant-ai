@@ -574,20 +574,6 @@ func sendCandidateText(c *coreCandidate, key string) bool {
 	return true
 }
 
-// scanVerdictNeedsText decides whether the generic scan line adds anything
-// over the candidate chart: skip it when the chart was just pushed and there
-// is no AI trade signal to report. Paper opens already have their dedicated
-// entry message, so they never need the generic line either.
-func scanVerdictNeedsText(pushed bool, v *coreVerdict) bool {
-	if v == nil || v.PaperOpen != "" {
-		return false
-	}
-	if pushed && (v.AI == nil || !v.AI.Trade) {
-		return false
-	}
-	return true
-}
-
 // countPricedInstruments counts brief instruments with a live spot — zero
 // means the market-data fetch failed and the scan ran blind. Pure.
 func countPricedInstruments(b *coreBrief) int {
@@ -621,23 +607,11 @@ func coreAutoScanLoop() {
 			if countPricedInstruments(v.Brief) == 0 {
 				log.Printf("core: auto-scan has no market data (MOEX unreachable?)")
 			}
-			// Push a chart of the top found construction (deduped) so the
-			// trader sees what the scan actually found, not just a score line.
-			pushed := false
+			// The only scan Telegram output is the candidate chart (deduped)
+			// and the paper-entry message: the generic verdict heartbeat
+			// was pure hourly noise, so it no longer sends.
 			if v.QuantTop != nil {
-				pushed = notifyCandidateSpread(v.QuantTop)
-			}
-			txt := fmt.Sprintf("🧠 Ядро: вердикт %s", v.Mode)
-			if v.QuantTop != nil {
-				txt += fmt.Sprintf(" | топ: %s %s (%d)", v.QuantTop.Symbol, v.QuantTop.DisplayName, v.QuantTop.Score)
-			}
-			if v.AI != nil && v.AI.Trade {
-				txt += " | ИИ: ВХОД"
-			}
-			// Skip the generic line when it would only repeat the chart that
-			// just went out (paper entries have their own 🟢 message anyway).
-			if scanVerdictNeedsText(pushed, v) {
-				logTelegramErr("scan-verdict", sendTelegramMessage(txt))
+				notifyCandidateSpread(v.QuantTop)
 			}
 		}
 		time.Sleep(interval)

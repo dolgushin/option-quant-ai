@@ -233,36 +233,6 @@ func TestMarkCandidateNotified(t *testing.T) {
 	lastCandidateKeyMu.Unlock()
 }
 
-// TestScanVerdictNeedsText pins when the generic scan line is redundant:
-// never on paper open, not after a fresh chart without an AI trade signal,
-// but kept as a heartbeat otherwise (including the AI-entry signal).
-func TestScanVerdictNeedsText(t *testing.T) {
-	aiTrade := &coreVerdict{Mode: "ai", AI: &coreAIVerdict{Trade: true}}
-	aiWait := &coreVerdict{Mode: "ai", AI: &coreAIVerdict{Trade: false}}
-	quant := &coreVerdict{Mode: "quant"}
-	opened := &coreVerdict{Mode: "ai", PaperOpen: "spr-1", AI: &coreAIVerdict{Trade: true}}
-	cases := []struct {
-		name   string
-		pushed bool
-		v      *coreVerdict
-		want   bool
-	}{
-		{"nil verdict", false, nil, false},
-		{"paper open skips", true, opened, false},
-		{"paper open skips without chart", false, opened, false},
-		{"fresh chart no AI skips", true, quant, false},
-		{"fresh chart AI-wait skips", true, aiWait, false},
-		{"fresh chart AI-trade keeps", true, aiTrade, true},
-		{"dup chart keeps heartbeat", false, quant, true},
-		{"dup chart AI-wait keeps", false, aiWait, true},
-	}
-	for _, tc := range cases {
-		if got := scanVerdictNeedsText(tc.pushed, tc.v); got != tc.want {
-			t.Fatalf("%s: got %v, want %v", tc.name, got, tc.want)
-		}
-	}
-}
-
 // TestCountPricedInstruments pins the scan-blind detector: an empty or
 // unpriced brief must report zero.
 func TestCountPricedInstruments(t *testing.T) {
