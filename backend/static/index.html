@@ -3957,11 +3957,10 @@
                 document.getElementById('sz-bymargin').innerText = s.qty_by_margin;
                 document.getElementById('sz-recommended').innerText = s.recommended_qty;
 
+                // All warnings come from the backend (s.warnings) — no local
+                // duplicates: the GO-cap note used to render twice.
                 let warn = '';
                 (s.warnings || []).forEach(w => { warn += `<div>⚠ ${w}</div>`; });
-                if (s.qty_by_margin < s.qty_by_risk) {
-                    warn += `<div>⚠ Размер ограничен свободными средствами (ГО), а не риск-бюджетом.</div>`;
-                }
                 document.getElementById('sz-warnings').innerHTML = warn;
 
                 const openBtn = document.querySelector('#sizing-result button');

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"strconv"
@@ -9,30 +10,40 @@ import (
 	"option-quant-ai/quant"
 )
 
+// applyLotCap clips a quantity to the max-lots limit, reporting whether the
+// cap bit (the UI shows the clipped value, so the warning carries the real
+// number). Pure — unit-tested.
+func applyLotCap(qty, maxLots int) (int, bool) {
+	if maxLots > 0 && qty > maxLots {
+		return maxLots, true
+	}
+	return qty, false
+}
+
 // sizingResult is the computed recommended position size for a strategy.
 type sizingResult struct {
-	Symbol          string  `json:"symbol"`
-	Strategy        string  `json:"strategy"`
-	StrategyName    string  `json:"strategy_name"`
-	Spot            float64 `json:"spot_price"`
-	MaxLossPerContract float64 `json:"max_loss_per_contract"` // points
-	MaxLossRub      float64 `json:"max_loss_rub"`            // RUB per contract
-	MarginPerContract float64 `json:"margin_per_contract"`   // GO per contract
-	MaxProfitRub    float64 `json:"max_profit_rub"`
-	RiskBudgetPct   float64 `json:"risk_budget_pct"`
-	RiskBudgetRub   float64 `json:"risk_budget_rub"`
-	StopLossPct     float64 `json:"stop_loss_pct"` // % of max loss taken before exit
-	QtyByRisk       int     `json:"qty_by_risk"`
-	QtyByMargin     int     `json:"qty_by_margin"`
-	RecommendedQty  int     `json:"recommended_qty"`
-	RiskPerRecommendedRub float64 `json:"risk_per_recommended_rub"`
-	MarginPerRecommendedRub float64 `json:"margin_per_recommended_rub"`
-	Cash            float64 `json:"cash"`
-	LockedMargin    float64 `json:"locked_margin"`
-	InitialCapital  float64 `json:"initial_capital"`
-	Feasible        bool    `json:"feasible"`
-	Warnings        []string `json:"warnings"`
-	MaxLots         int     `json:"max_lots"`
+	Symbol                  string   `json:"symbol"`
+	Strategy                string   `json:"strategy"`
+	StrategyName            string   `json:"strategy_name"`
+	Spot                    float64  `json:"spot_price"`
+	MaxLossPerContract      float64  `json:"max_loss_per_contract"` // points
+	MaxLossRub              float64  `json:"max_loss_rub"`          // RUB per contract
+	MarginPerContract       float64  `json:"margin_per_contract"`   // GO per contract
+	MaxProfitRub            float64  `json:"max_profit_rub"`
+	RiskBudgetPct           float64  `json:"risk_budget_pct"`
+	RiskBudgetRub           float64  `json:"risk_budget_rub"`
+	StopLossPct             float64  `json:"stop_loss_pct"` // % of max loss taken before exit
+	QtyByRisk               int      `json:"qty_by_risk"`
+	QtyByMargin             int      `json:"qty_by_margin"`
+	RecommendedQty          int      `json:"recommended_qty"`
+	RiskPerRecommendedRub   float64  `json:"risk_per_recommended_rub"`
+	MarginPerRecommendedRub float64  `json:"margin_per_recommended_rub"`
+	Cash                    float64  `json:"cash"`
+	LockedMargin            float64  `json:"locked_margin"`
+	InitialCapital          float64  `json:"initial_capital"`
+	Feasible                bool     `json:"feasible"`
+	Warnings                []string `json:"warnings"`
+	MaxLots                 int      `json:"max_lots"`
 }
 
 // positionSizingHandler computes how many contracts of a strategy fit the risk
@@ -152,11 +163,13 @@ func positionSizingHandler(w http.ResponseWriter, r *http.Request) {
 		qtyByMargin = int(math.Floor(math.Max(cash, 0) / res.MarginPerContract))
 	}
 
-	if qtyByRisk > maxLots {
-		qtyByRisk = maxLots
+	riskUncapped, marginUncapped := qtyByRisk, qtyByMargin
+	var capped bool
+	if qtyByRisk, capped = applyLotCap(qtyByRisk, maxLots); capped {
+		res.Warnings = append(res.Warnings, fmt.Sprintf("По риску проходит %d, но применён лимит %d лотов.", riskUncapped, maxLots))
 	}
-	if qtyByMargin > maxLots {
-		qtyByMargin = maxLots
+	if qtyByMargin, capped = applyLotCap(qtyByMargin, maxLots); capped {
+		res.Warnings = append(res.Warnings, fmt.Sprintf("По ГО проходит %d, но применён лимит %d лотов.", marginUncapped, maxLots))
 	}
 
 	res.QtyByRisk = qtyByRisk
