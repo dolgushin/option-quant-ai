@@ -1427,21 +1427,16 @@
             btn.innerText = '⏳ Перебор...';
             el.innerHTML = `<div class="text-slate-500 font-mono text-[11px]">Перебираю DTE × IV × тренд × vol для ${sym} · ${stratRu}...</div>`;
             try {
-                const body = JSON.stringify({ symbols: [sym], strategies: [strat], top: 8 });
+                const body = JSON.stringify({ symbols: [sym], strategies: [strat], per_tenor: 3 });
                 const res = await fetch('/api/v2/ml/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
                 const d = await res.json();
                 if (d.error) { el.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${d.error}</div>`; return; }
-                if (!d.rows || !d.rows.length) { el.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Пусто.</div>'; return; }
+                const groups = d.groups || (d.rows ? [{ label: '', rows: d.rows }] : []);
+                if (!groups.length) { el.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Пусто.</div>'; return; }
                 const dteNote = d.dte_source === 'series' ? `DTE по экспирациям биржи: ${(d.dtes || []).join(', ')}` : 'DTE по фикс. сетке';
-                let html = `<div class="text-[11px] text-slate-400 font-mono mb-1">Топ-${d.rows.length} вариантов ${sym} · ${stratRu} (перебрано ${d.scanned}, сделок в обучении: ${d.train_size}; ${dteNote})</div>
-                    <table class="w-full text-left text-[11px] font-mono text-slate-300">
-                    <thead class="text-slate-500 border-b border-slate-700 uppercase">
-                    <tr><th class="py-1 pr-2">#</th><th class="py-1 pr-2">Инстр.</th><th class="py-1 pr-2">Стратегия</th><th class="py-1 pr-2 text-right">DTE</th><th class="py-1 pr-2 text-right">IV%</th><th class="py-1 pr-2">Тренд</th><th class="py-1 pr-2">Vol</th><th class="py-1 pr-2 text-right">Win%</th><th class="py-1">Увер.</th></tr>
-                    </thead><tbody>`;
-                d.rows.forEach((r, i) => {
+                const rowHtml = (r) => {
                     const cls = r.win_prob >= 0.6 ? 'text-emerald-400' : r.win_prob >= 0.4 ? 'text-amber-400' : 'text-rose-400';
-                    html += `<tr class="border-b border-slate-800">
-                        <td class="py-1 pr-2 text-slate-500">${i + 1}</td>
+                    return `<tr class="border-b border-slate-800">
                         <td class="py-1 pr-2 text-slate-100 font-bold">${r.symbol}</td>
                         <td class="py-1 pr-2">${mlStratRu[r.strategy] || r.strategy}</td>
                         <td class="py-1 pr-2 text-right">${r.dte}</td>
@@ -1450,8 +1445,18 @@
                         <td class="py-1 pr-2">${r.vol_regime}</td>
                         <td class="py-1 pr-2 text-right font-bold ${cls}">${(r.win_prob * 100).toFixed(1)}</td>
                         <td class="py-1 text-slate-400">${r.confidence}</td></tr>`;
+                };
+                const headHtml = `<thead class="text-slate-500 border-b border-slate-700 uppercase">
+                    <tr><th class="py-1 pr-2">Инстр.</th><th class="py-1 pr-2">Стратегия</th><th class="py-1 pr-2 text-right">DTE</th><th class="py-1 pr-2 text-right">IV%</th><th class="py-1 pr-2">Тренд</th><th class="py-1 pr-2">Vol</th><th class="py-1 pr-2 text-right">Win%</th><th class="py-1">Увер.</th></tr>
+                    </thead><tbody>`;
+                let html = `<div class="text-[11px] text-slate-400 font-mono mb-1">${sym} · ${stratRu} по тенорам (перебрано ${d.scanned}, сделок: ${d.train_size}; ${dteNote})</div>`;
+                groups.forEach(g => {
+                    html += `<div class="text-[11px] text-indigo-300 font-mono mt-2 mb-1 font-bold">${g.label || 'Лучшие'}</div>
+                        <table class="w-full text-left text-[11px] font-mono text-slate-300">${headHtml}`;
+                    g.rows.forEach(r => { html += rowHtml(r); });
+                    html += '</tbody></table>';
                 });
-                el.innerHTML = html + '</tbody></table>';
+                el.innerHTML = html;
             } catch (e) { el.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${e.message}</div>`; }
             finally { btn.disabled = false; btn.innerText = '🔍 Перебрать всё'; }
         }

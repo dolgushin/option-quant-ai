@@ -141,6 +141,56 @@ func TestFilterSeriesDTEs(t *testing.T) {
 	}
 }
 
+// TestNormalizeClampsOutOfRange pins the anti-extrapolation guard: inputs
+// outside the training range saturate at the edges instead of exploding.
+func TestNormalizeClampsOutOfRange(t *testing.T) {
+	mm := featureMinMax{
+		Min: []float64{7, 0.1, -1, -1, 0, 0},
+		Max: []float64{45, 0.6, 1, 1, 8, 5},
+	}
+	out := mm.normalize(mlFeature{DTE: 100, IV: 2.0, Trend: 5, VolRegime: -5, Strategy: 20, Symbol: -3})
+	for i, v := range out {
+		if v < 0 || v > 1 {
+			t.Fatalf("dim %d = %v outside [0,1]", i, v)
+		}
+	}
+	in := mm.normalize(mlFeature{DTE: 14, IV: 0.2, Trend: 0, VolRegime: 0, Strategy: 2, Symbol: 0})
+	for i, v := range in {
+		if v < 0 || v > 1 {
+			t.Fatalf("in-range dim %d = %v outside [0,1]", i, v)
+		}
+	}
+	// In-range values are untouched by the clamp.
+	if in[0] != (14.0-7.0)/(45.0-7.0) {
+		t.Fatalf("DTE norm = %v, want linear mapping", in[0])
+	}
+}
+
+// TestScanMLGrouped checks tenor bucketing: every expiry class gets its own
+// top rows even when one axis dominates the global ranking.
+func TestScanMLGrouped(t *testing.T) {
+	initSymbolEncodings()
+	model := testScanModel() // likes DTE only
+	groups := scanMLGrouped(model,
+		[]string{"Si"}, []string{"bull_put_spread"},
+		[]int{5, 20, 100}, []float64{20},
+		[]string{"BULLISH"}, []string{"neutral"},
+		2)
+	if len(groups) != 3 {
+		t.Fatalf("got %d groups, want 3 (weekly/monthly/quarterly)", len(groups))
+	}
+	wantTenors := []string{"weekly", "monthly", "quarterly"}
+	wantDTEs := []int{5, 20, 100}
+	for i, g := range groups {
+		if g.Tenor != wantTenors[i] {
+			t.Fatalf("group %d tenor = %q, want %q", i, g.Tenor, wantTenors[i])
+		}
+		if len(g.Rows) == 0 || g.Rows[0].DTE != wantDTEs[i] {
+			t.Fatalf("group %s rows = %v, want DTE %d on top", g.Tenor, g.Rows, wantDTEs[i])
+		}
+	}
+}
+
 func TestScoreMLFeatureBands(t *testing.T) {
 	model := testScanModel()
 	hot := mlFeature{DTE: 45}

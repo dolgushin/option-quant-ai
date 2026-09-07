@@ -114,6 +114,15 @@ func (mm *featureMinMax) normalize(f mlFeature) []float64 {
 		} else {
 			out[i] = 0.5
 		}
+		// Clamp: inputs outside the training range (e.g. DTE 100 when the
+		// model saw ≤45) must not explode the dot product — score them as
+		// the nearest seen edge instead of extrapolating to 99%.
+		if out[i] < 0 {
+			out[i] = 0
+		}
+		if out[i] > 1 {
+			out[i] = 1
+		}
 	}
 	return out
 }
@@ -489,6 +498,7 @@ type mlScanRequest struct {
 	Trends     []string  `json:"trends"`
 	Vols       []string  `json:"vols"`
 	Top        int       `json:"top"`
+	PerTenor   int       `json:"per_tenor"`
 }
 
 type mlScanRow struct {
@@ -502,9 +512,38 @@ type mlScanRow struct {
 	Confidence string  `json:"confidence"`
 }
 
-// scanMLCombinations scores every grid combination with the model and returns
-// the top-N rows by win probability. Pure — unit-tested.
-func scanMLCombinations(model *logisticModel, symbols, strategies []string, dtes []int, ivs []float64, trends, vols []string, top int) []mlScanRow {
+// tenorOf buckets a DTE into an expiry tenor for grouped output.
+func tenorOf(dte int) string {
+	switch {
+	case dte <= 10:
+		return "weekly"
+	case dte <= 45:
+		return "monthly"
+	default:
+		return "quarterly"
+	}
+}
+
+func tenorLabel(t string) string {
+	switch t {
+	case "weekly":
+		return "Недельные (≤10д)"
+	case "monthly":
+		return "Месячные (11–45д)"
+	default:
+		return "Квартальные (>45д)"
+	}
+}
+
+type mlScanGroup struct {
+	Tenor string      `json:"tenor"`
+	Label string      `json:"label"`
+	Rows  []mlScanRow `json:"rows"`
+}
+
+// scoreMLGrid scores every grid combination, sorted by win probability desc.
+// Pure — the shared engine behind flat top-N and tenor-grouped output.
+func scoreMLGrid(model *logisticModel, symbols, strategies []string, dtes []int, ivs []float64, trends, vols []string) []mlScanRow {
 	rows := []mlScanRow{}
 	for _, sym := range symbols {
 		for _, strat := range strategies {
@@ -548,10 +587,46 @@ func scanMLCombinations(model *logisticModel, symbols, strategies []string, dtes
 		}
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].WinProb > rows[j].WinProb })
+	return rows
+}
+
+// scanMLCombinations scores every grid combination with the model and returns
+// the top-N rows by win probability. Pure — unit-tested.
+func scanMLCombinations(model *logisticModel, symbols, strategies []string, dtes []int, ivs []float64, trends, vols []string, top int) []mlScanRow {
+	rows := scoreMLGrid(model, symbols, strategies, dtes, ivs, trends, vols)
 	if top > 0 && len(rows) > top {
 		rows = rows[:top]
 	}
 	return rows
+}
+
+// scanMLGrouped returns the top-N rows per expiry tenor (weekly/monthly/
+// quarterly) so a dominant axis (e.g. DTE) cannot crowd out every other
+// expiry from the output. Buckets follow tenor order; empty ones are
+// omitted. Pure — unit-tested.
+func scanMLGrouped(model *logisticModel, symbols, strategies []string, dtes []int, ivs []float64, trends, vols []string, perTenor int) []mlScanGroup {
+	rows := scoreMLGrid(model, symbols, strategies, dtes, ivs, trends, vols)
+	byTenor := map[string][]mlScanRow{}
+	order := []string{}
+	for _, r := range rows {
+		t := tenorOf(r.DTE)
+		if _, ok := byTenor[t]; !ok {
+			order = append(order, t)
+		}
+		byTenor[t] = append(byTenor[t], r)
+	}
+	// Tenor order: weekly, monthly, quarterly.
+	rank := map[string]int{"weekly": 0, "monthly": 1, "quarterly": 2}
+	sort.Slice(order, func(i, j int) bool { return rank[order[i]] < rank[order[j]] })
+	groups := []mlScanGroup{}
+	for _, t := range order {
+		rs := byTenor[t]
+		if perTenor > 0 && len(rs) > perTenor {
+			rs = rs[:perTenor]
+		}
+		groups = append(groups, mlScanGroup{Tenor: t, Label: tenorLabel(t), Rows: rs})
+	}
+	return groups
 }
 
 // mlScanHandler scores a full parameter grid with the trained model and
@@ -637,9 +712,22 @@ func mlScanHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	scanned := len(symbols) * len(strategies) * len(dtes) * len(ivs) * len(trends) * len(vols)
+	if req.PerTenor > 0 {
+		per := req.PerTenor
+		if per > 10 {
+			per = 10
+		}
+		groups := scanMLGrouped(model, symbols, strategies, dtes, ivs, trends, vols, per)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"groups": groups, "scanned": scanned,
+			"train_size": model.TrainSize, "dtes": dtes, "dte_source": dteSource,
+		})
+		return
+	}
 	rows := scanMLCombinations(model, symbols, strategies, dtes, ivs, trends, vols, top)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"rows": rows, "scanned": len(symbols) * len(strategies) * len(dtes) * len(ivs) * len(trends) * len(vols),
+		"rows": rows, "scanned": scanned,
 		"train_size": model.TrainSize, "dtes": dtes, "dte_source": dteSource,
 	})
 }
