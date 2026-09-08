@@ -1175,6 +1175,8 @@
         async function loadCryptoRadar() {
             const symEl = document.getElementById('radar-sym');
             const symbol = symEl ? symEl.value : 'BTC';
+            const err = document.getElementById('radar-err');
+            if (err) err.textContent = 'Загружаю данные с биржи...';
             try {
                 const res = await fetch('/api/v1/crypto-radar?symbol=' + encodeURIComponent(symbol));
                 if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -1240,7 +1242,7 @@
             }
             radarCharts.skew = new Chart(sc, { type: 'line',
                 data: { labels: d.skew.map(p => p.strike >= 1000 ? Math.round(p.strike / 100) / 10 + 'K' : String(Math.round(p.strike))), datasets: [{ data: d.skew.map(p => p.iv * 100), borderColor: '#a855f7', backgroundColor: '#a855f7', tension: 0.3, pointRadius: 3 }] },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, radarAtm: { index: atmIdx } }, scales: { y: { ticks: { callback: v => v + '%' } } } } },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, radarAtm: { index: atmIdx } }, scales: { y: { ticks: { callback: v => v + '%' } } } },
                 plugins: [radarAtmPlugin] });
         }
 
