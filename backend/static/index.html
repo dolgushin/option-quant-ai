@@ -64,6 +64,7 @@
             <button id="tab-btn-core" onclick="switchTab('core')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🧠 Ядро</button>
             <button id="tab-btn-mcpnl" onclick="switchTab('mcpnl')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🎲 MC P&L</button>
             <button id="tab-btn-ml" onclick="switchTab('ml')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🤖 ML</button>
+            <button id="tab-btn-radar" onclick="switchTab('radar')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">₿ Крипто-радар</button>
         </nav>
 
         <div id="dashboard-view" class="space-y-4 md:space-y-6">
@@ -893,6 +894,68 @@
             </div>
         </div>
 
+        <!-- Crypto Options Radar (BTC/ETH) -->
+        <div id="radar-view" class="hidden space-y-4">
+            <div class="bg-black rounded-xl border border-cyan-500/40 p-4">
+                <div class="flex justify-between items-center flex-wrap gap-2">
+                    <div>
+                        <h2 class="text-xl font-bold text-amber-400">ОПЦИОННЫЙ РАДАР | <span id="radar-symbol">BTC</span></h2>
+                        <div id="radar-date" class="text-xs text-slate-400 font-mono mt-1"></div>
+                    </div>
+                    <div class="flex items-center gap-2 font-mono text-xs">
+                        <select id="radar-sym" onchange="loadCryptoRadar()" class="bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-white">
+                            <option value="BTC">BTC</option>
+                            <option value="ETH">ETH</option>
+                        </select>
+                        <button onclick="loadCryptoRadar()" class="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-lg transition">Обновить</button>
+                    </div>
+                </div>
+                <div id="radar-err" class="text-xs text-rose-400 font-mono mt-1"></div>
+            </div>
+
+            <div class="bg-black rounded-xl border border-cyan-500/40 p-4">
+                <div class="text-sm text-slate-300 font-mono mb-2">1. ЦЕНА</div>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+                    <div class="font-mono">
+                        <div class="text-xs text-slate-400">Текущая цена</div>
+                        <div class="text-2xl font-bold text-white"><span id="radar-spot">—</span> <span class="text-xs text-slate-400">USD</span></div>
+                        <div class="text-xs text-slate-500 mt-2">Неделю назад</div>
+                        <div id="radar-spot-week" class="text-lg font-bold text-slate-400">—</div>
+                        <div class="text-xs text-slate-400 mt-2">Изменение за неделю</div>
+                        <div id="radar-spot-chg" class="text-xl font-bold text-slate-300">—</div>
+                    </div>
+                    <div class="md:col-span-2 relative" style="height:220px"><canvas id="radar-price"></canvas></div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="bg-black rounded-xl border border-cyan-500/40 p-4">
+                    <div class="text-sm text-slate-300 font-mono mb-2">2. IV ПО ЭКСПИРАЦИЯМ</div>
+                    <div id="radar-iv-table"></div>
+                </div>
+                <div class="bg-black rounded-xl border border-cyan-500/40 p-4">
+                    <div class="text-sm text-slate-300 font-mono mb-2">3. СТРУКТУРА IV (TERM STRUCTURE)</div>
+                    <div class="relative" style="height:220px"><canvas id="radar-term"></canvas></div>
+                </div>
+                <div class="bg-black rounded-xl border border-cyan-500/40 p-4">
+                    <div class="text-sm text-slate-300 font-mono mb-2">4. IV-RANK</div>
+                    <div class="flex justify-center"><canvas id="radar-gauge" width="360" height="190"></canvas></div>
+                    <div id="radar-rank-sub" class="text-xs text-slate-400 font-mono text-center mt-1"></div>
+                </div>
+                <div class="bg-black rounded-xl border border-cyan-500/40 p-4">
+                    <div class="text-sm text-slate-300 font-mono mb-2">5. IV SKEW (УЛЫБКА)</div>
+                    <div class="relative" style="height:220px"><canvas id="radar-skew"></canvas></div>
+                </div>
+            </div>
+
+            <div class="bg-black rounded-xl border border-cyan-500/40 p-4">
+                <h3 class="text-center text-amber-300 font-bold mb-3">ТЕКУЩАЯ СИТУАЦИЯ НА РЫНКЕ ОПЦИОНОВ <span class="radar-sym-2">BTC</span></h3>
+                <ul id="radar-bullets" class="list-disc pl-5 space-y-2 text-sm text-slate-200"></ul>
+                <div id="radar-detail" class="mt-3 space-y-2 text-sm text-slate-300 border-t border-slate-800 pt-3"></div>
+                <div class="mt-3 text-[10px] text-slate-500 font-mono">Не является торговой рекомендацией. Информация предоставлена в образовательных целях. <span id="radar-src"></span></div>
+            </div>
+        </div>
+
         <!-- MC P&L Distribution Simulator -->
         <div id="mcpnl-view" class="hidden space-y-4 md:space-y-6">
             <h2 class="text-lg font-semibold text-slate-200">🎲 Монте-Карло: распределение P&L</h2>
@@ -1061,8 +1124,8 @@
         const tabActive = 'px-4 py-2 text-xs font-bold rounded-lg bg-emerald-600 text-white transition';
 
         function switchTab(tab) {
-            const views = { dashboard: 'dashboard-view', spreads: 'spreads-view', stats: 'stats-view', forecast: 'forecast-view', core: 'core-view', mcpnl: 'mcpnl-view', ml: 'ml-view' };
-            const btns = { dashboard: 'tab-btn-dashboard', spreads: 'tab-btn-spreads', stats: 'tab-btn-stats', forecast: 'tab-btn-fc', core: 'tab-btn-core', mcpnl: 'tab-btn-mcpnl', ml: 'tab-btn-ml' };
+            const views = { dashboard: 'dashboard-view', spreads: 'spreads-view', stats: 'stats-view', forecast: 'forecast-view', core: 'core-view', mcpnl: 'mcpnl-view', ml: 'ml-view', radar: 'radar-view' };
+            const btns = { dashboard: 'tab-btn-dashboard', spreads: 'tab-btn-spreads', stats: 'tab-btn-stats', forecast: 'tab-btn-fc', core: 'tab-btn-core', mcpnl: 'tab-btn-mcpnl', ml: 'tab-btn-ml', radar: 'tab-btn-radar' };
             Object.values(views).forEach(id => document.getElementById(id).classList.add('hidden'));
             Object.values(btns).forEach(id => document.getElementById(id).className = tabIdle);
             document.getElementById(views[tab]).classList.remove('hidden');
@@ -1072,6 +1135,151 @@
             if (tab === 'forecast') loadForecast();
             if (tab === 'core') loadCoreTab();
             if (tab === 'ml') loadMLStatus();
+            if (tab === 'radar') loadCryptoRadar();
+        }
+
+        // ---- Crypto options radar (BTC/ETH, Deribit + Binance/Bybit) ----
+        let radarCharts = {};
+        const radarAtmPlugin = {
+            id: 'radarAtm',
+            afterDraw(chart, args, opts) {
+                if (!opts || opts.index === undefined || opts.index === null) return;
+                const x = chart.scales.x.getPixelForValue(opts.index);
+                const ctx = chart.ctx;
+                ctx.save();
+                ctx.strokeStyle = '#eab308';
+                ctx.setLineDash([4, 4]);
+                ctx.beginPath();
+                ctx.moveTo(x, chart.scales.y.top);
+                ctx.lineTo(x, chart.scales.y.bottom);
+                ctx.stroke();
+                ctx.restore();
+            }
+        };
+
+        function radarPct(v) {
+            if (v === null || v === undefined) return '—';
+            return (v * 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%';
+        }
+        function radarPp(v) {
+            if (v === null || v === undefined) return '—';
+            const s = (v * 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            return (v > 0 ? '+' : '') + s + '%';
+        }
+        function radarChgCls(v) { return v === null || v === undefined ? 'text-slate-400' : v > 0 ? 'text-emerald-400' : v < 0 ? 'text-rose-400' : 'text-slate-300'; }
+        function radarMoney(v) {
+            if (v === null || v === undefined) return '—';
+            return Math.round(v).toLocaleString('ru-RU');
+        }
+
+        async function loadCryptoRadar() {
+            const symEl = document.getElementById('radar-sym');
+            const symbol = symEl ? symEl.value : 'BTC';
+            try {
+                const res = await fetch('/api/v1/crypto-radar?symbol=' + encodeURIComponent(symbol));
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                renderCryptoRadar(await res.json());
+            } catch (e) {
+                console.error('Radar failed', e);
+                const err = document.getElementById('radar-err');
+                if (err) err.textContent = 'Не удалось загрузить радар: биржа недоступна. Попробуйте позже.';
+            }
+        }
+
+        function renderCryptoRadar(d) {
+            document.getElementById('radar-symbol').textContent = d.symbol;
+            document.querySelectorAll('.radar-sym-2').forEach(el => el.textContent = d.symbol);
+            document.getElementById('radar-date').textContent = new Date(d.as_of + 'T12:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+            document.getElementById('radar-err').textContent = '';
+            // 1. Price
+            document.getElementById('radar-spot').textContent = radarMoney(d.spot);
+            document.getElementById('radar-spot-week').textContent = radarMoney(d.spot_week_ago) + ' USD';
+            const spChg = document.getElementById('radar-spot-chg');
+            spChg.textContent = (d.spot_change_pct === null || d.spot_change_pct === undefined) ? '—' : ((d.spot_change_pct > 0 ? '+' : '') + d.spot_change_pct.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%');
+            spChg.className = 'text-xl font-bold ' + radarChgCls(d.spot_change_pct);
+            // 2. IV table
+            document.getElementById('radar-iv-table').innerHTML = '<table class="w-full text-sm font-mono"><tr class="text-slate-400 text-xs"><th class="text-left py-1"></th><th class="text-right">Текущая IV</th><th class="text-right">Неделю назад</th><th class="text-right">Изменение</th></tr>' +
+                d.iv_table.map(b => '<tr class="border-t border-slate-800"><td class="py-1.5 font-bold text-amber-300">' + b.label + '</td><td class="text-right text-slate-100">' + radarPct(b.current) + '</td><td class="text-right text-slate-400">' + radarPct(b.week_ago) + '</td><td class="text-right font-bold ' + radarChgCls(b.change) + '">' + radarPp(b.change) + '</td></tr>').join('') + '</table>';
+            // 5b. Rank line under gauge
+            const rk = d.iv_rank;
+            document.getElementById('radar-rank-sub').innerHTML = 'Неделю назад <span class="text-slate-200 font-bold">' + (rk.value === null || rk.value === undefined ? '—' : radarPct(rk.week_ago)) + '</span> &nbsp; Изменение <span class="font-bold ' + radarChgCls(rk.change) + '">' + radarPp(rk.change === null || rk.change === undefined ? null : rk.change / 100) + '</span>';
+            drawRadarGauge(rk.value === null || rk.value === undefined ? null : rk.value);
+            // 6. Summary
+            document.getElementById('radar-bullets').innerHTML = d.summary.bullets.map(b => '<li>' + b + '</li>').join('');
+            document.getElementById('radar-detail').innerHTML = d.summary.detail.map(p => '<p>' + p + '</p>').join('');
+            document.getElementById('radar-src').textContent = 'Спот/история: ' + (d.sources.spot || '?') + ' · Опционы: ' + (d.sources.options || '?');
+            if (typeof Chart === 'undefined') return;
+            Chart.defaults.color = '#94a3b8';
+            Chart.defaults.borderColor = 'rgba(51,65,85,0.6)';
+            // Price area chart
+            const pc = document.getElementById('radar-price');
+            if (radarCharts.price) radarCharts.price.destroy();
+            const pctx = pc.getContext('2d');
+            const grad = pctx.createLinearGradient(0, 0, 0, 220);
+            grad.addColorStop(0, 'rgba(249,115,22,0.45)');
+            grad.addColorStop(1, 'rgba(249,115,22,0.02)');
+            radarCharts.price = new Chart(pctx, { type: 'line',
+                data: { labels: d.price_history.map(p => p.t), datasets: [{ data: d.price_history.map(p => p.price), borderColor: '#f97316', backgroundColor: grad, fill: true, pointRadius: 0, borderWidth: 1.5 }] },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { ticks: { maxTicksLimit: 5 } } } } });
+            // Term structure
+            const tc = document.getElementById('radar-term');
+            if (radarCharts.term) radarCharts.term.destroy();
+            const hasWeek = d.iv_table.some(b => b.week_ago !== null && b.week_ago !== undefined);
+            const tsets = [{ label: 'Текущее значение', data: d.iv_table.map(b => b.current === null ? null : b.current * 100), borderColor: '#4ade80', backgroundColor: '#4ade80', tension: 0.2 }];
+            if (hasWeek) tsets.push({ label: 'Неделю назад', data: d.iv_table.map(b => b.week_ago === null ? null : b.week_ago * 100), borderColor: '#e2e8f0', backgroundColor: '#e2e8f0', tension: 0.2 });
+            radarCharts.term = new Chart(tc, { type: 'line',
+                data: { labels: d.iv_table.map(b => b.label), datasets: tsets },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } } }, scales: { y: { ticks: { callback: v => v + '%' } } } } });
+            // Skew smile
+            const sc = document.getElementById('radar-skew');
+            if (radarCharts.skew) radarCharts.skew.destroy();
+            let atmIdx = null;
+            if (d.skew_atm) {
+                let best = Infinity;
+                d.skew.forEach((p, i) => { const dd = Math.abs(p.strike - d.skew_atm); if (dd < best) { best = dd; atmIdx = i; } });
+            }
+            radarCharts.skew = new Chart(sc, { type: 'line',
+                data: { labels: d.skew.map(p => p.strike >= 1000 ? Math.round(p.strike / 100) / 10 + 'K' : String(Math.round(p.strike))), datasets: [{ data: d.skew.map(p => p.iv * 100), borderColor: '#a855f7', backgroundColor: '#a855f7', tension: 0.3, pointRadius: 3 }] },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, radarAtm: { index: atmIdx } }, scales: { y: { ticks: { callback: v => v + '%' } } } } },
+                plugins: [radarAtmPlugin] });
+        }
+
+        function drawRadarGauge(frac) {
+            const cv = document.getElementById('radar-gauge');
+            const ctx = cv.getContext('2d');
+            const W = cv.width, H = cv.height;
+            ctx.clearRect(0, 0, W, H);
+            const cx = W / 2, cy = H - 14, R = Math.min(W / 2 - 16, H - 30);
+            const seg = (a0, a1, col) => { ctx.beginPath(); ctx.strokeStyle = col; ctx.lineWidth = 18; ctx.arc(cx, cy, R, a0, a1); ctx.stroke(); };
+            seg(Math.PI, Math.PI * 1.3, '#22c55e');
+            seg(Math.PI * 1.3, Math.PI * 1.7, '#eab308');
+            seg(Math.PI * 1.7, Math.PI * 2, '#ef4444');
+            ctx.fillStyle = '#64748b';
+            ctx.font = '11px sans-serif';
+            ctx.fillText('0% Низкий', 8, H - 2);
+            ctx.fillText('100% Высокий', W - 82, H - 2);
+            if (frac === null || frac === undefined) {
+                ctx.fillStyle = '#94a3b8';
+                ctx.font = 'bold 13px sans-serif';
+                ctx.fillText('накапливаем историю', cx - 70, cy - 24);
+                return;
+            }
+            const v = Math.max(0, Math.min(100, frac));
+            const a = Math.PI + (v / 100) * Math.PI;
+            ctx.beginPath();
+            ctx.strokeStyle = '#e2e8f0';
+            ctx.lineWidth = 3;
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx + Math.cos(a) * (R - 4), cy + Math.sin(a) * (R - 4));
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.fillStyle = '#e2e8f0';
+            ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#4ade80';
+            ctx.font = 'bold 26px sans-serif';
+            const txt = v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%';
+            ctx.fillText(txt, cx - ctx.measureText(txt).width / 2, cy - 28);
         }
 
         // ---- Statistics module ----

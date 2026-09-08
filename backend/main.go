@@ -3556,6 +3556,7 @@ func main() {
 	http.HandleFunc("/api/v1/options/vertical-spread", verticalSpreadHandler)
 	http.HandleFunc("/api/v1/options/rolling-advice", rollingAdviceHandler)
 	http.HandleFunc("/api/v1/backtest", backtestHandler)
+	http.HandleFunc("/api/v1/crypto-radar", cryptoRadarHandler)
 	http.HandleFunc("/api/v1/vol-surface", volSurfaceHandler)
 	http.HandleFunc("/api/v1/calendar", calendarHandler)
 	http.HandleFunc("/api/v1/mc-pnl", mcPLHandler)

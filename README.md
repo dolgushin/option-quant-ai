@@ -144,6 +144,7 @@ backend/
 | Опционы | `/api/v1/options/{skew,iv-rank,trend,recommendations,rolling-advice,gamma-step,exit-advice,vertical-spread}` |
 | Стратегии | `/api/v1/strategy/{build,ironcondor,parity,rotation}`, `/api/v1/backtest` |
 | Аналитика v2 | `/api/v2/stats/{overview,breakdown}`, `/api/v2/forecast`, `/api/v2/core/{settings,analyze,verdicts}` |
+| Крипто-радар | `/api/v1/crypto-radar?symbol=BTC` (Deribit IV + Binance/Bybit спот, вкладка «₿ Крипто-радар») |
 | Прочее | `/api/v1/trades`, `/api/v1/position/profile`, `/api/v1/copilot/ask`, `/api/v1/settings/{token,telegram}`, `/health` |
 
 ## Важные доменные факты
