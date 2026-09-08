@@ -40,7 +40,7 @@ type spreadRules struct {
 	// AutoHedge enables automatic delta hedging of the linked position.
 	AutoHedge bool `json:"auto_hedge"`
 	// MaxHedgeDelta is the |net delta| threshold above which a hedge order is
-	// placed (0 = hedge any non-zero delta).
+	// placed (≤0 = default 1.0, matching the trigger fallback).
 	MaxHedgeDelta float64 `json:"max_hedge_delta"`
 	// Live makes automatic roll/hedge place real Alor orders instead of paper.
 	Live bool `json:"live"`
@@ -118,6 +118,7 @@ func runSpreadManagerPass() {
 		if r.Action != "NONE" {
 			execSpreadAction(&s, &r)
 		}
+		managerMaybeAlert(s, r)
 		runs = append(runs, r)
 	}
 
@@ -395,6 +396,171 @@ func decideSpreadAction(s spreadRecord, dte int, netDelta, pnl, spot, ivATM floa
 }
 
 // ---- Reconstruction executors (vertical-spread management spec §8–§11) ----
+
+// ---- Early warnings & action receipts (Telegram) ----
+
+// managerWarnZone is the fraction of the way to a trigger at which an early
+// warning fires (70% consumed, 30% left to act).
+const managerWarnZone = 0.7
+
+// managerWarning is one early-warning line with a dedup key.
+type managerWarning struct {
+	Key  string
+	Text string
+}
+
+// managerEarlyWarnings reports triggers the position is approaching but has
+// not hit yet, so the trader sees the hedge/stop/roll moment coming instead
+// of discovering it after the fact. Pure — unit-tested.
+func managerEarlyWarnings(s spreadRecord, dte int, netDelta, pnl, spot, sigma float64, spotOK bool) []managerWarning {
+	out := []managerWarning{}
+	units := float64(s.Qty)
+	if units < 1 {
+		units = 1
+	}
+	scale := contractMultiplier(s.Symbol) * units
+	maxLoss := s.MaxLoss * scale
+	name := s.DisplayName
+	if name == "" {
+		name = s.Type
+	}
+	title := fmt.Sprintf("%s · %s", name, s.Symbol)
+
+	// Stop-loss approach.
+	if s.StopLossPct > 0 && maxLoss > 0 && pnl < 0 {
+		if d := -pnl / (s.StopLossPct * maxLoss); d >= managerWarnZone && d < 1 {
+			out = append(out, managerWarning{"stop", fmt.Sprintf("⚠ %s: до стоп-лосса %s ₽ (%.0f%% пути)",
+				title, formatRub(s.StopLossPct*maxLoss+pnl, 0), d*100)})
+		}
+	}
+
+	// Hedge-threshold approach (mirrors the trigger's ≤0 → 1.0 default).
+	threshold := s.MaxHedgeDelta
+	if threshold <= 0 {
+		threshold = 1.0
+	}
+	if s.AutoHedge && threshold > 0 {
+		if d := math.Abs(netDelta) / threshold; d >= managerWarnZone && d < 1 {
+			out = append(out, managerWarning{"hedge", fmt.Sprintf("⚠ %s: Δ %0.2f подходит к порогу хеджа %0.2f (%.0f%% пути)",
+				title, netDelta, threshold, d*100)})
+		}
+	}
+
+	// TPR approach (same adverse-move math as the trigger).
+	if s.TPRMode == "ONE_DAY_SIGMA" && spotOK && s.EntrySpot > 0 {
+		k := s.TPRSigmaMult
+		if k <= 0 {
+			k = 1
+		}
+		move := (spot - s.EntrySpot) / s.EntrySpot
+		adverse := move
+		if isBullishType(s.Type) {
+			adverse = -move
+		}
+		if band := k * sigma / math.Sqrt(252); band > 0 {
+			if d := adverse / band; d >= managerWarnZone && d < 1 {
+				out = append(out, managerWarning{"tpr", fmt.Sprintf("⚠ %s: движение %.1f%% — до TPR-реконструкции близко (%.0f%% пути)",
+					title, adverse*100, d*100)})
+			}
+		}
+	}
+
+	// Strike-proximity approach (credit spreads, threatening-side mirror).
+	if s.RollStrikeRiskPct > 0 && spotOK && s.ShortStrike > 0 && !isDebitSpreadType(s.Type) {
+		pct := s.RollStrikeRiskPct
+		warnBand := pct / managerWarnZone
+		isCall, ok := shortLegIsCall(s.Type)
+		inWarn := false
+		switch {
+		case !ok:
+			dist := math.Abs(spot-s.ShortStrike) / s.ShortStrike
+			inWarn = dist > pct && dist <= warnBand
+		case isCall:
+			inWarn = spot < s.ShortStrike*(1-pct) && spot >= s.ShortStrike*(1-warnBand)
+		default:
+			inWarn = spot > s.ShortStrike*(1+pct) && spot <= s.ShortStrike*(1+warnBand)
+		}
+		if inWarn {
+			out = append(out, managerWarning{"prox", fmt.Sprintf("⚠ %s: цена %s подходит к короткому стрику %s",
+				title, formatRub(spot, 0), formatRub(s.ShortStrike, 0))})
+		}
+	}
+
+	// DTE countdown to the time roll.
+	if s.AutoRollDTE > 0 && dte > s.AutoRollDTE && dte <= s.AutoRollDTE+3 {
+		out = append(out, managerWarning{"dte", fmt.Sprintf("⚠ %s: до DTE-ролла осталось %d дн.",
+			title, dte-s.AutoRollDTE)})
+	}
+
+	return out
+}
+
+// managerActionReceipt formats the Telegram receipt for an executed manager
+// action (rolls, hedges, reconstructions). Closes already notify via
+// notifyStructureClosed. Pure — unit-tested.
+func managerActionReceipt(s spreadRecord, run managerRun) string {
+	name := s.DisplayName
+	if name == "" {
+		name = s.Type
+	}
+	return fmt.Sprintf("🔧 Менеджер: %s · %s %s\n%s\nP&L сейчас: %s ₽",
+		telegramEscape(run.Action), telegramEscape(name), telegramEscape(s.Symbol),
+		telegramEscape(run.Detail), formatRub(run.Pnl, 0))
+}
+
+// alertCooldown suppresses repeat alerts per key for a duration.
+type alertCooldown struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+}
+
+func newAlertCooldown() *alertCooldown {
+	return &alertCooldown{last: map[string]time.Time{}}
+}
+
+// due reports whether an alert may fire now, recording the fire time.
+func (c *alertCooldown) due(key string, d time.Duration, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if t, ok := c.last[key]; ok && now.Sub(t) < d {
+		return false
+	}
+	c.last[key] = now
+	return true
+}
+
+var managerAlerts = newAlertCooldown()
+
+// managerMaybeAlert sends action receipts and early warnings with a 6-hour
+// per-key cooldown. Executed actions supersede warnings for the same pass;
+// CLOSE already has its dedicated message.
+func managerMaybeAlert(s spreadRecord, run managerRun) {
+	now := time.Now()
+	switch run.Action {
+	case "ROLL", "ROLL_PROFIT", "CONVERT_LADDER", "CONVERT_RATIO", "CONVERT_CONDOR",
+		"ADD_ATM_PUT", "BUYBACK_FAR_SHORT", "BUYBACK_EXTRA", "SHIFT_LEFT", "HEDGE":
+		if managerAlerts.due("act:"+s.ID+":"+run.Action, 6*time.Hour, now) {
+			logTelegramErr("manager-action", sendTelegramMessage(managerActionReceipt(s, run)))
+		}
+		return
+	case "CLOSE":
+		return
+	}
+	dte := dteInDays(s.Expiry, now)
+	spot, spotOK := 0.0, false
+	if v, err := getSpotPrice(s.Symbol); err == nil && v > 0 {
+		spot, spotOK = v, true
+	}
+	sigma := s.SigmaAnnual
+	if sigma <= 0 {
+		sigma = 0.30
+	}
+	for _, w := range managerEarlyWarnings(s, dte, run.NetDelta, run.Pnl, spot, sigma, spotOK) {
+		if managerAlerts.due("warn:"+s.ID+":"+w.Key, 6*time.Hour, now) {
+			logTelegramErr("manager-warn", sendTelegramMessage(w.Text))
+		}
+	}
+}
 
 // legQuote returns a working price for a chain contract: last trade, else
 // bid/ask mid, else previous close.

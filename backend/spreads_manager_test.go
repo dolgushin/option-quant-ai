@@ -3,7 +3,9 @@ package main
 import (
 	"math"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"option-quant-ai/quant"
 )
@@ -228,6 +230,106 @@ func TestAutoMarketView(t *testing.T) {
 			t.Fatalf("autoMarketView(%q,%q) = (%q,%v), want (%q,%v)",
 				tc.regime, tc.strength, got, ok, tc.want, tc.ok)
 		}
+	}
+}
+
+// TestManagerEarlyWarnings pins the 70% pre-trigger zone: approaching a
+// trigger warns, standing far or already past it stays quiet.
+func TestManagerEarlyWarnings(t *testing.T) {
+	keys := func(ws []managerWarning) string {
+		ks := []string{}
+		for _, w := range ws {
+			ks = append(ks, w.Key)
+		}
+		return strings.Join(ks, ",")
+	}
+	bullPut := spreadRecord{ID: "s1", Symbol: "Si", Type: "bull_put", DisplayName: "Bull Put Spread",
+		Qty: 1, MaxLoss: 658, ShortStrike: 86000,
+		StopLossPct: 0.75, AutoRollDTE: 7, RollStrikeRiskPct: 0.03,
+		AutoHedge: true, MaxHedgeDelta: 1.0,
+		TPRMode: "ONE_DAY_SIGMA", TPRSigmaMult: 1, SigmaAnnual: 0.30, EntrySpot: 86200}
+
+	// Stop: level = 0.75*658 = 493.5; -400 is 81% → warn; -600 fired → quiet.
+	if got := keys(managerEarlyWarnings(bullPut, 20, 0.2, -400, 87000, 0.30, true)); !strings.Contains(got, "stop") {
+		t.Fatalf("stop approach must warn, got %q", got)
+	}
+	if got := keys(managerEarlyWarnings(bullPut, 20, 0.2, -600, 87000, 0.30, true)); strings.Contains(got, "stop") {
+		t.Fatalf("fired stop must not warn, got %q", got)
+	}
+	// Hedge: 0.8/1.0 = 80% → warn; 1.5 fired → quiet; 0.3 far → quiet.
+	if got := keys(managerEarlyWarnings(bullPut, 20, 0.8, 0, 87000, 0.30, true)); !strings.Contains(got, "hedge") {
+		t.Fatalf("hedge approach must warn, got %q", got)
+	}
+	if got := keys(managerEarlyWarnings(bullPut, 20, 1.5, 0, 87000, 0.30, true)); strings.Contains(got, "hedge") {
+		t.Fatalf("fired hedge must not warn, got %q", got)
+	}
+	// TPR band = 0.30/√252 ≈ 1.89%: spot 84500 → −1.97% adverse ≈ 104% fired → quiet.
+	if got := keys(managerEarlyWarnings(bullPut, 20, 0.2, 0, 84500, 0.30, true)); strings.Contains(got, "tpr") {
+		t.Fatalf("fired TPR must not warn, got %q", got)
+	}
+	// spot 84700 → −1.74% ≈ 92% → warn.
+	if got := keys(managerEarlyWarnings(bullPut, 20, 0.2, 0, 84700, 0.30, true)); !strings.Contains(got, "tpr") {
+		t.Fatalf("TPR approach must warn, got %q", got)
+	}
+	// Proximity (short put 86000, pct 3%): 89000 in (88580, 89685] → warn;
+	// 87000 firing → quiet; 91000 far → quiet.
+	if got := keys(managerEarlyWarnings(bullPut, 20, 0.2, 0, 89000, 0.30, true)); !strings.Contains(got, "prox") {
+		t.Fatalf("proximity approach must warn, got %q", got)
+	}
+	if got := keys(managerEarlyWarnings(bullPut, 20, 0.2, 0, 87000, 0.30, true)); strings.Contains(got, "prox") {
+		t.Fatalf("fired proximity must not warn, got %q", got)
+	}
+	// DTE countdown: 9 vs roll-at-7 → warn; 7 firing → quiet; 20 far → quiet.
+	if got := keys(managerEarlyWarnings(bullPut, 9, 0.2, 0, 87000, 0.30, true)); !strings.Contains(got, "dte") {
+		t.Fatalf("DTE countdown must warn, got %q", got)
+	}
+	if got := keys(managerEarlyWarnings(bullPut, 7, 0.2, 0, 87000, 0.30, true)); strings.Contains(got, "dte") {
+		t.Fatalf("fired DTE must not warn, got %q", got)
+	}
+	// Bear call safe side never warns: spot far below the short call
+	// (outside the 82314–83420 warn band).
+	bearCall := bullPut
+	bearCall.Type = "bear_call"
+	if got := keys(managerEarlyWarnings(bearCall, 20, 0.2, 0, 81000, 0.30, true)); strings.Contains(got, "prox") {
+		t.Fatalf("bear_call safe side must not warn, got %q", got)
+	}
+	// ...while approaching from below does warn.
+	if got := keys(managerEarlyWarnings(bearCall, 20, 0.2, 0, 83000, 0.30, true)); !strings.Contains(got, "prox") {
+		t.Fatalf("bear_call approach must warn, got %q", got)
+	}
+	// Debit spreads never warn on proximity.
+	debit := bullPut
+	debit.Type = "bull_call"
+	if got := keys(managerEarlyWarnings(debit, 20, 0.2, 0, 89000, 0.30, true)); strings.Contains(got, "prox") {
+		t.Fatalf("debit proximity must not warn, got %q", got)
+	}
+}
+
+func TestManagerActionReceipt(t *testing.T) {
+	s := spreadRecord{ID: "s1", Symbol: "Si", DisplayName: "Bull Put Spread"}
+	run := managerRun{Action: "HEDGE", Detail: "Авто-хедж: 2 контрактов (Δ 1.50)", Pnl: -517}
+	txt := managerActionReceipt(s, run)
+	for _, want := range []string{"HEDGE", "Bull Put Spread", "Si", "517"} {
+		if !strings.Contains(txt, want) {
+			t.Fatalf("receipt missing %q:\n%s", want, txt)
+		}
+	}
+}
+
+func TestAlertCooldownDue(t *testing.T) {
+	c := newAlertCooldown()
+	now := time.Now()
+	if !c.due("k", time.Hour, now) {
+		t.Fatal("first fire must be due")
+	}
+	if c.due("k", time.Hour, now.Add(30*time.Minute)) {
+		t.Fatal("repeat within cooldown must be suppressed")
+	}
+	if !c.due("k", time.Hour, now.Add(2*time.Hour)) {
+		t.Fatal("fire after cooldown must be due")
+	}
+	if !c.due("other", time.Hour, now) {
+		t.Fatal("different key must be due")
 	}
 }
 
