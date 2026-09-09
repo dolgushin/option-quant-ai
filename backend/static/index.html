@@ -2846,19 +2846,24 @@
                 el.innerHTML = '';
                 return;
             }
-            const bcCls = (s.book_close_pnl || 0) >= 0 ? 'text-emerald-300' : 'text-rose-300';
             const theoCls = (s.theo_pnl || 0) >= 0 ? 'text-emerald-300' : 'text-rose-300';
-            let depthNote = '';
+            // No depth → no number: a P&L off two ghost lots (e.g. −24 564 ₽)
+            // is fiction, not a quote. Show the theo value plus the warning.
+            let bookPart = '';
             if (!s.book_depth_ok) {
-                depthNote = ` <span class="text-amber-400" title="В стакане недостаточно лотов для полного закрытия">⚠ в стакане мало лотов</span>`;
+                bookPart = `<span class="text-slate-400" title="Закрытие по текущим бид/аск Alor (шорт откупаем по аску, лонг продаём по биду)">Закрыть по стакану:</span>
+                    <span class="text-slate-500">нет глубины</span>
+                    <span class="text-amber-400" title="В стакане недостаточно лотов для полного закрытия">⚠ в стакане мало лотов</span>`;
+            } else {
+                const bcCls = (s.book_close_pnl || 0) >= 0 ? 'text-emerald-300' : 'text-rose-300';
+                bookPart = `<span class="text-slate-400" title="Закрытие по текущим бид/аск Alor (шорт откупаем по аску, лонг продаём по биду)">Закрыть по стакану:</span>
+                    <span class="${bcCls}">${(s.book_close_pnl || 0) >= 0 ? '+' : ''}${(s.book_close_pnl || 0).toLocaleString('ru-RU')} ₽</span>`;
             }
             el.innerHTML = `<div class="text-[10px] mt-1 font-mono text-slate-500 bg-slate-900/50 border border-slate-700 rounded p-2">
-                <span class="text-slate-400" title="Закрытие по текущим бид/аск Alor (шорт откупаем по аску, лонг продаём по биду)">Закрыть по стакану:</span>
-                <span class="${bcCls}">${(s.book_close_pnl || 0) >= 0 ? '+' : ''}${(s.book_close_pnl || 0).toLocaleString('ru-RU')} ₽</span>
+                ${bookPart}
                 <span class="text-slate-600">|</span>
                 <span class="text-slate-400">по теор:</span>
                 <span class="${theoCls}">${(s.theo_pnl || 0) >= 0 ? '+' : ''}${(s.theo_pnl || 0).toLocaleString('ru-RU')} ₽</span>
-                ${depthNote}
             </div>`;
         }
 
