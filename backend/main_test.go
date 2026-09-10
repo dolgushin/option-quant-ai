@@ -7,6 +7,46 @@ import (
 	"option-quant-ai/quant"
 )
 
+// TestBoardFetchBackoff pins the failure backoff: with a recent fetch failure
+// recorded and no usable cache, both board fetchers must fail fast (no
+// network) instead of serializing full-timeout fetches behind their mutexes.
+func TestBoardFetchBackoff(t *testing.T) {
+	optionMu.Lock()
+	prevCache, prevTime, prevFail := optionCache, optionCacheTime, optionCacheFailTime
+	optionCache, optionCacheTime = nil, time.Time{}
+	optionCacheFailTime = time.Now()
+	optionMu.Unlock()
+
+	start := time.Now()
+	if _, err := moexOptionContracts(); err == nil {
+		t.Fatal("expected fast backoff error, got nil")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("backoff path took %v, must fail fast", d)
+	}
+
+	equityOptionMu.Lock()
+	prevECache, prevETime, prevEFail := equityOptionCache, equityOptionCacheTime, equityOptionCacheFailTime
+	equityOptionCache, equityOptionCacheTime = nil, time.Time{}
+	equityOptionCacheFailTime = time.Now()
+	equityOptionMu.Unlock()
+
+	start = time.Now()
+	if _, err := moexEquityOptionContracts(); err == nil {
+		t.Fatal("expected fast backoff error, got nil")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("equity backoff path took %v, must fail fast", d)
+	}
+
+	optionMu.Lock()
+	optionCache, optionCacheTime, optionCacheFailTime = prevCache, prevTime, prevFail
+	optionMu.Unlock()
+	equityOptionMu.Lock()
+	equityOptionCache, equityOptionCacheTime, equityOptionCacheFailTime = prevECache, prevETime, prevEFail
+	equityOptionMu.Unlock()
+}
+
 func TestDTEInDays(t *testing.T) {
 	ref := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 

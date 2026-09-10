@@ -90,9 +90,10 @@ var (
 	}
 
 	// equityOptionCache holds the ROPD (premium options on shares) contracts.
-	equityOptionCache     []optionContract
-	equityOptionCacheTime time.Time
-	equityOptionMu        sync.Mutex
+	equityOptionCache         []optionContract
+	equityOptionCacheTime     time.Time
+	equityOptionCacheFailTime time.Time
+	equityOptionMu            sync.Mutex
 
 	// tokenStore persists the Alor refresh token encrypted on disk.
 	tokenStore *secure.Store
@@ -624,9 +625,10 @@ type optionContract struct {
 }
 
 var (
-	optionCache     []optionContract
-	optionCacheTime time.Time
-	optionMu        sync.Mutex
+	optionCache         []optionContract
+	optionCacheTime     time.Time
+	optionCacheFailTime time.Time
+	optionMu            sync.Mutex
 )
 
 // quoteCache caches recent option quotes so mark-to-market repricing of a
@@ -646,7 +648,10 @@ var (
 	quoteMu    sync.Mutex
 )
 
-const quoteTTL = 5 * time.Second
+// Quote cache TTL: 5s matched the dashboard tick and re-fetched every
+// leg on every refresh (8 legs × up to 10s of Alor+MOEX timeouts when
+// feeds are sick). 30s keeps marks fresh enough for a 5s dashboard.
+const quoteTTL = 30 * time.Second
 
 // spotQuote is a short-lived cache entry for an underlying's price.
 type spotQuote struct {
@@ -932,11 +937,17 @@ func moexOptionContracts() ([]optionContract, error) {
 	if len(optionCache) > 0 && time.Since(optionCacheTime) < 10*time.Minute {
 		return optionCache, nil
 	}
+	// Failure backoff: without it every UI tick serializes behind full
+	// 15s timeouts while holding optionMu whenever MOEX is sick.
+	if time.Since(optionCacheFailTime) < time.Minute {
+		return nil, fmt.Errorf("moex options board temporarily unavailable (backoff)")
+	}
 
 	url := "http://iss.moex.com/iss/engines/futures/markets/options/boards/RFUD/securities.json?iss.meta=off&iss.only=securities&securities.columns=SECID,LASTDELDATE,ASSETCODE,OPTIONTYPE,STRIKE,IMNP,IMP,PREVPRICE"
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
+		optionCacheFailTime = time.Now()
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -947,6 +958,7 @@ func moexOptionContracts() ([]optionContract, error) {
 		} `json:"securities"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		optionCacheFailTime = time.Now()
 		return nil, err
 	}
 
@@ -996,11 +1008,16 @@ func moexEquityOptionContracts() ([]optionContract, error) {
 	if len(equityOptionCache) > 0 && time.Since(equityOptionCacheTime) < 10*time.Minute {
 		return equityOptionCache, nil
 	}
+	// Failure backoff: same thundering-horde problem as the RFUD board.
+	if time.Since(equityOptionCacheFailTime) < time.Minute {
+		return nil, fmt.Errorf("moex equity options board temporarily unavailable (backoff)")
+	}
 
 	url := "http://iss.moex.com/iss/engines/futures/markets/options/boards/ROPD/securities.json?iss.meta=off&iss.only=securities&securities.columns=SECID,LASTDELDATE,ASSETCODE,OPTIONTYPE,STRIKE,IMNP,IMP,PREVPRICE,SHORTNAME&iss.rows=50000"
 	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
+		equityOptionCacheFailTime = time.Now()
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -1011,6 +1028,7 @@ func moexEquityOptionContracts() ([]optionContract, error) {
 		} `json:"securities"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		equityOptionCacheFailTime = time.Now()
 		return nil, err
 	}
 
@@ -1769,37 +1787,51 @@ func repricePosition(p *quant.Position) {
 	deltaTotal := 0.0
 	thetaTotal := 0.0
 
+	// Refresh marks concurrently: each leg fetch is network-bound and
+	// sequential 5–10s timeouts used to stack past the UI timeout on
+	// multi-leg positions. Goroutines touch only their own leg's
+	// CurrentPrice (shared caches are mutex-guarded); the accounting loop
+	// below stays sequential and bit-identical.
+	var wg sync.WaitGroup
+	for i := range p.Legs {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			leg := &p.Legs[idx]
+			var last float64
+			if leg.Kind == "FUTURES" {
+				// Prefer Alor's live feed (getSpotPrice), fall back to the actual
+				// contract quote (leg.SecID like "SiU6") and then the stored price.
+				if s, err := getSpotPrice(p.Symbol); err == nil && s > 0 {
+					last = s
+				} else if leg.SecID != "" && len(leg.SecID) >= 3 {
+					if c, err := moexISSSpotPrice(leg.SecID); err == nil && c > 0 {
+						last = c
+					}
+				}
+				if last <= 0 {
+					last = leg.CurrentPrice
+				}
+			} else {
+				// Hybrid mark: live narrow books at the mid, dead/wide books at
+				// BS fair value with the series IV (like the MOEX constructor).
+				last = optionMark(leg.SecID, leg.IsCall, leg.Strike, spot, t, p.Symbol, p.Expiry)
+				if last <= 0 {
+					last = leg.CurrentPrice
+				}
+			}
+			if last > 0 {
+				leg.CurrentPrice = last
+			}
+		}(i)
+	}
+	wg.Wait()
+
 	for i := range p.Legs {
 		leg := &p.Legs[i]
 		dir := 1.0
 		if leg.Side == "SELL" {
 			dir = -1.0
-		}
-
-		var last float64
-		if leg.Kind == "FUTURES" {
-			// Prefer Alor's live feed (getSpotPrice), fall back to the actual
-			// contract quote (leg.SecID like "SiU6") and then the stored price.
-			if s, err := getSpotPrice(p.Symbol); err == nil && s > 0 {
-				last = s
-			} else if leg.SecID != "" && len(leg.SecID) >= 3 {
-				if c, err := moexISSSpotPrice(leg.SecID); err == nil && c > 0 {
-					last = c
-				}
-			}
-			if last <= 0 {
-				last = leg.CurrentPrice
-			}
-		} else {
-			// Hybrid mark: live narrow books at the mid, dead/wide books at
-			// BS fair value with the series IV (like the MOEX constructor).
-			last = optionMark(leg.SecID, leg.IsCall, leg.Strike, spot, t, p.Symbol, p.Expiry)
-			if last <= 0 {
-				last = leg.CurrentPrice
-			}
-		}
-		if last > 0 {
-			leg.CurrentPrice = last
 		}
 
 		entryValue += dir * leg.EntryPrice * mult * float64(leg.Quantity)
