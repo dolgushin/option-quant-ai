@@ -2422,16 +2422,25 @@
             } catch (e) { /* manager not available */ }
         }
 
+        let spreadsRefreshing = false;
+
         async function updateSpreads() {
+            // Skip the tick while a previous refresh is still in flight:
+            // the endpoint fans out to MOEX/Alor and piling up requests
+            // only makes every one slower (and trips the timeout).
+            if (spreadsRefreshing) return;
+            spreadsRefreshing = true;
             try {
                 const ac = new AbortController();
-                const tid = setTimeout(() => ac.abort(), 12000);
+                const tid = setTimeout(() => ac.abort(), 30000);
                 const res = await fetch('/api/v1/spreads', { signal: ac.signal });
                 clearTimeout(tid);
                 if (!res.ok) throw new Error('HTTP '+res.status);
                 const d = await res.json();
-                document.getElementById('spr-summary').innerText =
+                const sumEl = document.getElementById('spr-summary');
+                sumEl.innerText =
                     `${d.spreads.length} открыто | ${d.spreads.filter(s => s.net_credit > 0).length} кредитных | ${d.spreads.filter(s => s.net_credit <= 0).length} дебетовых`;
+                delete sumEl.dataset.stale;
                 updateSpreadManager();
                 if (!d.spreads.length) {
                     document.getElementById('spr-body').innerHTML =
@@ -2511,8 +2520,24 @@
                 });
             } catch (e) {
                 console.error("Spreads update failed", e);
-                const body = document.getElementById('spr-body');
-                if (body) body.innerHTML = '<tr><td colspan="10" class="p-3 text-center text-rose-400">Не удалось загрузить спреды: '+(e.message||e)+'</td></tr>';
+                const msg = e.name === 'AbortError'
+                    ? 'сервер отвечает дольше 30с (MOEX/Alor тормозят), следующий тик повторит'
+                    : (e.message || e);
+                if (!lastSpreadIds) {
+                    // First load ever and nothing to show: render the error.
+                    const body = document.getElementById('spr-body');
+                    if (body) body.innerHTML = '<tr><td colspan="10" class="p-3 text-center text-rose-400">Не удалось загрузить спреды: '+msg+'</td></tr>';
+                } else {
+                    // Never wipe live rows on a transient failure: flag the
+                    // summary once until the next successful refresh clears it.
+                    const sumEl = document.getElementById('spr-summary');
+                    if (sumEl && !sumEl.dataset.stale) {
+                        sumEl.dataset.stale = '1';
+                        sumEl.innerHTML += ' <span class="text-amber-400">⚠ обновление отстаёт</span>';
+                    }
+                }
+            } finally {
+                spreadsRefreshing = false;
             }
         }
 
