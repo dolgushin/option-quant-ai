@@ -30,11 +30,12 @@ type cacheEntry struct {
 	ttl  time.Time
 }
 
-// New returns a Client with per-URL TTL cache (default 60s) and a generous
-// timeout (the calculator can be slow computing a full board).
+// New returns a Client with per-URL TTL cache (default 60s) and a tight
+// timeout: a sick calculator must fail fast (the list handler fans out over
+// spreads × legs) instead of stacking 20s waits past the UI timeout.
 func New() *Client {
 	return &Client{
-		http: &http.Client{Timeout: 20 * time.Second},
+		http: &http.Client{Timeout: 8 * time.Second},
 		ttl:  60 * time.Second,
 		cch:  map[string]cacheEntry{},
 	}

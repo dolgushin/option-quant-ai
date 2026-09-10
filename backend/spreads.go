@@ -1092,12 +1092,31 @@ func bookClosePrice(leg quant.PositionLeg) (price float64, depth int) {
 // spread). depthPerLeg shows the number of lots available at the closing
 // price for each leg; the caller can compare against leg.Quantity to flag
 // insufficient depth.
+//
+// Leg books are fetched concurrently: sequential 5s Alor timeouts used to
+// stack up past the UI timeout on multi-leg spreads. Each goroutine writes
+// only its own result slot (and the Alor client is mutex-guarded), so this
+// is race-safe by construction; accumulation stays ordered.
 func bookCloseValue(legs []quant.PositionLeg, mult float64) (total float64, perLeg []bookCloseLeg, ok bool) {
+	type res struct {
+		price float64
+		depth int
+	}
+	out := make([]res, len(legs))
+	var wg sync.WaitGroup
+	for i, l := range legs {
+		wg.Add(1)
+		go func(idx int, leg quant.PositionLeg) {
+			defer wg.Done()
+			p, d := bookClosePrice(leg)
+			out[idx] = res{p, d}
+		}(i, l)
+	}
+	wg.Wait()
 	candidates := make([]bookLegBook, 0, len(legs))
-	for _, l := range legs {
-		p, d := bookClosePrice(l)
-		if p > 0 {
-			candidates = append(candidates, bookLegBook{l, p, d})
+	for i, l := range legs {
+		if out[i].price > 0 {
+			candidates = append(candidates, bookLegBook{l, out[i].price, out[i].depth})
 		}
 	}
 	return accumulateBookClose(candidates, mult)

@@ -844,7 +844,11 @@ func assetPointValue(assetCode string) float64 {
 	if secid == "" {
 		return 0
 	}
-	resp, err := http.Get("http://iss.moex.com/iss/engines/futures/markets/options/securities/" + secid + ".json?iss.meta=off")
+	// Bounded client: the default http.Get hangs forever on a stalled
+	// connection while holding assetPointMu, freezing every multiplier
+	// lookup behind it.
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get("http://iss.moex.com/iss/engines/futures/markets/options/securities/" + secid + ".json?iss.meta=off")
 	if err != nil {
 		return 0
 	}

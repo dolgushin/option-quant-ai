@@ -333,6 +333,25 @@ func TestAlertCooldownDue(t *testing.T) {
 	}
 }
 
+// TestBookCloseValueNilMarket exercises the concurrent book-fetch path
+// without network: no Alor client → every leg prices at zero → not ok.
+func TestBookCloseValueNilMarket(t *testing.T) {
+	if alorMarket != nil {
+		t.Skip("requires no Alor client configured")
+	}
+	legs := []quant.PositionLeg{
+		{SecID: "Si86000BU6", Side: "SELL", Kind: "OPTION", Quantity: 4},
+		{SecID: "Si85500BU6", Side: "BUY", Kind: "OPTION", Quantity: 4},
+	}
+	total, perLeg, ok := bookCloseValue(legs, 1)
+	if ok {
+		t.Fatalf("nil market must not be ok (total %v, legs %v)", total, perLeg)
+	}
+	if total != 0 || len(perLeg) != 0 {
+		t.Fatalf("nil market must yield empty result, got %v %v", total, perLeg)
+	}
+}
+
 func TestDecideSpreadStateMachine(t *testing.T) {
 	base := spreadRecord{
 		ID: "spr-sm", Symbol: "SBER", Type: "bull_call", Qty: 1,
