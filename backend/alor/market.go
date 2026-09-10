@@ -3,6 +3,7 @@ package alor
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -13,14 +14,14 @@ type MarketClient struct {
 }
 
 type SecurityQuote struct {
-	Symbol       string    `json:"symbol"`
-	Exchange     string    `json:"exchange"`
-	Description  string    `json:"description"`
-	Price        float64   `json:"price"`
-	Bid          float64   `json:"bid"`
-	Ask          float64   `json:"ask"`
-	Volume       float64   `json:"volume"`
-	Timestamp    time.Time `json:"timestamp"`
+	Symbol      string    `json:"symbol"`
+	Exchange    string    `json:"exchange"`
+	Description string    `json:"description"`
+	Price       float64   `json:"price"`
+	Bid         float64   `json:"bid"`
+	Ask         float64   `json:"ask"`
+	Volume      float64   `json:"volume"`
+	Timestamp   time.Time `json:"timestamp"`
 }
 
 type AlorSecurityResponse struct {
@@ -169,6 +170,37 @@ func (m *MarketClient) fetchBestBidAsk(exchange, symbol, token string) (float64,
 	return bestBid, bestAsk
 }
 
+// RawGet performs an authenticated GET against path+query on the Alor API
+// and returns status plus raw body. Diagnostic passthrough for discovering
+// response shapes (boards, history) without baking in guesses.
+func (m *MarketClient) RawGet(path, rawQuery string) (int, []byte, error) {
+	token, err := m.authClient.GetAccessToken()
+	if err != nil {
+		return 0, nil, err
+	}
+	url := fmt.Sprintf("%s%s", m.baseURL, path)
+	if rawQuery != "" {
+		url += "?" + rawQuery
+	}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return resp.StatusCode, nil, err
+	}
+	return resp.StatusCode, body, nil
+}
+
 // FetchOptionChain fetches option symbols or derivatives for underlying root (Si or RI)
 func (m *MarketClient) FetchOptionChain(rootSymbol string) ([]string, error) {
 	token, err := m.authClient.GetAccessToken()
@@ -198,7 +230,7 @@ func (m *MarketClient) FetchOptionChain(rootSymbol string) ([]string, error) {
 	var securities []AlorSecurityResponse
 	if err := json.NewDecoder(resp.Body).Decode(&securities); err != nil {
 		// might be single object or array
-		return []string{rootSymbol + "C50000"} , nil
+		return []string{rootSymbol + "C50000"}, nil
 	}
 
 	var symbols []string

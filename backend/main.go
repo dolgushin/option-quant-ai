@@ -3487,6 +3487,41 @@ func rollingAdviceHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(advice)
 }
 
+// alorProbeHandler is a read-only diagnostic passthrough to the Alor API
+// (GET /api/v1/debug/alor-get?path=/md/v2/Securities/MOEX&qs=query%3DSi).
+// Used to discover live response shapes (boards, history) for the Alor-only
+// migration without baking in guesses.
+func alorProbeHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if alorMarket == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "alor not configured"})
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" || len(path) > 200 || path[0] != '/' || strings.Contains(path, "..") {
+		http.Error(w, "bad path", http.StatusBadRequest)
+		return
+	}
+	qs := r.URL.Query().Get("qs")
+	if len(qs) > 1000 {
+		http.Error(w, "query too long", http.StatusBadRequest)
+		return
+	}
+	status, body, err := alorMarket.RawGet(path, qs)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+		return
+	}
+	out := string(body)
+	truncated := false
+	if len(out) > 20000 {
+		out, truncated = out[:20000]+"...[truncated]", true
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": status, "bytes": len(body), "truncated": truncated, "body": out,
+	})
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -3546,6 +3581,9 @@ func main() {
 	// Settings (encrypted Alor token / Telegram)
 	http.HandleFunc("/api/v1/settings/token", settingsTokenHandler)
 	http.HandleFunc("/api/v1/settings/telegram", settingsTelegramHandler)
+
+	// Diagnostics (read-only Alor passthrough for migration research)
+	http.HandleFunc("/api/v1/debug/alor-get", alorProbeHandler)
 
 	// Positions & Portfolio Handlers
 	http.HandleFunc("/api/v1/positions", positionsHandler)
