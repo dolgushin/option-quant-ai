@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"time"
 
 	"option-quant-ai/optioncalc"
 )
@@ -70,74 +71,11 @@ func mcPLHandler(w http.ResponseWriter, r *http.Request) {
 		n = 5000
 	}
 
-	// Determine spread direction: credit > 0 means short premium (credit spread).
-	width := math.Abs(longK - shortK)
-	// If both strikes coincide (or are missing), derive the spread width from
-	// the entered max loss so the simulation stays meaningful.
-	if width == 0 && maxLoss > 0 {
-		width = math.Abs(maxLoss)
-	}
-	if width == 0 {
-		width = math.Abs(credit) + 1
-	}
-	isDebit := credit < 0
-	absCredit := math.Abs(credit)
-
-	pnls := make([]float64, n)
-	// Risk-neutral daily log step: iv annualized, DTE in calendar days.
-	sig := iv / math.Sqrt(365)
-
-	for i := 0; i < n; i++ {
-		// Simulate daily spot path with GBM (zero drift, risk-neutral).
-		s := spot
-		for d := 0; d < dte; d++ {
-			s *= math.Exp(sig * rand.NormFloat64())
-		}
-
-		// Spread P&L at expiry (European payoff), direction-aware by strikes:
-		// width = |shortK - longK| caps every branch. Credit spread loses when
-		// the underlying breaches the short leg; debit spread earns when it
-		// breaches the long (money) leg.
-		var pnl float64
-		if isDebit {
-			pnl = -absCredit // paid premium
-			if longK < shortK {
-				// Bull call: profit when spot rises above the long (lower) strike.
-				if s > longK {
-					pnl += math.Min(s-longK, width)
-				}
-			} else {
-				// Bear put: profit when spot falls below the long (higher) strike.
-				if s < longK {
-					pnl += math.Min(longK-s, width)
-				}
-			}
-		} else {
-			pnl = absCredit // received premium
-			if longK < shortK {
-				// Bull put: loss when spot drops below the short (higher) strike.
-				if s < shortK {
-					pnl -= math.Min(shortK-s, width)
-				}
-			} else {
-				// Bear call: loss when spot rallies above the short (lower) strike.
-				if s > shortK {
-					pnl -= math.Min(s-shortK, width)
-				}
-			}
-		}
-		pnls[i] = pnl
-	}
-
-	sort.Float64s(pnls)
-	probs := 0.0
-	sum := 0.0
-	for _, p := range pnls {
-		if p > 0 {
-			probs++
-		}
-		sum += p
-	}
+	// Time-seeded paths keep the single calculator lively; the grid scan
+	// below uses a fixed seed so variants are fairly comparable.
+	pnls := simulateSpreadPnL(credit, maxLoss, spot, iv, shortK, longK, dte, n,
+		rand.New(rand.NewSource(time.Now().UnixNano())))
+	probs, sum := summarizePnL(pnls)
 
 	// Build histogram (24 bins). Even a degenerate (single-value) distribution
 	// must render: pad the range by one unit so the frontend gets a chart.
@@ -178,6 +116,202 @@ func mcPLHandler(w http.ResponseWriter, r *http.Request) {
 		MaxWin:     rnd(pnls[len(pnls)-1]),
 		Histogram:  bins,
 	})
+}
+
+// spreadWidth derives the wing width from the strikes, falling back to the
+// entered max loss (or the credit) when strikes coincide or are missing.
+func spreadWidth(shortK, longK, maxLoss, credit float64) float64 {
+	if w := math.Abs(longK - shortK); w > 0 {
+		return w
+	}
+	if maxLoss > 0 {
+		return math.Abs(maxLoss)
+	}
+	return math.Abs(credit) + 1
+}
+
+// simulateSpreadPnL runs n GBM expiry paths (zero drift, risk-neutral daily
+// steps) and returns the sorted P&L array. Direction comes from the credit
+// sign and strike orientation (bull put / bear call / bull call / bear put).
+// Pure given rnd — unit-tested.
+func simulateSpreadPnL(credit, maxLoss, spot, iv, shortK, longK float64, dte, n int, rnd *rand.Rand) []float64 {
+	width := spreadWidth(shortK, longK, maxLoss, credit)
+	isDebit := credit < 0
+	absCredit := math.Abs(credit)
+	sig := iv / math.Sqrt(365)
+
+	pnls := make([]float64, n)
+	for i := 0; i < n; i++ {
+		s := spot
+		for d := 0; d < dte; d++ {
+			s *= math.Exp(sig * rnd.NormFloat64())
+		}
+		var pnl float64
+		if isDebit {
+			pnl = -absCredit // paid premium
+			if longK < shortK {
+				// Bull call: profit when spot rises above the long (lower) strike.
+				if s > longK {
+					pnl += math.Min(s-longK, width)
+				}
+			} else {
+				// Bear put: profit when spot falls below the long (higher) strike.
+				if s < longK {
+					pnl += math.Min(longK-s, width)
+				}
+			}
+		} else {
+			pnl = absCredit // received premium
+			if longK < shortK {
+				// Bull put: loss when spot drops below the short (higher) strike.
+				if s < shortK {
+					pnl -= math.Min(shortK-s, width)
+				}
+			} else {
+				// Bear call: loss when spot rallies above the short (lower) strike.
+				if s > shortK {
+					pnl -= math.Min(s-shortK, width)
+				}
+			}
+		}
+		pnls[i] = pnl
+	}
+	sort.Float64s(pnls)
+	return pnls
+}
+
+// summarizePnL counts profitable paths and sums P&L over a sorted array.
+func summarizePnL(pnls []float64) (probs, sum float64) {
+	for _, p := range pnls {
+		if p > 0 {
+			probs++
+		}
+		sum += p
+	}
+	return probs, sum
+}
+
+type mcScanRow struct {
+	ShortK     float64 `json:"short"`
+	LongK      float64 `json:"long"`
+	DTE        int     `json:"dte"`
+	IV         float64 `json:"iv"`
+	ProbProfit float64 `json:"prob_profit"`
+	AvgPnL     float64 `json:"avg_pnl"`
+	P50        float64 `json:"p50"`
+	MinPnL     float64 `json:"min_pnl"`
+	MaxPnL     float64 `json:"max_pnl"`
+}
+
+// scanSpreadGrid scores short×wing×DTE×IV combinations with a fixed seed so
+// variants are fairly comparable, returning the top-N by expectancy
+// (average P&L), ProbProfit second. Pure — unit-tested.
+func scanSpreadGrid(credit, spot float64, shorts, wings []float64, dtes []int, ivs []float64, n, top int) []mcScanRow {
+	rows := []mcScanRow{}
+	for _, sh := range shorts {
+		for _, w := range wings {
+			if w <= 0 {
+				continue
+			}
+			// Both orientations: long below (put-style) and above (call-style).
+			for _, lo := range []float64{sh - w, sh + w} {
+				for _, dte := range dtes {
+					if dte <= 0 {
+						continue
+					}
+					for _, iv := range ivs {
+						if iv <= 0 {
+							continue
+						}
+						rnd := rand.New(rand.NewSource(42))
+						pnls := simulateSpreadPnL(credit, 0, spot, iv, sh, lo, dte, n, rnd)
+						probs, sum := summarizePnL(pnls)
+						rows = append(rows, mcScanRow{
+							ShortK: sh, LongK: lo, DTE: dte, IV: iv,
+							ProbProfit: math.Round(probs/float64(n)*10000) / 100,
+							AvgPnL:     math.Round(sum/float64(n)*100) / 100,
+							P50:        math.Round(pnls[n/2]*100) / 100,
+							MinPnL:     math.Round(pnls[0]*100) / 100,
+							MaxPnL:     math.Round(pnls[n-1]*100) / 100,
+						})
+					}
+				}
+			}
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].AvgPnL != rows[j].AvgPnL {
+			return rows[i].AvgPnL > rows[j].AvgPnL
+		}
+		return rows[i].ProbProfit > rows[j].ProbProfit
+	})
+	if top > 0 && len(rows) > top {
+		rows = rows[:top]
+	}
+	return rows
+}
+
+// mcScanHandler auto-calculates the Monte-Carlo grid and returns the best
+// variants by expectancy. POST /api/v1/mc-scan
+// {"credit":80,"spot":86200,"shorts":[...],"wings":[...],"dtes":[...],"ivs":[...],"n":1000,"top":8}
+func mcScanHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var req struct {
+		Credit float64   `json:"credit"`
+		Spot   float64   `json:"spot"`
+		Symbol string    `json:"symbol"`
+		Shorts []float64 `json:"shorts"`
+		Wings  []float64 `json:"wings"`
+		DTEs   []int     `json:"dtes"`
+		IVs    []float64 `json:"ivs"`
+		N      int       `json:"n"`
+		Top    int       `json:"top"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(map[string]string{"error": "bad request"})
+		return
+	}
+	spot := req.Spot
+	if spot <= 0 && req.Symbol != "" {
+		spot, _ = getSpotPrice(req.Symbol)
+	}
+	if req.Credit == 0 || spot <= 0 {
+		json.NewEncoder(w).Encode(map[string]string{"error": "нужны кредит и спот (или инструмент)"})
+		return
+	}
+	shorts := req.Shorts
+	if len(shorts) == 0 {
+		// Default axis: ±1/3/6% around spot.
+		for _, pct := range []float64{-0.06, -0.03, -0.01, 0, 0.01, 0.03, 0.06} {
+			shorts = append(shorts, math.Round(spot*(1+pct)))
+		}
+	}
+	wings := req.Wings
+	if len(wings) == 0 {
+		wings = []float64{spot * 0.01, spot * 0.02, spot * 0.03}
+	}
+	dtes := req.DTEs
+	if len(dtes) == 0 {
+		dtes = []int{7, 14, 30}
+	}
+	ivs := req.IVs
+	if len(ivs) == 0 {
+		ivs = []float64{0.15, 0.25, 0.35}
+	}
+	n := req.N
+	if n <= 0 || n > 5000 {
+		n = 1000
+	}
+	top := req.Top
+	if top <= 0 || top > 20 {
+		top = 8
+	}
+	if len(shorts)*len(wings)*2*len(dtes)*len(ivs) > 2000 {
+		json.NewEncoder(w).Encode(map[string]string{"error": "сетка больше 2000 комбинаций — сузьте оси"})
+		return
+	}
+	rows := scanSpreadGrid(req.Credit, spot, shorts, wings, dtes, ivs, n, top)
+	json.NewEncoder(w).Encode(map[string]interface{}{"rows": rows, "scanned": len(shorts) * len(wings) * 2 * len(dtes) * len(ivs)})
 }
 
 // mcMoexATMIV returns the near-the-money implied volatility (decimal) for a

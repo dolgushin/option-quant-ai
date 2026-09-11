@@ -3634,6 +3634,7 @@ func main() {
 	http.HandleFunc("/api/v1/vol-surface", volSurfaceHandler)
 	http.HandleFunc("/api/v1/calendar", calendarHandler)
 	http.HandleFunc("/api/v1/mc-pnl", mcPLHandler)
+	http.HandleFunc("/api/v1/mc-scan", mcScanHandler)
 	http.HandleFunc("/api/v2/ml/train", mlTrainHandler)
 	http.HandleFunc("/api/v2/ml/predict", mlPredictHandler)
 	http.HandleFunc("/api/v2/ml/scan", mlScanHandler)

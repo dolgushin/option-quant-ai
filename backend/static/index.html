@@ -982,10 +982,12 @@
                     <label class="block text-slate-400">Симуляций
                         <input id="mc-n" type="number" min="100" max="50000" value="5000" class="w-20 mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
                     <button onclick="runMCPnL()" class="px-4 py-1.5 bg-violet-600 hover:bg-violet-500 text-white font-bold rounded-lg transition">🎲 Симуляция</button>
+                    <button onclick="scanMC()" id="mc-scan" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg transition">🔍 Перебрать всё</button>
                 </div>
                 <div class="text-[10px] text-slate-500 font-mono mt-2">P&L на экспирацию. Спред определяют страйки; если они совпали — ширина берётся из макс. риска. Для гладкой формы держите оба страйка вне денег. Если указать Инстр.+Экспирацию (и оставить Спот/IV пустыми) — волатильность и спот возьмутся из MOEX Options Calculator (ATM серии).</div>
             </div>
             <div id="mc-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
+            <div id="mc-scanres" class="mt-2"></div>
             <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
                 <div class="text-[11px] text-slate-400 font-mono mb-2">Распределение P&L (гистограмма), ₽</div>
                 <div class="relative" style="height:240px"><canvas id="mc-hist"></canvas></div>
@@ -1697,6 +1699,44 @@
                     kpiCard('Экстремумы ₽ (loss/win)', `${(d.max_loss >= 0 ? '+' : '') + d.max_loss.toLocaleString('ru-RU')} … ${(d.max_win >= 0 ? '+' : '') + d.max_win.toLocaleString('ru-RU')}`, pnlCls(d.max_loss));
                 drawMCHist(d);
             } catch (e) { k.innerHTML = `<div class="col-span-full text-center text-rose-400 py-4 font-mono">❌ ${e.message}</div>`; }
+        }
+
+        async function scanMC() {
+            const btn = document.getElementById('mc-scan');
+            const el = document.getElementById('mc-scanres');
+            const credit = parseFloat(document.getElementById('mc-credit').value) || 0;
+            const spot = parseFloat(document.getElementById('mc-spot').value) || 0;
+            const sym = document.getElementById('mc-sym').value.trim();
+            btn.disabled = true;
+            btn.innerText = '⏳ Перебор...';
+            el.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Считаю сетку страйки × крылья × DTE × IV (seed фиксирован — варианты сравнимы)...</div>';
+            try {
+                const body = JSON.stringify({ credit, spot, symbol: sym, top: 8 });
+                const res = await fetch('/api/v1/mc-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+                const d = await res.json();
+                if (d.error) { el.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${d.error}</div>`; return; }
+                if (!d.rows || !d.rows.length) { el.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Пусто.</div>'; return; }
+                let html = `<div class="text-[11px] text-slate-400 font-mono mb-1">Топ-${d.rows.length} по матожиданию из ${d.scanned} вариантов (кредит ${credit} ₽)</div>
+                    <table class="w-full text-left text-[11px] font-mono text-slate-300">
+                    <thead class="text-slate-500 border-b border-slate-700 uppercase">
+                    <tr><th class="py-1 pr-2">#</th><th class="py-1 pr-2 text-right">Short</th><th class="py-1 pr-2 text-right">Long</th><th class="py-1 pr-2 text-right">DTE</th><th class="py-1 pr-2 text-right">IV</th><th class="py-1 pr-2 text-right">Среднее ₽</th><th class="py-1 pr-2 text-right">PoP%</th><th class="py-1 pr-2 text-right">Мед. ₽</th><th class="py-1 pr-2 text-right">Мин/макс ₽</th></tr>
+                    </thead><tbody>`;
+                d.rows.forEach((r, i) => {
+                    const cls = r.avg_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                    html += `<tr class="border-b border-slate-800">
+                        <td class="py-1 pr-2 text-slate-500">${i + 1}</td>
+                        <td class="py-1 pr-2 text-right text-slate-100">${Math.round(r.short).toLocaleString('ru-RU')}</td>
+                        <td class="py-1 pr-2 text-right text-slate-100">${Math.round(r.long).toLocaleString('ru-RU')}</td>
+                        <td class="py-1 pr-2 text-right">${r.dte}</td>
+                        <td class="py-1 pr-2 text-right">${r.iv}</td>
+                        <td class="py-1 pr-2 text-right font-bold ${cls}">${(r.avg_pnl >= 0 ? '+' : '') + r.avg_pnl.toLocaleString('ru-RU')}</td>
+                        <td class="py-1 pr-2 text-right">${r.prob_profit}</td>
+                        <td class="py-1 pr-2 text-right">${(r.p50 >= 0 ? '+' : '') + r.p50.toLocaleString('ru-RU')}</td>
+                        <td class="py-1 pr-2 text-right text-slate-400">${r.min_pnl.toLocaleString('ru-RU')} … +${r.max_pnl.toLocaleString('ru-RU')}</td></tr>`;
+                });
+                el.innerHTML = html + '</tbody></table>';
+            } catch (e) { el.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${e.message}</div>`; }
+            finally { btn.disabled = false; btn.innerText = '🔍 Перебрать всё'; }
         }
 
         function drawMCHist(d) {
