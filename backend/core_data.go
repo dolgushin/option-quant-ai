@@ -547,13 +547,15 @@ func coreBuildCandidates(instruments []coreInstrument) ([]coreCandidate, []skipR
 					cand.Score = int(float64(cand.Score) * 1.1) // small‑risk bonus
 				}
 			}
-			// Apply quant weight to the candidate score
-			if coreSet.QuantWeight > 0 {
-				cand.Score = int(float64(cand.Score) * coreSet.QuantWeight)
-			}
-			// Gate on the FINAL score: adjustments above can drag a candidate
-			// below the bar, and a sub-45 score must never reach the table
-			// or Telegram (previously the gate ran before them).
+			// NOTE: quant/AI weights must NOT scale candidate scores. Scaling
+			// by QuantWeight < 1 makes the 45/70 bars unreachable (e.g. weight
+			// 0.35 caps every score at ~38: empty table, dead auto-paper) and
+			// lies in the Telegram caption. Scores stay raw KB (ATR/PoP
+			// adjustments are score-internal); the weights are reserved for a
+			// future blended verdict.
+			// Gate on the FINAL score: score-internal adjustments above can
+			// drag a candidate below the bar, and a sub-45 score must never
+			// reach the table or Telegram.
 			if cand.Score < 45 {
 				if cand.Score > bestScore {
 					bestScore = cand.Score
