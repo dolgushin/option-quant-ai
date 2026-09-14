@@ -66,8 +66,16 @@ type coreBrief struct {
 	GeneratedAt string             `json:"generated_at"`
 	Instruments []coreInstrument   `json:"instruments"`
 	Candidates  []coreCandidate    `json:"candidates"`
+	Skipped     []skipReason       `json:"skipped,omitempty"`
 	Portfolio   map[string]float64 `json:"portfolio"`
 	KB          []string           `json:"kb"`
+}
+
+// skipReason explains why an instrument produced no candidate — so "no
+// candidates" is never a mystery (dead series, build error, vetoes, score).
+type skipReason struct {
+	Symbol string `json:"symbol"`
+	Detail string `json:"detail"`
 }
 
 var (
@@ -398,10 +406,12 @@ func collectCoreBrief(force bool) *coreBrief {
 	}
 	wg.Wait()
 
+	cands, skips := coreBuildCandidates(instruments)
 	b := &coreBrief{
 		GeneratedAt: time.Now().Format(time.RFC3339),
 		Instruments: instruments,
-		Candidates:  coreBuildCandidates(instruments),
+		Candidates:  cands,
+		Skipped:     skips,
 	}
 	pos := quantActiveSummary()
 	b.Portfolio = pos
@@ -439,12 +449,15 @@ func quantActiveSummary() map[string]float64 {
 
 // coreBuildCandidates scans verticals (and iron condors in flat+expensive
 // regimes) per instrument, scores them with the pre-trade advice model and
-// returns the best few.
-func coreBuildCandidates(instruments []coreInstrument) []coreCandidate {
+// returns the best few plus per-instrument skip reasons (so an empty table
+// always explains itself: dead series, build errors, vetoes, low score).
+func coreBuildCandidates(instruments []coreInstrument) ([]coreCandidate, []skipReason) {
 	out := []coreCandidate{}
+	skips := []skipReason{}
 	open := openSpreads()
 	for _, in := range instruments {
 		if in.ExpiryFront == "" || in.Spot <= 0 {
+			skips = append(skips, skipReason{in.Symbol, "нет живой серии или спота"})
 			continue
 		}
 		expiry := in.ExpiryFront
@@ -484,9 +497,18 @@ func coreBuildCandidates(instruments []coreInstrument) []coreCandidate {
 				types = append(types, "bull_put", "bear_call")
 			}
 		}
+		if len(types) == 0 {
+			skips = append(skips, skipReason{in.Symbol,
+				fmt.Sprintf("режим %s не даёт типов (IV Rank %.0f)", in.Regime, in.IVRank)})
+			continue
+		}
+		made := false
+		note := ""
+		bestScore := -1
 		for _, ty := range types {
 			plan, err := buildVerticalSpread(in.Symbol, ty, expiry, 1)
 			if err != nil {
+				note = "не строится: " + err.Error()
 				continue
 			}
 			// Drop constructions with impossible economics (credit above the
@@ -494,18 +516,21 @@ func coreBuildCandidates(instruments []coreInstrument) []coreCandidate {
 			// the "candidate" would be garbage in the table, Telegram alerts
 			// and paper auto-entry alike.
 			if !planEconomicsSane(plan) {
+				note = "битая экономика (кредит/дебет вне крыла)"
 				continue
 			}
 			// Hard quality veto: single-digit percent of the wing (or a
 			// debit eating almost the whole payout) is never a trade —
 			// a bad quality check alone still lets it through on total.
 			if !planMeetsQualityFloor(plan) {
+				note = "ниже пола качества (<10% крыла)"
 				continue
 			}
 			// Do not recommend a construction whose twin (same symbol, type and
 			// strike pair) is already open — reopening the same position just
 			// multiplies exposure on an existing trade.
 			if spreadAlreadyOpen(plan, open) {
+				note = "такой уже открыт"
 				continue
 			}
 			in2 := in
@@ -530,16 +555,27 @@ func coreBuildCandidates(instruments []coreInstrument) []coreCandidate {
 			// below the bar, and a sub-45 score must never reach the table
 			// or Telegram (previously the gate ran before them).
 			if cand.Score < 45 {
+				if cand.Score > bestScore {
+					bestScore = cand.Score
+				}
+				note = fmt.Sprintf("лучший счёт %d < 45", bestScore)
 				continue
 			}
 			out = append(out, cand)
+			made = true
+		}
+		if !made {
+			if note == "" {
+				note = "все типы отсеяны"
+			}
+			skips = append(skips, skipReason{in.Symbol, note})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	if len(out) > 8 {
 		out = out[:8]
 	}
-	return out
+	return out, skips
 }
 
 // spreadAlreadyOpen reports whether an identical construction (same symbol,

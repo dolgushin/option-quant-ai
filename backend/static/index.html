@@ -1833,8 +1833,11 @@
             inst.innerHTML = ih + '</tbody></table>';
 
             const cd = document.getElementById('core-candidates');
+            const skipHtml = (v.brief.skipped || []).map(s =>
+                `<div>· <span class="text-slate-300 font-bold">${s.symbol}</span>: ${s.detail}</div>`).join('');
             if (!v.brief.candidates || !v.brief.candidates.length) {
-                cd.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Кандидатов нет — текущие режимы не проходят фильтры базы знаний. Лучшее решение — не входить.</div>';
+                cd.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Кандидатов нет — текущие режимы не проходят фильтры базы знаний. Лучшее решение — не входить.</div>' +
+                    (skipHtml ? `<div class="text-slate-500 font-mono text-[10px] mt-1 space-y-0.5"><div class="text-slate-400 font-bold">Почему нет:</div>${skipHtml}</div>` : '');
             } else {
                 let ch = `<table class="w-full text-left text-[11px] font-mono text-slate-300">
                     <thead class="text-slate-500 border-b border-slate-700 uppercase">
@@ -1857,7 +1860,8 @@
                         <td class="py-1"><button onclick="candidateToBuilder('${c.symbol}','${c.strategy}','${c.expiry}')" class="px-2 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded text-[10px]">→ конструктор</button></td>
                     </tr>`;
                 });
-                cd.innerHTML = ch + '</tbody></table>';
+                cd.innerHTML = ch + '</tbody></table>' +
+                    (skipHtml ? `<div class="text-slate-500 font-mono text-[10px] mt-1 space-y-0.5"><div class="text-slate-400 font-bold">Отсеяны:</div>${skipHtml}</div>` : '');
             }
 
             const vd = document.getElementById('core-verdict');
