@@ -843,11 +843,16 @@
                 <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">Открыть стрэддл — цены подтянутся из стаканов Alor</div>
                 <div class="flex flex-wrap items-end gap-2 font-mono text-[11px]">
                     <label class="text-slate-400">Инстр.
-                        <select id="str-symbol" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option>Si</option><option>RI</option></select></label>
+                        <select id="str-symbol" onchange="loadStraddleMeta()" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option>Si</option><option>RI</option></select></label>
+                    <span id="str-spot-hint" class="text-slate-500 self-center"></span>
                     <label class="text-slate-400">Экспирация
                         <input id="str-expiry" type="text" placeholder="2026-12-17" class="w-28 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
+                    <label class="text-slate-400">⤵
+                        <select id="str-expiry-pick" onchange="document.getElementById('str-expiry').value=this.value" class="w-28 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option value="">—</option></select></label>
                     <label class="text-slate-400">Страйк ATM
                         <input id="str-strike" type="number" placeholder="86000" class="w-28 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="text-slate-400">⤵
+                        <select id="str-strike-pick" onchange="document.getElementById('str-strike').value=this.value" class="w-28 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"><option value="">—</option></select></label>
                     <label class="text-slate-400">Кол-во
                         <input id="str-qty" type="number" value="1" min="1" class="w-14 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
                     <label class="text-slate-400">Call secid
@@ -1713,7 +1718,27 @@
         }
 
         // ---- Short Straddles ----
+        async function loadStraddleMeta() {
+            const sym = document.getElementById('str-symbol').value;
+            try {
+                const res = await fetch(`/api/v1/straddles/meta?symbol=${encodeURIComponent(sym)}`);
+                const d = await res.json();
+                const ex = document.getElementById('str-expiry-pick');
+                ex.innerHTML = '<option value="">—</option>' + (d.expiries || []).map(e =>
+                    `<option value="${e.date}">${e.date} ${e.tenor} (${e.dte}д)</option>`).join('');
+                const st = document.getElementById('str-strike-pick');
+                st.innerHTML = '<option value="">—</option>' + (d.strikes || []).map(s =>
+                    s.divider ? `<option value="" disabled>${s.label}</option>`
+                              : `<option value="${s.strike}">${s.label}${s.atm ? ' ●' : ''}</option>`).join('');
+                if (d.spot) {
+                    const hint = document.getElementById('str-spot-hint');
+                    if (hint) hint.innerText = `спот ${Math.round(d.spot).toLocaleString('ru-RU')}`;
+                }
+            } catch (e) { /* manual inputs stay as fallback */ }
+        }
+
         async function loadStraddles() {
+            loadStraddleMeta();
             const el = document.getElementById('straddle-list');
             el.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Загрузка...</div>';
             try {

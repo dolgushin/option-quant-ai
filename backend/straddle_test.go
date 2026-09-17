@@ -130,6 +130,50 @@ func TestStraddleStoreRoundtrip(t *testing.T) {
 	}
 }
 
+// TestBuildExpiryOptions pins tenor markers and past-date filtering.
+func TestBuildExpiryOptions(t *testing.T) {
+	today := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)
+	got := buildExpiryOptions([]string{
+		"2026-09-09", "2026-09-09", "2026-09-03", "2026-09-24", "2026-12-17",
+	}, today)
+	if len(got) != 3 {
+		t.Fatalf("got %d options, want 3 (dedup + drop past)", len(got))
+	}
+	// dteInDays truncates: Sep9→1d W, Sep24→16d M, Dec17→100d Q.
+	want := []expiryOption{
+		{Date: "2026-09-09", DTE: 1, Tenor: "W"},
+		{Date: "2026-09-24", DTE: 16, Tenor: "M"},
+		{Date: "2026-12-17", DTE: 100, Tenor: "Q"},
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("option %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// TestBuildStrikeOptions pins the ATM divider placement.
+func TestBuildStrikeOptions(t *testing.T) {
+	rows := buildStrikeOptions([]float64{87000, 85000, 86000}, 86000)
+	if len(rows) != 4 {
+		t.Fatalf("got %d rows, want 3 strikes + divider", len(rows))
+	}
+	if !rows[1].Divider {
+		t.Fatalf("divider must sit right above ATM: %+v", rows)
+	}
+	if rows[2].Strike != 86000 || !rows[2].ATM {
+		t.Fatalf("ATM row wrong: %+v", rows)
+	}
+	if rows[0].Strike != 85000 || rows[3].Strike != 87000 {
+		t.Fatalf("sorting wrong: %+v", rows)
+	}
+	// No ATM (no spot): plain sorted list, no divider.
+	plain := buildStrikeOptions([]float64{86000, 85000}, 0)
+	if len(plain) != 2 || plain[0].Divider || plain[1].Divider {
+		t.Fatalf("no-ATM must have no divider: %+v", plain)
+	}
+}
+
 func TestStraddleStops(t *testing.T) {
 	rec := &straddleRecord{StopLevel: 2320, TimeStopDTE: 14}
 	if !straddleShouldStop(rec, -2320) {

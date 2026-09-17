@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -426,6 +427,119 @@ func straddleOpenHandler(w http.ResponseWriter, r *http.Request) {
 // recID mints a unique record id with the given prefix.
 func recID(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()/1e6)
+}
+
+// tenorLetter maps a DTE to the expiry tenor marker: W (weekly ≤10d),
+// M (monthly 11–45d), Q (quarterly >45d).
+func tenorLetter(dte int) string {
+	switch {
+	case dte <= 10:
+		return "W"
+	case dte <= 45:
+		return "M"
+	default:
+		return "Q"
+	}
+}
+
+type expiryOption struct {
+	Date  string `json:"date"`
+	DTE   int    `json:"dte"`
+	Tenor string `json:"tenor"`
+}
+
+// buildExpiryOptions turns series dates into dated tenor options (pure).
+func buildExpiryOptions(dates []string, today time.Time) []expiryOption {
+	out := []expiryOption{}
+	seen := map[string]bool{}
+	for _, d := range dates {
+		if seen[d] {
+			continue
+		}
+		seen[d] = true
+		dte := dteInDays(d, today)
+		if dte < 1 {
+			continue
+		}
+		out = append(out, expiryOption{Date: d, DTE: dte, Tenor: tenorLetter(dte)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Date < out[j].Date })
+	if len(out) > 12 {
+		out = out[:12]
+	}
+	return out
+}
+
+type strikeOption struct {
+	Strike  float64 `json:"strike"`
+	Label   string  `json:"label"`
+	ATM     bool    `json:"atm"`
+	Divider bool    `json:"divider"`
+}
+
+// buildStrikeOptions turns a strike grid into dropdown rows with a divider
+// row glued right above the ATM strike (pure).
+func buildStrikeOptions(strikes []float64, atm float64) []strikeOption {
+	sorted := append([]float64{}, strikes...)
+	sort.Float64s(sorted)
+	out := []strikeOption{}
+	for _, s := range sorted {
+		if s == atm && atm > 0 {
+			out = append(out, strikeOption{Label: "━━━ ATM ━━━", Divider: true})
+		}
+		out = append(out, strikeOption{Strike: s,
+			Label: fmt.Sprintf("%g", s), ATM: s == atm && atm > 0})
+	}
+	return out
+}
+
+// GET /api/v1/straddles/meta?symbol=Si — expiries with W/M/Q tenors, strike
+// grid with the ATM divider, live spot. Empty lists when the chain is
+// unreachable (the form keeps manual inputs as fallback).
+func straddleMetaHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "Si"
+	}
+	now := time.Now()
+	today := now.Format("2006-01-02")
+	spot, _ := getSpotPrice(symbol)
+
+	dates := []string{}
+	for _, s := range optionSeriesForSymbol(symbol) {
+		if s.LastDelDate >= today {
+			dates = append(dates, s.LastDelDate)
+		}
+	}
+	expiries := buildExpiryOptions(dates, now)
+
+	// Strikes from the preferred expiry (first ≥14d, else the front one).
+	strikes := []float64{}
+	pick := ""
+	for _, e := range expiries {
+		if e.DTE >= 14 {
+			pick = e.Date
+			break
+		}
+	}
+	if pick == "" && len(expiries) > 0 {
+		pick = expiries[0].Date
+	}
+	if pick != "" {
+		if ch, _, err := optionChainFor(symbol, pick); err == nil {
+			strikes = ch
+		}
+	}
+	atm := 0.0
+	if spot > 0 && len(strikes) > 0 {
+		atm = nearestStrikeFromStrikes(strikes, spot)
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"symbol": symbol, "spot": math.Round(spot*100) / 100,
+		"expiries": expiries, "strikes": buildStrikeOptions(strikes, atm),
+		"atm_strike": atm, "chain_expiry": pick,
+	})
 }
 
 // GET /api/v1/straddles — open straddles with live position P&L.
