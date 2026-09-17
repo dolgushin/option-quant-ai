@@ -227,6 +227,63 @@ func TestParseStrikesFromSymbols(t *testing.T) {
 	}
 }
 
+// TestParseFuturesCode pins front-futures month math (Sep 2026 context).
+func TestParseFuturesCode(t *testing.T) {
+	root, y, m, ok := parseFuturesCode("SiU6")
+	if !ok || root != "Si" || m != time.September {
+		t.Fatalf("SiU6 = %q %d %v %v", root, y, m, ok)
+	}
+	if _, _, _, ok := parseFuturesCode("Si86000BU6"); ok {
+		t.Fatal("option secid must not parse as futures")
+	}
+	if _, _, _, ok := parseFuturesCode("SIBN"); ok {
+		t.Fatal("stock must not parse as futures")
+	}
+	if _, _, _, ok := parseFuturesCode("Si"); ok {
+		t.Fatal("bare root must not parse")
+	}
+}
+
+// TestResolveFuturesAlor picks the nearest contract at/after now.
+func TestResolveFuturesAlor(t *testing.T) {
+	now := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)
+	syms := []string{"SiU6", "SiZ6", "SiH7", "Si86000BU6", "SiF6", "SIBN", "RIU6"}
+	if got := resolveFuturesAlor(syms, "Si", now); got != "SiU6" {
+		t.Fatalf("front = %q, want SiU6", got)
+	}
+	// After September expiry the front rolls to December.
+	late := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	if got := resolveFuturesAlor(syms, "Si", late); got != "SiU6" {
+		t.Fatalf("month-granular front = %q, want SiU6 (month not over)", got)
+	}
+	if got := resolveFuturesAlor(syms, "RI", now); got != "RIU6" {
+		t.Fatalf("RI front = %q, want RIU6", got)
+	}
+	if got := resolveFuturesAlor(nil, "Si", now); got != "" {
+		t.Fatalf("empty search must give empty, got %q", got)
+	}
+}
+
+// TestParseAlorOptionInfo checks tolerant typing without depending on the
+// exact Alor schema.
+func TestParseAlorOptionInfo(t *testing.T) {
+	_, _, kind := parseAlorOptionInfo(map[string]interface{}{"optionType": "Call"})
+	if kind != "call" {
+		t.Fatalf("optionType Call = %q, want call", kind)
+	}
+	_, _, kind = parseAlorOptionInfo(map[string]interface{}{"description": "Si 86000 Put"})
+	if kind != "put" {
+		t.Fatalf("description Put = %q, want put", kind)
+	}
+	s, _, kind := parseAlorOptionInfo(map[string]interface{}{"strike": 86000.0, "shortname": "Si86000BU6"})
+	if s != 86000 || kind != "" {
+		t.Fatalf("BU6 shortname must give strike only, got %v %q", s, kind)
+	}
+	if _, _, kind := parseAlorOptionInfo(map[string]interface{}{}); kind != "" {
+		t.Fatalf("empty map must give empty kind, got %q", kind)
+	}
+}
+
 func TestStraddleStops(t *testing.T) {
 	rec := &straddleRecord{StopLevel: 2320, TimeStopDTE: 14}
 	if !straddleShouldStop(rec, -2320) {

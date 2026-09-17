@@ -868,7 +868,17 @@
                             <option value="hybrid">Гибрид</option><option value="delta_band">Полоса Δ</option>
                             <option value="time">По времени</option><option value="price_band">Полоса цены</option>
                         </select></label>
+                    <button onclick="discoverStraddle()" id="str-find" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg transition">🔍 Найти ноги</button>
                     <button onclick="openStraddle()" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg transition">Открыть (бумага)</button>
+                </div>
+                <div class="flex flex-wrap items-end gap-2 font-mono text-[11px] mt-2" id="str-discover" style="display:none">
+                    <label class="text-slate-400">Call
+                        <select id="str-call-pick" onchange="document.getElementById('str-call').value=this.value" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white max-w-[220px]"></select></label>
+                    <label class="text-slate-400">Put
+                        <select id="str-put-pick" onchange="document.getElementById('str-put').value=this.value" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white max-w-[220px]"></select></label>
+                    <label class="text-slate-400">Фьючерс
+                        <select id="str-fut-pick" onchange="document.getElementById('str-fut').value=this.value" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white max-w-[220px]"></select></label>
+                    <span id="str-discover-note" class="text-slate-500 self-center"></span>
                 </div>
                 <div class="text-[10px] text-slate-500 font-mono mt-2">Покрытие фьючерсом снижает реальное ГО брокера (SPAN-зачёт). Движок хеджа и авто-вход — следующим шагом; пока хедж ручной.</div>
             </div>
@@ -1784,6 +1794,44 @@
                 });
                 el.innerHTML = html + '</tbody></table>';
             } catch (e) { el.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${e.message}</div>`; }
+        }
+
+        function straddleLegOptions(legs) {
+            return (legs || []).map(l => {
+                const px = (l.bid > 0 && l.ask > 0) ? `${l.bid}/${l.ask}` : (l.bid > 0 ? `bid ${l.bid}` : (l.ask > 0 ? `ask ${l.ask}` : 'нет цен'));
+                const lbl = l.label ? ` (${l.label})` : '';
+                return `<option value="${l.secid}">${l.secid}${lbl} · ${px}</option>`;
+            }).join('');
+        }
+
+        async function discoverStraddle() {
+            const btn = document.getElementById('str-find');
+            const sym = document.getElementById('str-symbol').value;
+            const strike = parseFloat(document.getElementById('str-strike').value) || 0;
+            const expiry = document.getElementById('str-expiry').value.trim();
+            btn.disabled = true;
+            btn.innerText = '⏳ Ищу...';
+            try {
+                const res = await fetch(`/api/v1/straddles/discover?symbol=${encodeURIComponent(sym)}&strike=${strike}&expiry=${encodeURIComponent(expiry)}`);
+                const d = await res.json();
+                if (d.error) { alert('❌ ' + d.error); return; }
+                document.getElementById('str-discover').style.display = '';
+                const fill = (id, legs, inputId) => {
+                    const el = document.getElementById(id);
+                    el.innerHTML = '<option value="">— выбрать —</option>' + straddleLegOptions(legs);
+                    if (legs && legs.length === 1) {
+                        el.value = legs[0].secid;
+                        document.getElementById(inputId).value = legs[0].secid;
+                    }
+                };
+                fill('str-call-pick', d.calls, 'str-call');
+                fill('str-put-pick', d.puts, 'str-put');
+                fill('str-fut-pick', d.futures, 'str-fut');
+                const nU = (d.unknown || []).length;
+                document.getElementById('str-discover-note').innerText =
+                    `источник: ${d.source === 'moex' ? 'MOEX (точно)' : 'Alor (проверь тип!)'}${nU ? ` · неопознанных: ${nU}` : ''}${d.note ? ' · ' + d.note : ''}`;
+            } catch (e) { alert('❌ ' + e.message); }
+            finally { btn.disabled = false; btn.innerText = '🔍 Найти ноги'; }
         }
 
         async function openStraddle() {

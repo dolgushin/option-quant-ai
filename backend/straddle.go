@@ -30,6 +30,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -397,6 +398,25 @@ func straddleOpenHandler(w http.ResponseWriter, r *http.Request) {
 	if req.Symbol == "" {
 		req.Symbol = "Si"
 	}
+	// Futures auto-resolve: checked box with empty secid must not open a
+	// zero-price leg — resolve the front contract or refuse with guidance.
+	if req.WithFutures && req.FuturesSecID == "" {
+		if alorMarket == nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "укажи secid фьючерса (Alor не настроен)"})
+			return
+		}
+		syms, err := alorMarket.FetchOptionChain(req.Symbol)
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "не нашёл фьючерсы в Alor: " + err.Error()})
+			return
+		}
+		if code := resolveFuturesAlor(syms, req.Symbol, time.Now()); code != "" {
+			req.FuturesSecID = code
+		} else {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "не нашёл фьючерс — укажи secid вручную (напр. SiZ6)"})
+			return
+		}
+	}
 	spot, _ := getSpotPrice(req.Symbol)
 	plan, err := buildShortStraddle(req.Symbol, req.Expiry, dteInDays(req.Expiry, time.Now()),
 		spot, req.Strike, req.Qty, req.WithFutures, req.CallSecID, req.PutSecID, req.FuturesSecID,
@@ -446,6 +466,60 @@ func straddleOpenHandler(w http.ResponseWriter, r *http.Request) {
 // recID mints a unique record id with the given prefix.
 func recID(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()/1e6)
+}
+
+// futuresMonthCodes maps standard MOEX futures month letters to months
+// (SiU6 = Sep 2026, SiZ6 = Dec 2026 — same codes the series badge shows).
+var futuresMonthCodes = map[byte]time.Month{
+	'F': time.January, 'G': time.February, 'H': time.March, 'J': time.April,
+	'K': time.May, 'M': time.June, 'N': time.July, 'Q': time.August,
+	'U': time.September, 'V': time.October, 'X': time.November, 'Z': time.December,
+}
+
+// parseFuturesCode splits "SiU6" into root + expiry month/year. Pure.
+func parseFuturesCode(secid string) (root string, year int, month time.Month, ok bool) {
+	for _, r := range []string{"Si", "RI"} {
+		rest, found := strings.CutPrefix(secid, r)
+		if !found || len(rest) != 2 {
+			continue
+		}
+		m, ok := futuresMonthCodes[rest[0]]
+		if !ok || rest[1] < '0' || rest[1] > '9' {
+			continue
+		}
+		now := time.Now()
+		base := now.Year() - now.Year()%10 + int(rest[1]-'0')
+		if base < now.Year() || (base == now.Year() && m < now.Month()) {
+			base += 10
+		}
+		return r, base, m, true
+	}
+	return "", 0, 0, false
+}
+
+// resolveFuturesAlor picks the front futures contract for the symbol from
+// live Alor instrument search (^ROOT<month><digit>). Pure date math on top
+// of the search list; no expiry guessing beyond standard month codes.
+func resolveFuturesAlor(symbols []string, root string, now time.Time) string {
+	best := ""
+	var bestY int
+	var bestM time.Month
+	re := regexp.MustCompile(`^` + regexp.QuoteMeta(root) + `([FGHJKMNQUVXZ])(\d)$`)
+	for _, s := range symbols {
+		m := re.FindStringSubmatch(s)
+		if m == nil {
+			continue
+		}
+		mo := futuresMonthCodes[m[1][0]]
+		y := now.Year() - now.Year()%10 + int(m[2][0]-'0')
+		if y < now.Year() || (y == now.Year() && mo < now.Month()) {
+			y += 10
+		}
+		if best == "" || y < bestY || (y == bestY && mo < bestM) {
+			best, bestY, bestM = s, y, mo
+		}
+	}
+	return best
 }
 
 // tenorLetter maps a DTE to the expiry tenor marker: W (weekly ≤10d),
@@ -535,6 +609,192 @@ func parseStrikesFromSymbols(symbols []string, root string) []float64 {
 	}
 	sort.Float64s(out)
 	return out
+}
+
+// discoverLeg is one candidate leg with a live book preview.
+type discoverLeg struct {
+	SecID string  `json:"secid"`
+	Bid   float64 `json:"bid"`
+	Ask   float64 `json:"ask"`
+	Label string  `json:"label"`
+	Kind  string  `json:"kind,omitempty"` // "call" | "put" | "" unknown
+}
+
+// parseAlorOptionInfo extracts strike/expiry/kind from a singular Alor
+// instrument record with a tolerant key scan (exact field names vary).
+// Returns what it could prove; kind needs one agreeing strong signal.
+func parseAlorOptionInfo(raw map[string]interface{}) (strike float64, expiry, kind string) {
+	get := func(names ...string) interface{} {
+		for _, n := range names {
+			for k, v := range raw {
+				if strings.EqualFold(k, n) {
+					return v
+				}
+			}
+		}
+		return nil
+	}
+	num := func(v interface{}) float64 {
+		switch n := v.(type) {
+		case float64:
+			return n
+		case string:
+			f, _ := strconv.ParseFloat(strings.ReplaceAll(n, ",", "."), 64)
+			return f
+		}
+		return 0
+	}
+	str := func(v interface{}) string {
+		s, _ := v.(string)
+		return s
+	}
+	strike = num(get("strike", "strikeprice", "strike_price"))
+	expiry = str(get("expirationdate", "expiration_date", "maturitydate", "maturity_date", "lastdeldate", "expdate"))
+	// Call/put signals: explicit words only (first agreement wins). No
+	// positional CFI claims — the exact Alor code layout is unverified.
+	candidates := []string{
+		str(get("optiontype", "option_type", "putcall", "callput", "type", "instrumenttype")),
+		str(get("description", "shortname", "name")),
+	}
+	for _, c := range candidates {
+		u := strings.ToUpper(c)
+		if strings.Contains(u, "CALL") && !strings.Contains(u, "PUT") {
+			return strike, expiry, "call"
+		}
+		if strings.Contains(u, "PUT") && !strings.Contains(u, "CALL") {
+			return strike, expiry, "put"
+		}
+	}
+	return strike, expiry, ""
+}
+
+// GET /api/v1/straddles/discover?symbol=Si&strike=86000&expiry=2026-09-24 —
+// resolve leg secids without typing them. MOEX chain first (exact, with
+// expiry); Alor search fallback (strike-matched candidates with live book
+// previews for manual pick). Futures auto-resolved from month codes.
+func straddleDiscoverHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "Si"
+	}
+	var strike float64
+	fmt.Sscanf(r.URL.Query().Get("strike"), "%f", &strike)
+	expiry := r.URL.Query().Get("expiry")
+
+	withBook := func(secid string) discoverLeg {
+		leg := discoverLeg{SecID: secid}
+		if alorMarket == nil {
+			return leg
+		}
+		if ob, err := alorMarket.FetchOrderbook("MOEX", secid); err == nil {
+			if len(ob.Bids) > 0 {
+				leg.Bid = ob.Bids[0].Price
+			}
+			if len(ob.Asks) > 0 {
+				leg.Ask = ob.Asks[0].Price
+			}
+		}
+		return leg
+	}
+
+	// Futures first (month codes are standard).
+	futures := []discoverLeg{}
+	if alorMarket != nil {
+		if syms, err := alorMarket.FetchOptionChain(symbol); err == nil {
+			if code := resolveFuturesAlor(syms, symbol, time.Now()); code != "" {
+				f := withBook(code)
+				if _, y, m, ok := parseFuturesCode(code); ok {
+					f.Label = fmt.Sprintf("%s %d", map[time.Month]string{
+						time.January: "янв", time.February: "фев", time.March: "мар",
+						time.April: "апр", time.May: "май", time.June: "июн",
+						time.July: "июл", time.August: "авг", time.September: "сен",
+						time.October: "окт", time.November: "ноя", time.December: "дек",
+					}[m], y)
+				}
+				futures = append(futures, f)
+			}
+		}
+	}
+
+	// MOEX exact path.
+	if strike > 0 {
+		if chain := moexOptionsForAsset(symbol, expiry); len(chain) > 0 {
+			if strikes, findOpt, err := optionChainFor(symbol, expiry); err == nil && len(strikes) > 0 {
+				_ = strikes
+				out := map[string]interface{}{"source": "moex", "futures": futures}
+				if c := findOpt(strike, true); c != nil {
+					leg := withBook(c.SecID)
+					leg.Kind = "call"
+					out["calls"] = []discoverLeg{leg}
+				}
+				if p := findOpt(strike, false); p != nil {
+					leg := withBook(p.SecID)
+					leg.Kind = "put"
+					out["puts"] = []discoverLeg{leg}
+				}
+				json.NewEncoder(w).Encode(out)
+				return
+			}
+		}
+	}
+
+	// Alor fallback: strike-matched candidates with book previews.
+	calls, puts, unknown := []discoverLeg{}, []discoverLeg{}, []discoverLeg{}
+	if alorMarket != nil && strike > 0 {
+		syms, err := alorMarket.FetchOptionChain(symbol)
+		if err == nil {
+			want := fmt.Sprintf("%.0f", strike)
+			cands := []string{}
+			for _, s := range syms {
+				if strings.HasPrefix(s, symbol) && strings.Contains(s, want) && len(cands) < 16 {
+					cands = append(cands, s)
+				}
+			}
+			type res struct {
+				idx int
+				leg discoverLeg
+			}
+			out := make([]res, len(cands))
+			var wg sync.WaitGroup
+			for i, secid := range cands {
+				wg.Add(1)
+				go func(idx int, id string) {
+					defer wg.Done()
+					leg := withBook(id)
+					leg.Label = id
+					if _, _, kind := parseAlorOptionInfo(map[string]interface{}{"shortname": id}); kind != "" {
+						leg.Kind = kind
+					}
+					// Singular instrument record for firmer typing.
+					if code, body, err := alorMarket.RawGet("/md/v2/Securities/MOEX/"+id, ""); err == nil && code == 200 {
+						var raw map[string]interface{}
+						if jerr := json.Unmarshal(body, &raw); jerr == nil {
+							if _, _, kind := parseAlorOptionInfo(raw); kind != "" {
+								leg.Kind = kind
+							}
+						}
+					}
+					out[idx] = res{idx, leg}
+				}(i, secid)
+			}
+			wg.Wait()
+			for _, r := range out {
+				switch r.leg.Kind {
+				case "call":
+					calls = append(calls, r.leg)
+				case "put":
+					puts = append(puts, r.leg)
+				default:
+					unknown = append(unknown, r.leg)
+				}
+			}
+		}
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"source": "alor", "calls": calls, "puts": puts, "unknown": unknown, "futures": futures,
+		"note": "тип опциона из Alor не подтверждён — сверь secid перед открытием",
+	})
 }
 
 // GET /api/v1/straddles/strikes?symbol=Si — strike grid from live Alor
