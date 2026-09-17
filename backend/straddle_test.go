@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -327,6 +328,23 @@ func TestThetaAccrualRisesForShort(t *testing.T) {
 	}
 	if cumul[14] <= 0 {
 		t.Fatalf("14 days must accrue positive, got %v", cumul[14])
+	}
+}
+
+// TestBuildHedgeViewBreached pins the already-breached band text: no
+// nonsense "≤ X or ≥ X" around the current spot.
+func TestBuildHedgeViewBreached(t *testing.T) {
+	rec := &straddleRecord{Symbol: "Si",
+		Hedge: straddleHedgeRules{Rule: hedgeDeltaBand, DeltaBand: 1.0}}
+	spots := []float64{84000, 85000, 86000, 87000, 88000}
+	deltas := []float64{-2.0, -0.5, 3.2, 0.8, 2.2}
+	v := buildHedgeView(rec, spots, deltas, 86000, time.Now())
+	if !strings.Contains(v.Text, "уже за полосой") {
+		t.Fatalf("breached band must say hedge-now, got %q", v.Text)
+	}
+	v2 := buildHedgeView(rec, spots, []float64{-2.0, -0.5, 0.1, 0.8, 2.2}, 86000, time.Now())
+	if !strings.Contains(v2.Text, "при споте") {
+		t.Fatalf("calm band must give spot levels, got %q", v2.Text)
 	}
 }
 

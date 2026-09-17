@@ -32,7 +32,8 @@ type analyticsLeg struct {
 	Vega     float64 `json:"vega"`
 	Theta    float64 `json:"theta"`
 	Rho      float64 `json:"rho"`
-	Iv       float64 `json:"iv"` // percent
+	Iv       float64 `json:"iv"`                 // percent
+	MarkSrc  string  `json:"mark_src,omitempty"` // mid|last|theo|"": quote provenance, "" = no fresh book
 	// Moex carries the exchange's own greeks/IV for this leg (filled by the
 	// handler from the MOEX Options Calculator). When set, buildSpreadAnalytics
 	// uses these authoritative values instead of backing them out locally.

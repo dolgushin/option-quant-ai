@@ -971,6 +971,15 @@ func buildHedgeView(rec *straddleRecord, spots, deltas []float64, curSpot float6
 	case hedgePriceBand:
 		v.Text = fmt.Sprintf("хедж при уходе спота на %.2f%% от %.0f", r.PriceBandPct, curSpot)
 	default: // delta_band + hybrid: spot triggers
+		// Band already breached: don't print nonsense "≤ X или ≥ X"
+		// around the current spot — say hedge is due now.
+		if math.Abs(v.CurrentDelta) >= r.DeltaBand {
+			v.Text = fmt.Sprintf("Δ %0.2f уже за полосой %0.2f — хедж сейчас", v.CurrentDelta, r.DeltaBand)
+			if r.Rule == hedgeHybrid {
+				v.Text += fmt.Sprintf(" (либо по времени через ~%d мин)", left)
+			}
+			break
+		}
 		parts := []string{}
 		if lo > 0 {
 			parts = append(parts, fmt.Sprintf("≤ %.0f", lo))
@@ -1017,11 +1026,22 @@ func straddleAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		if l.Kind == "FUTURES" {
 			kind = "FUTURES"
 		}
-		legs = append(legs, analyticsLeg{
+		leg := analyticsLeg{
 			SecID: l.SecID, Side: l.Side, Kind: kind, Strike: l.Strike,
 			IsCall: l.IsCall, Quantity: l.Quantity,
 			Entry: l.EntryPrice, Current: l.CurrentPrice,
-		})
+		}
+		// Quote provenance per leg: a leg marked at entry price with no
+		// live book behind it (dead evening series) must be visibly stale,
+		// otherwise its frozen P&L reads as "no move".
+		if kind == "OPTION" {
+			if q, ok := cachedOptionQuoteEx(l.SecID); ok && l.CurrentPrice > 0 {
+				leg.MarkSrc = quoteMarkSrc(q, l.CurrentPrice)
+			}
+		} else {
+			leg.MarkSrc = "spot"
+		}
+		legs = append(legs, leg)
 	}
 	a := buildSpreadAnalytics(pos.Symbol, s.Expiry, spot, dte, mult, legs)
 	xs, cumul := thetaAccrualCurve(a.Legs, spot, dte, mult, 14)

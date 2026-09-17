@@ -1874,17 +1874,20 @@
                 const a = d.analytics;
                 let legs = `<table class="w-full text-left text-[10px] font-mono text-slate-300 mb-2">
                     <thead class="text-slate-500 border-b border-slate-700 uppercase">
-                    <tr><th class="py-1 pr-2">Стор.</th><th class="py-1 pr-2">Тикер</th><th class="py-1 pr-2 text-right">Страйк</th><th class="py-1 pr-2 text-right">Вход</th><th class="py-1 pr-2 text-right">Сейчас</th><th class="py-1 pr-2 text-right">P&L</th><th class="py-1 pr-2 text-right">Δ</th><th class="py-1 pr-2 text-right">Θ/д</th></tr>
+                    <tr><th class="py-1 pr-2">Стор.</th><th class="py-1 pr-2">Тикер</th><th class="py-1 pr-2 text-right">Страйк</th><th class="py-1 pr-2 text-right">Вход</th><th class="py-1 pr-2 text-right">Сейчас</th><th class="py-1 pr-2 text-right">P&L</th><th class="py-1 pr-2 text-right">Δ</th><th class="py-1 pr-2 text-right">Θ/д</th><th class="py-1 pr-2 text-right">Метка</th></tr>
                     </thead><tbody>`;
                 (a.legs || []).forEach(l => {
                     const cls = l.side === 'SELL' ? 'text-rose-300' : 'text-emerald-300';
                     const pnlCls = (l.pnl || 0) >= 0 ? 'text-emerald-300' : 'text-rose-300';
+                    const src = l.mark_src ? `<span class="text-cyan-400" title="Источник цены">${l.mark_src}</span>`
+                        : `<span class="text-amber-400" title="Нет свежих котировок — цена заморожена на входе">stale</span>`;
                     legs += `<tr class="border-b border-slate-800/60">
                         <td class="py-1 pr-2 ${cls}">${l.side}</td><td class="py-1 pr-2">${l.secid || ''}</td>
                         <td class="py-1 pr-2 text-right">${l.kind === 'FUTURES' ? '—' : l.strike}</td>
                         <td class="py-1 pr-2 text-right">${l.entry}</td><td class="py-1 pr-2 text-right">${l.current}</td>
                         <td class="py-1 pr-2 text-right ${pnlCls}">${(l.pnl || 0) >= 0 ? '+' : ''}${(l.pnl || 0).toLocaleString('ru-RU')}</td>
-                        <td class="py-1 pr-2 text-right">${l.delta}</td><td class="py-1 pr-2 text-right">${l.theta}</td></tr>`;
+                        <td class="py-1 pr-2 text-right">${l.delta}</td><td class="py-1 pr-2 text-right">${l.theta}</td>
+                        <td class="py-1 pr-2 text-right">${src}</td></tr>`;
                 });
                 legs += '</tbody></table>';
                 const h = d.hedge || {};
