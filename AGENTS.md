@@ -10,8 +10,13 @@
 ## Architecture
 - Single Go binary serves the SPA at `backend/static/index.html` (Tailwind CDN classes, vanilla JS, Chart.js hosted locally). No frontend build step.
 - Packages: `quant` (portfolio/BS greeks/persistence), `alor` (auth/market/exec), `secure` (encrypted token store), root package = HTTP handlers.
-- Market data comes from public MOEX ISS (`iss.moex.com/iss/engines/futures/markets/...`) with in-process caches (~10 min TTL); Alor API is only for live orders/quotes when a refresh token is saved via `/api/v1/settings/token`.
+- Market data comes from public MOEX ISS (`iss.moex.com/iss/engines/futures/markets/...`) with in-process caches (~10 min TTL); Alor API is the primary live feed for books/quotes/spot plus order execution when a refresh token is saved via `/api/v1/settings/token`.
+- Trade universe is Si + RI only (`coreSymbols`, brief symbols, UI selects trimmed); other symbols' code paths and trade history are untouched.
 - Vertical spreads: `spreads.go` (records/builders/handlers), `spreads_manager.go` (auto-manager loop every 60s + state machine), rules via `POST /api/v1/spreads/rules`, log via `GET /api/v1/spreads/manager`.
+- Core candidates (`core_data.go`): economics sanity (`planEconomicsSane`) → quality floor (`planMeetsQualityFloor`, credit ≥10% wing) → twin check → score (KB 0–100 + PoP ±8 + ATR adjust, RAW — weights never scale it) → gate 45. Skip reasons ride in `brief.Skipped`.
+- Short straddles: `straddle.go` (naked/covered builder, 4 hedge rules via `decideStraddleHedge`, 2× stop, 14d time-stop, profile with theta accrual + hedge forecast).
+- ML scan (`ml_module.go`, `POST /api/v2/ml/scan`) and MC grid scan (`mc_pnl.go`, `POST /api/v1/mc-scan`).
+- Telegram alerts carry payoff PNGs (`spread_chart.go`, stdlib + `golang.org/x/image` basicfont, light theme); dedup keys persist in `core_state.json` and are marked only after successful send; send failures log as `telegram: … failed:`.
 - Pre-trade decision panel: `spread_advice.go` (`GET /api/v1/spreads/advice`, weighted 0–100 score).
 - MOEX-constructor analytics: `spread_analytics.go` (`GET /api/v1/spreads/analytics?id=…` or plan params) — P&L now (BS at per-leg IV) vs expiry curves, delta/theta curves, per-leg greeks + totals.
 - Statistics module: `stats_module.go` (`/api/v2/stats/{overview,breakdown}`) — pure aggregators `computeStatsOverview` / `computeBreakdown`.
@@ -28,12 +33,12 @@
 - Series lists come from real OPTION expiries (`optionSeriesForSymbol`), codes may be synthetic `"Si-2026-08-20"`. Synthetic codes must be resolved to a tradable future via `resolveRealFuturesCode` wherever a ticker is quoted/hedged (see `getSpotPrice`, `futuresSeriesAlor`).
 - Alor Command API v2 endpoints require the unique `X-REQID` header; auth is `POST https://oauth.alor.ru/refresh?token=<refreshToken>` returning `AccessToken` (30 min).
 - **Option marks are hybrid** (`optionMark`/`optionMarkWithSrc` in option_mark.go): live two-sided books with spread ≤ 25% of mid (`quoteIsLive`) are marked at mid; dead/wide/stale books are marked at Black-Scholes fair value using the series IV (`seriesIVForExpiry`, median of liquid near-ATM strikes, fallback realized/0.30). The official MOEX constructor prices illiquid series the same way — mid marks on dead books are noise (a 500-wide spread must never "move to" 2400). `mark_src` in leg JSON shows `mid|last|theo|none`.
-- **Telegram goes through a RU relay, not api.telegram.org**: `telegram.go` uses `telegramAPIBase = "http://193.233.87.23/bot8627553310"` — never flip back to `https://api.telegram.org/bot<TOKEN>` (timeout from RF VPS). Messages are only DTE≤5 expiry alerts (deduped), a forced regime+top-strategy digest every 15 min, core autoscan verdicts, and the settings test message. `getUpdates` for chat_id discovery also runs on the relay.
+- **Telegram goes through a RU relay, not api.telegram.org**: `telegram.go` uses `telegramAPIBase = "http://193.233.87.23/bot8627553310"` — never flip back to `https://api.telegram.org/bot<TOKEN>` (timeout from RF VPS). Event-only messages (no digest, no verdict heartbeat): DTE≤5 expiry alerts, candidate charts, paper auto-entries, structure closes, manager early warnings (70% zone, 6h cooldown) and action receipts. `getUpdates` for chat_id discovery also runs on the relay.
 
 ## Conventions
 - `KNOWLEDGE.md` is the trading knowledge base; manager defaults and rule semantics reference it by section. Update it together with management-rule changes. `README.md` is the user-facing overview (features, quick start, API map) — keep both in sync when adding modules.
 - Commit style: short imperative English ("Add ...", "Fix ...").
-- Tests are hermetic where possible: decision logic lives in pure functions (`decideSpreadAction`, `classifyExpiry`, `computeStatsOverview`, `mcFan`, `scoreSpreadAdvice`, `buildSpreadAnalytics`) so no network is needed; use `quant.SetDataFile` + temp dirs for store tests.
+- Tests are hermetic where possible: decision logic lives in pure functions (`decideSpreadAction`, `classifyExpiry`, `computeStatsOverview`, `mcFan`, `scoreSpreadAdvice`, `buildSpreadAnalytics`, `planEconomicsSane`, `planMeetsQualityFloor`, `popScoreAdjust`, `scanMLCombinations`, `simulateSpreadPnL`, `decideStraddleHedge`, `profileRange`, `managerEarlyWarnings`, `applyLotCap`, `encodeStrategyName`, `tenorOf`) so no network is needed; use `quant.SetDataFile` + temp dirs for store tests.
 - The module is no longer stdlib-only: `golang.org/x/image` (basicfont) is used for Telegram payoff-chart labels. Fresh clones need network once for `go mod download`; after that builds/tests are offline via the module cache.
 
 ## Environment gotchas (Windows / PowerShell 5.1)
