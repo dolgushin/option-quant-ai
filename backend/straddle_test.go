@@ -90,6 +90,46 @@ func TestBuildShortStraddle(t *testing.T) {
 	}
 }
 
+// TestStraddleStoreRoundtrip pins the JSON registry on a temp dir without
+// touching the production store.
+func TestStraddleStoreRoundtrip(t *testing.T) {
+	straddleMu.Lock()
+	prevFile, prevStore := straddleFile, straddleStore
+	straddleStore = nil
+	straddleMu.Unlock()
+	defer func() {
+		straddleMu.Lock()
+		straddleFile, straddleStore = prevFile, prevStore
+		straddleMu.Unlock()
+	}()
+
+	dir := t.TempDir()
+	initStraddles(dir)
+	if got := openStraddles(); len(got) != 0 {
+		t.Fatalf("fresh store must be empty, got %d", len(got))
+	}
+	rec := straddleRecord{ID: "str-t1", Symbol: "Si", Status: "OPEN", Hedge: resolveHedgeRules(straddleHedgeRules{})}
+	saveStraddleRecord(rec)
+	got, found := straddleByID("str-t1")
+	if !found || got.Symbol != "Si" {
+		t.Fatalf("stored record not found: %+v %v", got, found)
+	}
+	if n := len(openStraddles()); n != 1 {
+		t.Fatalf("open count = %d, want 1", n)
+	}
+	rec.Status = "CLOSED"
+	saveStraddleRecord(rec)
+	if n := len(openStraddles()); n != 0 {
+		t.Fatalf("closed record still listed, count = %d", n)
+	}
+	// Reload from disk.
+	initStraddles(dir)
+	got, found = straddleByID("str-t1")
+	if !found || got.Status != "CLOSED" {
+		t.Fatalf("reload failed: %+v %v", got, found)
+	}
+}
+
 func TestStraddleStops(t *testing.T) {
 	rec := &straddleRecord{StopLevel: 2320, TimeStopDTE: 14}
 	if !straddleShouldStop(rec, -2320) {

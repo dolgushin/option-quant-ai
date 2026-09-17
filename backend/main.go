@@ -3542,6 +3542,7 @@ func main() {
 	optCalc = optioncalc.New()
 	initTelegram()
 	initSpreads(dataDir)
+	initStraddles(dataDir)
 	initCore(dataDir)
 
 	// Background Telegram notifier (stop channel unused for lifetime app).
@@ -3635,6 +3636,9 @@ func main() {
 	http.HandleFunc("/api/v1/calendar", calendarHandler)
 	http.HandleFunc("/api/v1/mc-pnl", mcPLHandler)
 	http.HandleFunc("/api/v1/mc-scan", mcScanHandler)
+	http.HandleFunc("/api/v1/straddles", straddleListHandler)
+	http.HandleFunc("/api/v1/straddles/open", straddleOpenHandler)
+	http.HandleFunc("/api/v1/straddles/close", straddleCloseHandler)
 	http.HandleFunc("/api/v2/ml/train", mlTrainHandler)
 	http.HandleFunc("/api/v2/ml/predict", mlPredictHandler)
 	http.HandleFunc("/api/v2/ml/scan", mlScanHandler)

@@ -21,9 +21,16 @@ package main
 // arrive via injected pricers so tests need no network.
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sync"
 	"time"
+
+	"option-quant-ai/quant"
 )
 
 // Hedge rule identifiers.
@@ -233,4 +240,254 @@ func minutesSince(mark string, now time.Time) float64 {
 		return 1e9
 	}
 	return now.Sub(t).Minutes()
+}
+
+// ---- Store (JSON file, mirrors the spreads registry) ----
+
+var (
+	straddleMu    sync.Mutex
+	straddleStore []straddleRecord
+	straddleFile  string
+)
+
+func initStraddles(dataDir string) {
+	straddleMu.Lock()
+	defer straddleMu.Unlock()
+	straddleFile = filepath.Join(dataDir, "straddles.json")
+	b, err := os.ReadFile(straddleFile)
+	if err == nil {
+		_ = json.Unmarshal(b, &straddleStore)
+	}
+}
+
+func persistStraddles() {
+	if straddleFile == "" {
+		return
+	}
+	b, _ := json.MarshalIndent(straddleStore, "", "  ")
+	_ = os.WriteFile(straddleFile, b, 0600)
+}
+
+func saveStraddleRecord(rec straddleRecord) {
+	straddleMu.Lock()
+	defer straddleMu.Unlock()
+	for i := range straddleStore {
+		if straddleStore[i].ID == rec.ID {
+			straddleStore[i] = rec
+			persistStraddles()
+			return
+		}
+	}
+	straddleStore = append(straddleStore, rec)
+	persistStraddles()
+}
+
+func straddleByID(id string) (straddleRecord, bool) {
+	straddleMu.Lock()
+	defer straddleMu.Unlock()
+	for _, s := range straddleStore {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return straddleRecord{}, false
+}
+
+func openStraddles() []straddleRecord {
+	straddleMu.Lock()
+	defer straddleMu.Unlock()
+	out := []straddleRecord{}
+	for _, s := range straddleStore {
+		if s.Status == "OPEN" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// ---- Alor pricer ----
+
+// alorBookMid returns the book mid when two-sided, else 0.
+func alorBookMid(secid string) float64 {
+	if alorMarket == nil || secid == "" {
+		return 0
+	}
+	ob, err := alorMarket.FetchOrderbook("MOEX", secid)
+	if err != nil || len(ob.Bids) == 0 || len(ob.Asks) == 0 {
+		return 0
+	}
+	bid, ask := ob.Bids[0].Price, ob.Asks[0].Price
+	if bid <= 0 || ask < bid {
+		return 0
+	}
+	return (bid + ask) / 2
+}
+
+// alorStraddlePricer prices straddle legs from live Alor books (mids).
+func alorStraddlePricer(callSecID, putSecID, futuresSecID string) (float64, float64, float64, error) {
+	if alorMarket == nil {
+		return 0, 0, 0, fmt.Errorf("alor не настроен")
+	}
+	callPx := alorBookMid(callSecID)
+	putPx := alorBookMid(putSecID)
+	if callPx <= 0 || putPx <= 0 {
+		return 0, 0, 0, fmt.Errorf("нет двусторонних стаканов (call %.2f, put %.2f)", callPx, putPx)
+	}
+	futPx := 0.0
+	if futuresSecID != "" {
+		if q, err := alorMarket.FetchSecurityQuote(futuresSecID); err == nil && q.Price > 0 {
+			futPx = q.Price
+		} else {
+			ob, err := alorMarket.FetchOrderbook("MOEX", futuresSecID)
+			if err == nil && len(ob.Bids) > 0 && len(ob.Asks) > 0 && ob.Asks[0].Price >= ob.Bids[0].Price {
+				futPx = (ob.Bids[0].Price + ob.Asks[0].Price) / 2
+			}
+		}
+	}
+	return callPx, putPx, futPx, nil
+}
+
+// ---- HTTP API ----
+
+// POST /api/v1/straddles/open {"symbol":"Si","expiry":"2026-12-17","strike":86000,
+// "qty":1,"with_futures":false,"call_secid":"...","put_secid":"...","futures_secid":"...",
+// "hedge":{"rule":"hybrid",...},"time_stop_dte":14}
+func straddleOpenHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Symbol       string             `json:"symbol"`
+		Expiry       string             `json:"expiry"`
+		Strike       float64            `json:"strike"`
+		Qty          int                `json:"qty"`
+		WithFutures  bool               `json:"with_futures"`
+		CallSecID    string             `json:"call_secid"`
+		PutSecID     string             `json:"put_secid"`
+		FuturesSecID string             `json:"futures_secid"`
+		Hedge        straddleHedgeRules `json:"hedge"`
+		TimeStopDTE  int                `json:"time_stop_dte"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if req.Symbol == "" {
+		req.Symbol = "Si"
+	}
+	spot, _ := getSpotPrice(req.Symbol)
+	plan, err := buildShortStraddle(req.Symbol, req.Expiry, dteInDays(req.Expiry, time.Now()),
+		spot, req.Strike, req.Qty, req.WithFutures, req.CallSecID, req.PutSecID, req.FuturesSecID,
+		alorStraddlePricer)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+		return
+	}
+
+	p := quant.Position{
+		ID:       fmt.Sprintf("pos-%d", time.Now().UnixNano()/1e6),
+		Strategy: "Short Straddle",
+		Symbol:   plan.Symbol,
+		Expiry:   plan.Expiry,
+		OpenedAt: time.Now(),
+		Margin:   plan.MarginEst,
+	}
+	for _, l := range plan.Legs {
+		kind := "OPTION"
+		if l.IsFuture {
+			kind = "FUTURES"
+		}
+		p.Legs = append(p.Legs, quant.PositionLeg{
+			SecID: l.SecID, Symbol: plan.Symbol, Kind: kind,
+			Side: l.Side, Quantity: l.Qty, Strike: l.Strike,
+			IsCall: l.IsCall, EntryPrice: l.Price, CurrentPrice: l.Price,
+		})
+	}
+	repricePosition(&p)
+	quant.SavePosition(p)
+
+	tsd := req.TimeStopDTE
+	if tsd <= 0 {
+		tsd = 14
+	}
+	rec := straddleRecord{
+		ID: recID("str"), PositionID: p.ID,
+		Symbol: plan.Symbol, Expiry: plan.Expiry, Strike: plan.Strike, Qty: plan.Qty,
+		WithFutures: plan.WithFutures, NetCredit: plan.NetCredit, StopLevel: plan.StopLevel,
+		Hedge: resolveHedgeRules(req.Hedge), TimeStopDTE: tsd,
+		Status: "OPEN", OpenedAt: time.Now().Format(time.RFC3339),
+	}
+	saveStraddleRecord(rec)
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "straddle": rec, "plan": plan})
+}
+
+// recID mints a unique record id with the given prefix.
+func recID(prefix string) string {
+	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()/1e6)
+}
+
+// GET /api/v1/straddles — open straddles with live position P&L.
+func straddleListHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	out := []map[string]interface{}{}
+	for _, s := range openStraddles() {
+		item := map[string]interface{}{
+			"id": s.ID, "symbol": s.Symbol, "expiry": s.Expiry,
+			"strike": s.Strike, "qty": s.Qty, "with_futures": s.WithFutures,
+			"net_credit": s.NetCredit, "stop_level": s.StopLevel,
+			"hedge_rule": s.Hedge.Rule, "time_stop_dte": s.TimeStopDTE,
+			"status": s.Status, "opened_at": s.OpenedAt,
+			"hedge_count": s.HedgeCount,
+			"dte":         dteInDays(s.Expiry, time.Now()),
+		}
+		if pos, found := quant.GetPositionByID(s.PositionID); found {
+			repricePosition(pos)
+			quant.SavePosition(*pos)
+			item["pnl"] = math.Round(pos.PnL*100) / 100
+			item["entry_value"] = math.Round(pos.EntryValue*100) / 100
+			item["current_value"] = math.Round(pos.CurrentValue*100) / 100
+			item["net_delta"] = math.Round(pos.Delta*100) / 100
+		} else {
+			item["note"] = "позиция не найдена"
+		}
+		out = append(out, item)
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"straddles": out})
+}
+
+// POST /api/v1/straddles/close {"id":"str-..."}
+func straddleCloseHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	s, found := straddleByID(req.ID)
+	if !found || s.Status != "OPEN" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "straddle not found or not open"})
+		return
+	}
+	if pos, ok := quant.GetPositionByID(s.PositionID); ok {
+		repricePosition(pos)
+		if removed, found := quant.RemovePosition(pos.ID); found {
+			quant.AddTrade(quant.Trade{
+				ID: fmt.Sprintf("trd-%d", time.Now().Unix()), Strategy: "Short Straddle",
+				Symbol: removed.Symbol, OpenedAt: removed.OpenedAt, ClosedAt: time.Now(),
+				EntryValue: removed.EntryValue, ExitValue: removed.CurrentValue,
+				RealizedPnL: removed.PnL, PnLPercent: removed.PnLPercent,
+			})
+		}
+	}
+	s.Status = "CLOSED"
+	saveStraddleRecord(s)
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
 }

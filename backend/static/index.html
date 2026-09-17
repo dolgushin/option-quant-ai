@@ -59,6 +59,7 @@
         <nav class="flex gap-2 border-b border-slate-800 pb-3">
             <button id="tab-btn-dashboard" onclick="switchTab('dashboard')" class="px-4 py-2 text-xs font-bold rounded-lg bg-emerald-600 text-white transition">📊 Дашборд</button>
             <button id="tab-btn-spreads" onclick="switchTab('spreads')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🎯 Вертикальные спреды</button>
+            <button id="tab-btn-straddles" onclick="switchTab('straddles')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">♻ Стрэддлы</button>
             <button id="tab-btn-stats" onclick="switchTab('stats')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">📈 Статистика</button>
             <button id="tab-btn-fc" onclick="switchTab('forecast')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🔮 Прогноз</button>
             <button id="tab-btn-core" onclick="switchTab('core')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🧠 Ядро</button>
@@ -832,6 +833,43 @@
 
         </div><!-- /spreads-view -->
 
+        <!-- Short Straddles Module -->
+        <div id="straddles-view" class="hidden space-y-4 md:space-y-6">
+            <div class="flex justify-between items-center flex-wrap gap-2">
+                <h2 class="text-lg font-semibold text-slate-200">♻ Шорт-стрэддлы (бумага)</h2>
+                <button onclick="loadStraddles()" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded-lg transition">↻ Обновить</button>
+            </div>
+            <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">Открыть стрэддл — цены подтянутся из стаканов Alor</div>
+                <div class="flex flex-wrap items-end gap-2 font-mono text-[11px]">
+                    <label class="text-slate-400">Инстр.
+                        <select id="str-symbol" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option>Si</option><option>RI</option></select></label>
+                    <label class="text-slate-400">Экспирация
+                        <input id="str-expiry" type="text" placeholder="2026-12-17" class="w-28 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
+                    <label class="text-slate-400">Страйк ATM
+                        <input id="str-strike" type="number" placeholder="86000" class="w-28 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="text-slate-400">Кол-во
+                        <input id="str-qty" type="number" value="1" min="1" class="w-14 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="text-slate-400">Call secid
+                        <input id="str-call" type="text" placeholder="Si86000BU6" class="w-32 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
+                    <label class="text-slate-400">Put secid
+                        <input id="str-put" type="text" placeholder="Si86000BU6" class="w-32 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
+                    <label class="text-slate-400 flex items-center gap-1">+ фьючерс
+                        <input id="str-fut-on" type="checkbox" class="w-4 h-4"></label>
+                    <label class="text-slate-400">Фьюч secid
+                        <input id="str-fut" type="text" placeholder="SiZ6" class="w-24 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
+                    <label class="text-slate-400">Хедж
+                        <select id="str-hedge" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white">
+                            <option value="hybrid">Гибрид</option><option value="delta_band">Полоса Δ</option>
+                            <option value="time">По времени</option><option value="price_band">Полоса цены</option>
+                        </select></label>
+                    <button onclick="openStraddle()" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg transition">Открыть (бумага)</button>
+                </div>
+                <div class="text-[10px] text-slate-500 font-mono mt-2">Покрытие фьючерсом снижает реальное ГО брокера (SPAN-зачёт). Движок хеджа и авто-вход — следующим шагом; пока хедж ручной.</div>
+            </div>
+            <div id="straddle-list" class="space-y-2"></div>
+        </div>
+
         <!-- Statistics Module -->
         <div id="stats-view" class="hidden space-y-4 md:space-y-6">
             <div class="flex justify-between items-center">
@@ -1126,13 +1164,14 @@
         const tabActive = 'px-4 py-2 text-xs font-bold rounded-lg bg-emerald-600 text-white transition';
 
         function switchTab(tab) {
-            const views = { dashboard: 'dashboard-view', spreads: 'spreads-view', stats: 'stats-view', forecast: 'forecast-view', core: 'core-view', mcpnl: 'mcpnl-view', ml: 'ml-view', radar: 'radar-view' };
-            const btns = { dashboard: 'tab-btn-dashboard', spreads: 'tab-btn-spreads', stats: 'tab-btn-stats', forecast: 'tab-btn-fc', core: 'tab-btn-core', mcpnl: 'tab-btn-mcpnl', ml: 'tab-btn-ml', radar: 'tab-btn-radar' };
+            const views = { dashboard: 'dashboard-view', spreads: 'spreads-view', straddles: 'straddles-view', stats: 'stats-view', forecast: 'forecast-view', core: 'core-view', mcpnl: 'mcpnl-view', ml: 'ml-view', radar: 'radar-view' };
+            const btns = { dashboard: 'tab-btn-dashboard', spreads: 'tab-btn-spreads', straddles: 'tab-btn-straddles', stats: 'tab-btn-stats', forecast: 'tab-btn-fc', core: 'tab-btn-core', mcpnl: 'tab-btn-mcpnl', ml: 'tab-btn-ml', radar: 'tab-btn-radar' };
             Object.values(views).forEach(id => document.getElementById(id).classList.add('hidden'));
             Object.values(btns).forEach(id => document.getElementById(id).className = tabIdle);
             document.getElementById(views[tab]).classList.remove('hidden');
             document.getElementById(btns[tab]).className = tabActive;
             if (tab === 'spreads') updateSpreads();
+            if (tab === 'straddles') loadStraddles();
             if (tab === 'stats') loadStats();
             if (tab === 'forecast') loadForecast();
             if (tab === 'core') loadCoreTab();
@@ -1671,6 +1710,69 @@
                 el.innerHTML = html;
             } catch (e) { el.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${e.message}</div>`; }
             finally { btn.disabled = false; btn.innerText = '🔍 Перебрать всё'; }
+        }
+
+        // ---- Short Straddles ----
+        async function loadStraddles() {
+            const el = document.getElementById('straddle-list');
+            el.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Загрузка...</div>';
+            try {
+                const res = await fetch('/api/v1/straddles');
+                const d = await res.json();
+                if (!d.straddles || !d.straddles.length) {
+                    el.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Открытых стрэддлов нет. Форма выше — цены из стаканов Alor.</div>';
+                    return;
+                }
+                let html = `<table class="w-full text-left text-[11px] font-mono text-slate-300">
+                    <thead class="text-slate-500 border-b border-slate-700 uppercase">
+                    <tr><th class="py-1 pr-2">Стрэддл</th><th class="py-1 pr-2 text-right">Страйк</th><th class="py-1 pr-2 text-right">DTE</th><th class="py-1 pr-2 text-right">К-во</th><th class="py-1 pr-2 text-right">Кредит ₽</th><th class="py-1 pr-2 text-right">P&L ₽</th><th class="py-1 pr-2 text-right">Δ</th><th class="py-1 pr-2">Хедж</th><th class="py-1"></th></tr>
+                    </thead><tbody>`;
+                d.straddles.forEach(s => {
+                    const pnlCls = (s.pnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                    html += `<tr class="border-b border-slate-800">
+                        <td class="py-1 pr-2 text-slate-100 font-bold">Short Straddle${s.with_futures ? ' +F' : ''}<div class="text-[10px] text-slate-500 font-normal">${s.symbol} · ${s.id} · эксп. ${s.expiry}</div></td>
+                        <td class="py-1 pr-2 text-right">${s.strike}</td>
+                        <td class="py-1 pr-2 text-right">${s.dte}</td>
+                        <td class="py-1 pr-2 text-right">${s.qty}</td>
+                        <td class="py-1 pr-2 text-right text-sky-300">${(s.net_credit || 0).toLocaleString('ru-RU')}</td>
+                        <td class="py-1 pr-2 text-right font-bold ${pnlCls}">${(s.pnl || 0) >= 0 ? '+' : ''}${(s.pnl || 0).toLocaleString('ru-RU')}</td>
+                        <td class="py-1 pr-2 text-right">${s.net_delta || 0}</td>
+                        <td class="py-1 pr-2 text-slate-400">${s.hedge_rule || ''} ×${s.hedge_count || 0}</td>
+                        <td class="py-1 text-right"><button onclick="closeStraddle('${s.id}')" class="px-2 py-1 text-[10px] bg-rose-700 hover:bg-rose-600 text-white rounded transition">✕ Закрыть</button></td></tr>`;
+                });
+                el.innerHTML = html + '</tbody></table>';
+            } catch (e) { el.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${e.message}</div>`; }
+        }
+
+        async function openStraddle() {
+            const body = JSON.stringify({
+                symbol: document.getElementById('str-symbol').value,
+                expiry: document.getElementById('str-expiry').value.trim(),
+                strike: parseFloat(document.getElementById('str-strike').value) || 0,
+                qty: parseInt(document.getElementById('str-qty').value) || 1,
+                with_futures: document.getElementById('str-fut-on').checked,
+                call_secid: document.getElementById('str-call').value.trim(),
+                put_secid: document.getElementById('str-put').value.trim(),
+                futures_secid: document.getElementById('str-fut').value.trim(),
+                hedge: { rule: document.getElementById('str-hedge').value },
+            });
+            try {
+                const res = await fetch('/api/v1/straddles/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+                const d = await res.json();
+                if (!d.success) { alert('❌ ' + (d.error || 'не открыт')); return; }
+                alert(`✅ Стрэддл открыт: кредит ${d.plan.net_credit} ₽, стоп ${d.plan.stop_level} ₽`);
+                loadStraddles();
+            } catch (e) { alert('❌ ' + e.message); }
+        }
+
+        async function closeStraddle(id) {
+            if (!confirm('Закрыть стрэддл?')) return;
+            try {
+                const res = await fetch('/api/v1/straddles/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+                const d = await res.json();
+                if (!d.success) { alert('❌ ' + (d.error || 'не закрыт')); return; }
+                loadStraddles();
+            } catch (e) { alert('❌ ' + e.message); }
         }
 
         let mcHistChartInstance = null;
