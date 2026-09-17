@@ -868,6 +868,166 @@ func straddleMetaHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// thetaAccrualCurve projects cumulative time-decay P&L over the coming days
+// at a frozen spot: Σ leg BS values at (t−d) minus value now. Short premium
+// accrues upward. Pure — unit-tested.
+func thetaAccrualCurve(legs []analyticsLeg, spot float64, dte int, mult float64, days int) (xs []float64, cumul []float64) {
+	const r = 0.16
+	valueAt := func(tYears float64) float64 {
+		v := 0.0
+		for _, l := range legs {
+			if l.Kind == "FUTURES" {
+				continue // frozen spot: futures don't decay
+			}
+			dir := 1.0
+			if l.Side == "SELL" {
+				dir = -1
+			}
+			iv := l.Iv / 100.0
+			if iv <= 0 {
+				iv = 0.30
+			}
+			t := tYears
+			if t <= 0 {
+				t = 1.0 / 3650.0
+			}
+			g := quant.CalculateBlackScholes(l.IsCall, spot, l.Strike, t, r, iv)
+			v += dir * g.Price * mult * float64(l.Quantity)
+		}
+		return v
+	}
+	t0 := float64(dte) / 365.0
+	v0 := valueAt(t0)
+	for d := 0; d <= days; d++ {
+		xs = append(xs, float64(d))
+		cumul = append(cumul, math.Round((valueAt(float64(dte-d)/365.0)-v0)*100)/100)
+	}
+	return xs, cumul
+}
+
+// hedgeSpotForecast finds the nearest spots below/above the current one
+// where |delta| first reaches the band, scanning the delta curve outward.
+// Returns zeros when the band is never touched in range. Pure.
+func hedgeSpotForecast(spots, deltas []float64, curIdx int, band float64) (lo, hi float64) {
+	if band <= 0 || curIdx < 0 || curIdx >= len(spots) || len(spots) != len(deltas) {
+		return 0, 0
+	}
+	for i := curIdx; i >= 0; i-- {
+		if math.Abs(deltas[i]) >= band {
+			lo = spots[i]
+			break
+		}
+	}
+	for i := curIdx; i < len(spots); i++ {
+		if math.Abs(deltas[i]) >= band {
+			hi = spots[i]
+			break
+		}
+	}
+	return lo, hi
+}
+
+type straddleHedgeView struct {
+	Rule          string  `json:"rule"`
+	Band          float64 `json:"band"`
+	CurrentDelta  float64 `json:"current_delta"`
+	SpotLo        float64 `json:"spot_lo"`
+	SpotHi        float64 `json:"spot_hi"`
+	MinutesToTime int     `json:"minutes_to_time_hedge"`
+	Text          string  `json:"text"`
+}
+
+// buildHedgeView composes the "when is the first hedge" forecast from the
+// rule, the delta curve and the last hedge mark. Pure apart from time.
+func buildHedgeView(rec *straddleRecord, spots, deltas []float64, curSpot float64, now time.Time) straddleHedgeView {
+	r := resolveHedgeRules(rec.Hedge)
+	v := straddleHedgeView{Rule: r.Rule, Band: r.DeltaBand}
+	curIdx := -1
+	best := math.MaxFloat64
+	for i, s := range spots {
+		if d := math.Abs(s - curSpot); d < best {
+			best, curIdx = d, i
+		}
+	}
+	if curIdx >= 0 && curIdx < len(deltas) {
+		v.CurrentDelta = math.Round(deltas[curIdx]*100) / 100
+	}
+	lo, hi := hedgeSpotForecast(spots, deltas, curIdx, r.DeltaBand)
+	v.SpotLo, v.SpotHi = math.Round(lo), math.Round(hi)
+	left := r.IntervalMin - int(minutesSince(rec.LastHedgeAt, now))
+	if left < 0 {
+		left = 0
+	}
+	v.MinutesToTime = left
+	switch r.Rule {
+	case hedgeTime:
+		v.Text = fmt.Sprintf("временной хедж через ~%d мин (интервал %d)", left, r.IntervalMin)
+	case hedgePriceBand:
+		v.Text = fmt.Sprintf("хедж при уходе спота на %.2f%% от %.0f", r.PriceBandPct, curSpot)
+	default: // delta_band + hybrid: spot triggers
+		parts := []string{}
+		if lo > 0 {
+			parts = append(parts, fmt.Sprintf("≤ %.0f", lo))
+		}
+		if hi > 0 {
+			parts = append(parts, fmt.Sprintf("≥ %.0f", hi))
+		}
+		if len(parts) == 0 {
+			v.Text = fmt.Sprintf("полоса |Δ| %.2f в диапазоне кривой не задевается", r.DeltaBand)
+		} else {
+			v.Text = fmt.Sprintf("первый хедж при споте %s (|Δ| %.2f)", strings.Join(parts, " или "), r.DeltaBand)
+		}
+		if r.Rule == hedgeHybrid {
+			v.Text += fmt.Sprintf("; либо по времени через ~%d мин", left)
+		}
+	}
+	return v
+}
+
+// GET /api/v1/straddles/analytics?id=str-... — legs, curves, theta accrual,
+// hedge forecast.
+func straddleAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	id := r.URL.Query().Get("id")
+	s, found := straddleByID(id)
+	if !found {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "straddle not found"})
+		return
+	}
+	pos, ok := quant.GetPositionByID(s.PositionID)
+	if !ok {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "position not found"})
+		return
+	}
+	repricePosition(pos)
+	quant.SavePosition(*pos)
+	mult := contractMultiplier(pos.Symbol)
+	spot, _ := getSpotPrice(pos.Symbol)
+	dte := dteInDays(s.Expiry, time.Now())
+
+	legs := make([]analyticsLeg, 0, len(pos.Legs))
+	for _, l := range pos.Legs {
+		kind := "OPTION"
+		if l.Kind == "FUTURES" {
+			kind = "FUTURES"
+		}
+		legs = append(legs, analyticsLeg{
+			SecID: l.SecID, Side: l.Side, Kind: kind, Strike: l.Strike,
+			IsCall: l.IsCall, Quantity: l.Quantity,
+			Entry: l.EntryPrice, Current: l.CurrentPrice,
+		})
+	}
+	a := buildSpreadAnalytics(pos.Symbol, s.Expiry, spot, dte, mult, legs)
+	xs, cumul := thetaAccrualCurve(a.Legs, spot, dte, mult, 14)
+	hv := buildHedgeView(&s, a.Curves.Spots, a.Curves.DeltaNow, spot, time.Now())
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"analytics":     a,
+		"theta_accrual": map[string]interface{}{"days": xs, "cumul": cumul},
+		"hedge":         hv,
+		"pnl":           math.Round(pos.PnL*100) / 100,
+	})
+}
+
 // GET /api/v1/straddles — open straddles with live position P&L.
 func straddleListHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")

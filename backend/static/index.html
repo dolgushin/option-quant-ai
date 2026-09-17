@@ -1790,7 +1790,9 @@
                         <td class="py-1 pr-2 text-right font-bold ${pnlCls}">${(s.pnl || 0) >= 0 ? '+' : ''}${(s.pnl || 0).toLocaleString('ru-RU')}</td>
                         <td class="py-1 pr-2 text-right">${s.net_delta || 0}</td>
                         <td class="py-1 pr-2 text-slate-400">${s.hedge_rule || ''} ×${s.hedge_count || 0}</td>
-                        <td class="py-1 text-right"><button onclick="closeStraddle('${s.id}')" class="px-2 py-1 text-[10px] bg-rose-700 hover:bg-rose-600 text-white rounded transition">✕ Закрыть</button></td></tr>`;
+                        <td class="py-1 text-right whitespace-nowrap"><button onclick="toggleStraddleProfile('${s.id}')" class="px-2 py-1 text-[10px] bg-indigo-700 hover:bg-indigo-600 text-white rounded transition">📊 Профиль</button>
+                        <button onclick="closeStraddle('${s.id}')" class="px-2 py-1 text-[10px] bg-rose-700 hover:bg-rose-600 text-white rounded transition">✕ Закрыть</button></td></tr>
+                    <tr id="strd-${s.id}" class="hidden"><td colspan="9" class="p-0 border-b border-slate-800 bg-slate-900/40"><div id="strd-box-${s.id}" class="p-3"></div></td></tr>`;
                 });
                 el.innerHTML = html + '</tbody></table>';
             } catch (e) { el.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${e.message}</div>`; }
@@ -1853,6 +1855,72 @@
                 alert(`✅ Стрэддл открыт: кредит ${d.plan.net_credit} ₽, стоп ${d.plan.stop_level} ₽`);
                 loadStraddles();
             } catch (e) { alert('❌ ' + e.message); }
+        }
+
+        async function toggleStraddleProfile(id) {
+            const row = document.getElementById(`strd-${id}`);
+            if (!row) return;
+            row.classList.toggle('hidden');
+            if (!row.classList.contains('hidden')) renderStraddleProfile(id);
+        }
+
+        async function renderStraddleProfile(id) {
+            const box = document.getElementById(`strd-box-${id}`);
+            box.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Загрузка профиля...</div>';
+            try {
+                const res = await fetch(`/api/v1/straddles/analytics?id=${id}`);
+                const d = await res.json();
+                if (d.error) { box.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${d.error}</div>`; return; }
+                const a = d.analytics;
+                let legs = `<table class="w-full text-left text-[10px] font-mono text-slate-300 mb-2">
+                    <thead class="text-slate-500 border-b border-slate-700 uppercase">
+                    <tr><th class="py-1 pr-2">Стор.</th><th class="py-1 pr-2">Тикер</th><th class="py-1 pr-2 text-right">Страйк</th><th class="py-1 pr-2 text-right">Вход</th><th class="py-1 pr-2 text-right">Сейчас</th><th class="py-1 pr-2 text-right">P&L</th><th class="py-1 pr-2 text-right">Δ</th><th class="py-1 pr-2 text-right">Θ/д</th></tr>
+                    </thead><tbody>`;
+                (a.legs || []).forEach(l => {
+                    const cls = l.side === 'SELL' ? 'text-rose-300' : 'text-emerald-300';
+                    const pnlCls = (l.pnl || 0) >= 0 ? 'text-emerald-300' : 'text-rose-300';
+                    legs += `<tr class="border-b border-slate-800/60">
+                        <td class="py-1 pr-2 ${cls}">${l.side}</td><td class="py-1 pr-2">${l.secid || ''}</td>
+                        <td class="py-1 pr-2 text-right">${l.kind === 'FUTURES' ? '—' : l.strike}</td>
+                        <td class="py-1 pr-2 text-right">${l.entry}</td><td class="py-1 pr-2 text-right">${l.current}</td>
+                        <td class="py-1 pr-2 text-right ${pnlCls}">${(l.pnl || 0) >= 0 ? '+' : ''}${(l.pnl || 0).toLocaleString('ru-RU')}</td>
+                        <td class="py-1 pr-2 text-right">${l.delta}</td><td class="py-1 pr-2 text-right">${l.theta}</td></tr>`;
+                });
+                legs += '</tbody></table>';
+                const h = d.hedge || {};
+                box.innerHTML = `
+                    <div class="text-[11px] font-mono text-slate-300 bg-slate-800/60 border border-slate-700 rounded p-2 mb-2">
+                        <span class="text-amber-300 font-bold">Первый хедж:</span> ${h.text || '—'}
+                        <span class="text-slate-500">(Δ сейчас ${h.current_delta || 0}, полоса ${h.band || 0})</span>
+                    </div>
+                    ${legs}
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
+                        <div class="bg-slate-900/60 rounded-lg p-2 border border-slate-700">
+                            <div class="text-[10px] text-slate-400 font-mono mb-1">P&L: сейчас и на экспирацию, ₽</div>
+                            <canvas id="strd-ch-pnl-${id}" height="150"></canvas>
+                        </div>
+                        <div class="bg-slate-900/60 rounded-lg p-2 border border-slate-700">
+                            <div class="text-[10px] text-slate-400 font-mono mb-1">Дельта</div>
+                            <canvas id="strd-ch-delta-${id}" height="150"></canvas>
+                        </div>
+                        <div class="bg-slate-900/60 rounded-lg p-2 border border-slate-700">
+                            <div class="text-[10px] text-slate-400 font-mono mb-1">Набегающая тета (14 дн., спот frozen), ₽</div>
+                            <canvas id="strd-ch-theta-${id}" height="150"></canvas>
+                        </div>
+                    </div>`;
+                drawCurvesChart(`strd-ch-pnl-${id}`, a.curves.spots, [
+                    { label: 'P&L сейчас', data: a.curves.pnl_now, color: '#f87171' },
+                    { label: 'P&L на экспирацию', data: a.curves.pnl_expiry, color: '#818cf8' },
+                ], []);
+                drawCurvesChart(`strd-ch-delta-${id}`, a.curves.spots, [
+                    { label: 'дельта', data: a.curves.delta_now, color: '#f87171' },
+                ], []);
+                if (d.theta_accrual) {
+                    drawCurvesChart(`strd-ch-theta-${id}`, d.theta_accrual.days, [
+                        { label: 'накопленная тета', data: d.theta_accrual.cumul, color: '#34d399' },
+                    ], []);
+                }
+            } catch (e) { box.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${e.message}</div>`; }
         }
 
         async function closeStraddle(id) {

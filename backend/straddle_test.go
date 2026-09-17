@@ -284,6 +284,48 @@ func TestParseAlorOptionInfo(t *testing.T) {
 	}
 }
 
+// TestThetaAccrualRisesForShort straddle time decay must accrue upward
+// (short premium earns) starting from exactly zero.
+func TestThetaAccrualRisesForShort(t *testing.T) {
+	legs := []analyticsLeg{
+		{Side: "SELL", Kind: "OPTION", Strike: 86000, IsCall: true, Quantity: 1, Iv: 20},
+		{Side: "SELL", Kind: "OPTION", Strike: 86000, IsCall: false, Quantity: 1, Iv: 20},
+	}
+	xs, cumul := thetaAccrualCurve(legs, 86000, 30, 1, 14)
+	if len(xs) != 15 || len(cumul) != 15 {
+		t.Fatalf("want 15 points, got %d/%d", len(xs), len(cumul))
+	}
+	if cumul[0] != 0 {
+		t.Fatalf("day 0 must be 0, got %v", cumul[0])
+	}
+	for i := 1; i < len(cumul); i++ {
+		if cumul[i] < cumul[i-1] {
+			t.Fatalf("short accrual must not fall: day %d %v < %v", i, cumul[i], cumul[i-1])
+		}
+	}
+	if cumul[14] <= 0 {
+		t.Fatalf("14 days must accrue positive, got %v", cumul[14])
+	}
+}
+
+// TestHedgeSpotForecast pins crossing search on a V-shaped delta curve.
+func TestHedgeSpotForecast(t *testing.T) {
+	spots := []float64{84000, 85000, 86000, 87000, 88000}
+	deltas := []float64{-2.0, -0.5, 0.1, 0.8, 2.2}
+	lo, hi := hedgeSpotForecast(spots, deltas, 2, 1.0)
+	if lo != 84000 || hi != 88000 {
+		t.Fatalf("crossings = %v/%v, want 84000/88000", lo, hi)
+	}
+	lo, hi = hedgeSpotForecast(spots, deltas, 2, 5.0)
+	if lo != 0 || hi != 0 {
+		t.Fatalf("untouched band must give zeros, got %v/%v", lo, hi)
+	}
+	lo, hi = hedgeSpotForecast(spots, deltas, -1, 1.0)
+	if lo != 0 || hi != 0 {
+		t.Fatalf("bad index must give zeros, got %v/%v", lo, hi)
+	}
+}
+
 func TestStraddleStops(t *testing.T) {
 	rec := &straddleRecord{StopLevel: 2320, TimeStopDTE: 14}
 	if !straddleShouldStop(rec, -2320) {
