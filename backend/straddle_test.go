@@ -3,6 +3,8 @@ package main
 import (
 	"testing"
 	"time"
+
+	"option-quant-ai/alor"
 )
 
 func TestDecideStraddleHedgeBands(t *testing.T) {
@@ -171,6 +173,57 @@ func TestBuildStrikeOptions(t *testing.T) {
 	plain := buildStrikeOptions([]float64{86000, 85000}, 0)
 	if len(plain) != 2 || plain[0].Divider || plain[1].Divider {
 		t.Fatalf("no-ATM must have no divider: %+v", plain)
+	}
+}
+
+// TestSellPriceFromBook pins executable SELL pricing: mid when two-sided,
+// best bid when the book is one-sided (evening), refuse on empty bids.
+func TestSellPriceFromBook(t *testing.T) {
+	mk := func(bids, asks [][2]float64) alor.AlorOrderbookResponse {
+		ob := alor.AlorOrderbookResponse{}
+		for _, b := range bids {
+			ob.Bids = append(ob.Bids, alor.OrderbookEntry{Price: b[0], Volume: int(b[1])})
+		}
+		for _, a := range asks {
+			ob.Asks = append(ob.Asks, alor.OrderbookEntry{Price: a[0], Volume: int(a[1])})
+		}
+		return ob
+	}
+	px, ok := sellPriceFromBook(mk([][2]float64{{725, 6}}, [][2]float64{{1100, 1}}))
+	if !ok || px != 912.5 {
+		t.Fatalf("two-sided = mid 912.5, got %v %v", px, ok)
+	}
+	px, ok = sellPriceFromBook(mk([][2]float64{{725, 6}}, nil))
+	if !ok || px != 725 {
+		t.Fatalf("bid-only = best bid 725, got %v %v", px, ok)
+	}
+	// Crossed book still sells at the bid.
+	px, ok = sellPriceFromBook(mk([][2]float64{{800, 1}}, [][2]float64{{700, 1}}))
+	if !ok || px != 800 {
+		t.Fatalf("crossed = bid 800, got %v %v", px, ok)
+	}
+	if _, ok := sellPriceFromBook(mk(nil, [][2]float64{{1100, 1}})); ok {
+		t.Fatal("no bids must refuse")
+	}
+	if _, ok := sellPriceFromBook(alor.AlorOrderbookResponse{}); ok {
+		t.Fatal("empty book must refuse")
+	}
+}
+
+// TestParseStrikesFromSymbols pins Alor-search strike parsing: digits right
+// after the root pass, everything else (futures, stocks, garbage) drops out.
+func TestParseStrikesFromSymbols(t *testing.T) {
+	syms := []string{"Si86000BU6", "Si86500BX6", "Si86000BU6", "SiU6", "SIBN", "SiABC", "RI90000ZZ9", ""}
+	got := parseStrikesFromSymbols(syms, "Si")
+	if len(got) != 2 || got[0] != 86000 || got[1] != 86500 {
+		t.Fatalf("Si strikes = %v, want [86000 86500]", got)
+	}
+	gotRI := parseStrikesFromSymbols(syms, "RI")
+	if len(gotRI) != 1 || gotRI[0] != 90000 {
+		t.Fatalf("RI strikes = %v, want [90000]", gotRI)
+	}
+	if got := parseStrikesFromSymbols(nil, "Si"); len(got) != 0 {
+		t.Fatalf("nil must give empty, got %v", got)
 	}
 }
 

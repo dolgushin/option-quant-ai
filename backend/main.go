@@ -3637,6 +3637,7 @@ func main() {
 	http.HandleFunc("/api/v1/mc-pnl", mcPLHandler)
 	http.HandleFunc("/api/v1/mc-scan", mcScanHandler)
 	http.HandleFunc("/api/v1/straddles/meta", straddleMetaHandler)
+	http.HandleFunc("/api/v1/straddles/strikes", straddleStrikesHandler)
 	http.HandleFunc("/api/v1/straddles", straddleListHandler)
 	http.HandleFunc("/api/v1/straddles/open", straddleOpenHandler)
 	http.HandleFunc("/api/v1/straddles/close", straddleCloseHandler)

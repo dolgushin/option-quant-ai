@@ -1726,8 +1726,25 @@
                 const ex = document.getElementById('str-expiry-pick');
                 ex.innerHTML = '<option value="">—</option>' + (d.expiries || []).map(e =>
                     `<option value="${e.date}">${e.date} ${e.tenor} (${e.dte}д)</option>`).join('');
+                let srows = d.strikes || [];
+                if (!srows.length && d.spot) {
+                    // MOEX chain down: fall back to the Alor strike grid
+                    // (union across expiries) with a locally computed ATM.
+                    try {
+                        const r2 = await fetch(`/api/v1/straddles/strikes?symbol=${encodeURIComponent(sym)}`);
+                        const d2 = await r2.json();
+                        const sts = (d2.strikes || []).slice().sort((a, b) => a - b);
+                        let atm = 0, best = Infinity;
+                        sts.forEach(s => { const dd = Math.abs(s - d.spot); if (dd < best) { best = dd; atm = s; } });
+                        srows = [];
+                        sts.forEach(s => {
+                            if (s === atm && atm > 0) srows.push({ divider: true, label: '━━━ ATM ━━━' });
+                            srows.push({ strike: s, label: String(s), atm: s === atm && atm > 0 });
+                        });
+                    } catch (e) { /* manual input stays */ }
+                }
                 const st = document.getElementById('str-strike-pick');
-                st.innerHTML = '<option value="">—</option>' + (d.strikes || []).map(s =>
+                st.innerHTML = '<option value="">—</option>' + srows.map(s =>
                     s.divider ? `<option value="" disabled>${s.label}</option>`
                               : `<option value="${s.strike}">${s.label}${s.atm ? ' ●' : ''}</option>`).join('');
                 if (d.spot) {

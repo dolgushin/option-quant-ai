@@ -27,10 +27,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
+	"option-quant-ai/alor"
 	"option-quant-ai/quant"
 )
 
@@ -308,31 +311,47 @@ func openStraddles() []straddleRecord {
 
 // ---- Alor pricer ----
 
-// alorBookMid returns the book mid when two-sided, else 0.
-func alorBookMid(secid string) float64 {
-	if alorMarket == nil || secid == "" {
-		return 0
+// sellPriceFromBook picks the executable SELL price from a book: mid when
+// two-sided, else best bid (conservative and real — a sale fills at the
+// bid). Evening one-sided books no longer block opening. Pure —
+// unit-tested.
+func sellPriceFromBook(ob alor.AlorOrderbookResponse) (float64, bool) {
+	if len(ob.Bids) == 0 || ob.Bids[0].Price <= 0 {
+		return 0, false
 	}
-	ob, err := alorMarket.FetchOrderbook("MOEX", secid)
-	if err != nil || len(ob.Bids) == 0 || len(ob.Asks) == 0 {
-		return 0
+	bid := ob.Bids[0].Price
+	if len(ob.Asks) > 0 && ob.Asks[0].Price >= bid && ob.Asks[0].Price > 0 {
+		return (bid + ob.Asks[0].Price) / 2, true
 	}
-	bid, ask := ob.Bids[0].Price, ob.Asks[0].Price
-	if bid <= 0 || ask < bid {
-		return 0
-	}
-	return (bid + ask) / 2
+	return bid, true
 }
 
-// alorStraddlePricer prices straddle legs from live Alor books (mids).
+// alorStraddlePricer prices straddle legs from live Alor books.
 func alorStraddlePricer(callSecID, putSecID, futuresSecID string) (float64, float64, float64, error) {
 	if alorMarket == nil {
 		return 0, 0, 0, fmt.Errorf("alor не настроен")
 	}
-	callPx := alorBookMid(callSecID)
-	putPx := alorBookMid(putSecID)
-	if callPx <= 0 || putPx <= 0 {
-		return 0, 0, 0, fmt.Errorf("нет двусторонних стаканов (call %.2f, put %.2f)", callPx, putPx)
+	priceLeg := func(secid, name string) (float64, error) {
+		if secid == "" {
+			return 0, fmt.Errorf("не указан secid %s-ноги", name)
+		}
+		ob, err := alorMarket.FetchOrderbook("MOEX", secid)
+		if err != nil {
+			return 0, fmt.Errorf("стакан %s (%s): %v", name, secid, err)
+		}
+		px, ok := sellPriceFromBook(ob)
+		if !ok {
+			return 0, fmt.Errorf("в стакане %s (%s) нет бидов", name, secid)
+		}
+		return px, nil
+	}
+	callPx, err := priceLeg(callSecID, "call")
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	putPx, err := priceLeg(putSecID, "put")
+	if err != nil {
+		return 0, 0, 0, err
 	}
 	futPx := 0.0
 	if futuresSecID != "" {
@@ -491,6 +510,53 @@ func buildStrikeOptions(strikes []float64, atm float64) []strikeOption {
 			Label: fmt.Sprintf("%g", s), ATM: s == atm && atm > 0})
 	}
 	return out
+}
+
+// parseStrikesFromSymbols extracts the strike grid from Alor instrument
+// symbols (^ROOT<digits>, e.g. Si86000BU6). Expiry-agnostic union across
+// series — no expiry or call/put claims, so nothing to get wrong. Pure.
+func parseStrikesFromSymbols(symbols []string, root string) []float64 {
+	re := regexp.MustCompile(`^` + regexp.QuoteMeta(root) + `(\d+)`)
+	seen := map[float64]bool{}
+	out := []float64{}
+	for _, s := range symbols {
+		m := re.FindStringSubmatch(s)
+		if m == nil {
+			continue
+		}
+		f, err := strconv.ParseFloat(m[1], 64)
+		if err != nil || f <= 0 {
+			continue
+		}
+		if !seen[f] {
+			seen[f] = true
+			out = append(out, f)
+		}
+	}
+	sort.Float64s(out)
+	return out
+}
+
+// GET /api/v1/straddles/strikes?symbol=Si — strike grid from live Alor
+// instrument search. Works without MOEX (union across expiries).
+func straddleStrikesHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "Si"
+	}
+	if alorMarket == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"strikes": []float64{}})
+		return
+	}
+	syms, err := alorMarket.FetchOptionChain(symbol)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"symbol": symbol, "strikes": parseStrikesFromSymbols(syms, symbol),
+	})
 }
 
 // GET /api/v1/straddles/meta?symbol=Si — expiries with W/M/Q tenors, strike
