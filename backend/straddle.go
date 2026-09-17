@@ -77,13 +77,19 @@ func resolveHedgeRules(r straddleHedgeRules) straddleHedgeRules {
 }
 
 // decideStraddleHedge is the pure hedge engine: given the current position
-// delta (in futures-contract equivalents, same convention as the spread
-// manager), spot, last hedge mark and elapsed minutes, it reports whether to
-// hedge now, the signed futures qty (flatten to zero, rounded, dust
-// skipped), and a human reason. Pure — unit-tested.
-func decideStraddleHedge(posDelta, spot, lastHedgeSpot float64, minutesSinceHedge float64, rules straddleHedgeRules) (bool, int, string) {
+// delta and the target delta (in futures-contract equivalents, same
+// convention as the spread manager — 0 for naked, +Qty to maintain the
+// futures cover), spot, last hedge mark and elapsed minutes, it reports
+// whether to hedge now, the signed futures qty (toward target, rounded,
+// dust skipped), and a human reason. Pure — unit-tested.
+//
+// Covered positions hold +Qty futures by design (covered call + short put),
+// so the engine maintains that cover instead of flattening it away on the
+// first pass.
+func decideStraddleHedge(posDelta, targetDelta, spot, lastHedgeSpot float64, minutesSinceHedge float64, rules straddleHedgeRules) (bool, int, string) {
 	r := resolveHedgeRules(rules)
-	qty := int(math.Round(-posDelta))
+	dev := posDelta - targetDelta
+	qty := int(math.Round(targetDelta - posDelta))
 	if qty == 0 {
 		return false, 0, ""
 	}
@@ -104,17 +110,17 @@ func decideStraddleHedge(posDelta, spot, lastHedgeSpot float64, minutesSinceHedg
 		}
 		return false, 0, ""
 	case hedgeHybrid:
-		big := math.Abs(posDelta) >= r.BigMoveMult*r.DeltaBand
+		big := math.Abs(dev) >= r.BigMoveMult*r.DeltaBand
 		if big {
-			return need(fmt.Sprintf("резкое движение: |Δ| %0.2f ≥ %.1f× полоса", math.Abs(posDelta), r.BigMoveMult))
+			return need(fmt.Sprintf("резкое движение: отклонение %0.2f ≥ %.1f× полоса", math.Abs(dev), r.BigMoveMult))
 		}
 		if minutesSinceHedge >= float64(r.IntervalMin) {
 			return need(fmt.Sprintf("время: %0.0f мин ≥ %d", minutesSinceHedge, r.IntervalMin))
 		}
 		return false, 0, ""
 	default: // hedgeDeltaBand
-		if math.Abs(posDelta) >= r.DeltaBand {
-			return need(fmt.Sprintf("|Δ| %0.2f ≥ полоса %0.2f", math.Abs(posDelta), r.DeltaBand))
+		if math.Abs(dev) >= r.DeltaBand {
+			return need(fmt.Sprintf("отклонение Δ %0.2f ≥ полоса %0.2f", math.Abs(dev), r.DeltaBand))
 		}
 		return false, 0, ""
 	}

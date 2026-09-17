@@ -34,6 +34,23 @@ func TestAnalyticsCurvesShape(t *testing.T) {
 	}
 }
 
+// TestAnalyticsThetaScalesWithMult pins money units: theta curves carry the
+// multiplier (rubles/day like p.Theta), while delta curves stay in contract
+// units for the hedge engine.
+func TestAnalyticsThetaScalesWithMult(t *testing.T) {
+	a1 := buildSpreadAnalytics("SBERP", "2026-09-16", 273.76, 22, 100, analyticsTestLegs())
+	a2 := buildSpreadAnalytics("SBERP", "2026-09-16", 273.76, 22, 200, analyticsTestLegs())
+	mid := len(a1.Curves.Spots) / 2
+	if a2.Curves.ThetaNow[mid] != 2*a1.Curves.ThetaNow[mid] {
+		t.Fatalf("theta must scale with mult: %v vs 2x%v",
+			a2.Curves.ThetaNow[mid], a1.Curves.ThetaNow[mid])
+	}
+	if a2.Curves.DeltaNow[mid] != a1.Curves.DeltaNow[mid] {
+		t.Fatalf("delta must NOT scale with mult: %v vs %v",
+			a2.Curves.DeltaNow[mid], a1.Curves.DeltaNow[mid])
+	}
+}
+
 func TestAnalyticsExpiryPayoff(t *testing.T) {
 	a := buildSpreadAnalytics("SBERP", "2026-09-16", 273.76, 22, 100, analyticsTestLegs())
 	mult := 100.0

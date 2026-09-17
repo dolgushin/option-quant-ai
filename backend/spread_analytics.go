@@ -237,9 +237,12 @@ func buildSpreadAnalytics(symbol, expiry string, spot float64, dte int, mult flo
 			dn += dir * g.Delta * q
 			gExp := quant.CalculateBlackScholes(l.IsCall, S, l.Strike, 1.0/3650.0, r, ivs[i])
 			de += dir * gExp.Delta * q
-			tn += dir * g.Theta * q
+			// Theta curves carry mult (rubles/day, like p.Theta and the MOEX
+			// leg thetas); delta/gamma/vega stay in contract units, matching
+			// the hedge engine and manager bands.
+			tn += dir * g.Theta * mult * q
 			gT1 := quant.CalculateBlackScholes(l.IsCall, S, l.Strike, t1, r, ivs[i])
-			tt += dir * gT1.Theta * q
+			tt += dir * gT1.Theta * mult * q
 			gn += dir * g.Gamma * q
 			vn += dir * g.Vega * q
 			rn += dir * g.Rho * q

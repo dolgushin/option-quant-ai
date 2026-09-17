@@ -9,49 +9,71 @@ import (
 
 func TestDecideStraddleHedgeBands(t *testing.T) {
 	// Delta band: fires at/above, quiet below; dust rounds to zero.
-	fire, qty, reason := decideStraddleHedge(1.6, 86000, 86000, 0,
+	// (target 0 = naked straddle.)
+	fire, qty, reason := decideStraddleHedge(1.6, 0, 86000, 86000, 0,
 		straddleHedgeRules{Rule: hedgeDeltaBand, DeltaBand: 1.5})
 	if !fire || qty != -2 || reason == "" {
 		t.Fatalf("band must fire: %v %d %q", fire, qty, reason)
 	}
-	if fire, _, _ := decideStraddleHedge(1.0, 86000, 86000, 0,
+	if fire, _, _ := decideStraddleHedge(1.0, 0, 86000, 86000, 0,
 		straddleHedgeRules{Rule: hedgeDeltaBand, DeltaBand: 1.5}); fire {
 		t.Fatal("band must stay quiet below threshold")
 	}
-	if fire, qty, _ := decideStraddleHedge(0.4, 86000, 86000, 0,
+	if fire, qty, _ := decideStraddleHedge(0.4, 0, 86000, 86000, 0,
 		straddleHedgeRules{Rule: hedgeDeltaBand, DeltaBand: 0.1}); fire || qty != 0 {
 		t.Fatalf("dust must round to no-hedge: %v %d", fire, qty)
 	}
 	// Time: fires after the interval, quiet before.
-	fire, _, _ = decideStraddleHedge(0.8, 86000, 86000, 61,
+	fire, _, _ = decideStraddleHedge(0.8, 0, 86000, 86000, 61,
 		straddleHedgeRules{Rule: hedgeTime, IntervalMin: 60})
 	if !fire {
 		t.Fatal("time rule must fire after interval")
 	}
-	if fire, _, _ := decideStraddleHedge(2.5, 86000, 86000, 10,
+	if fire, _, _ := decideStraddleHedge(2.5, 0, 86000, 86000, 10,
 		straddleHedgeRules{Rule: hedgeTime, IntervalMin: 60}); fire {
 		t.Fatal("time rule must not fire early even on big delta")
 	}
 	// Hybrid: big move overrides the clock.
-	fire, _, reason = decideStraddleHedge(3.2, 86000, 86000, 5,
+	fire, _, reason = decideStraddleHedge(3.2, 0, 86000, 86000, 5,
 		straddleHedgeRules{Rule: hedgeHybrid, DeltaBand: 1.5, BigMoveMult: 2, IntervalMin: 60})
 	if !fire || reason == "" {
 		t.Fatal("hybrid must fire on 2x band")
 	}
 	// Price band: 1% move fires, 0.2% rests; no mark forces first hedge.
-	fire, _, _ = decideStraddleHedge(-1.2, 86860, 86000, 0,
+	fire, _, _ = decideStraddleHedge(-1.2, 0, 86860, 86000, 0,
 		straddleHedgeRules{Rule: hedgePriceBand, PriceBandPct: 1.0})
 	if !fire {
 		t.Fatal("price band must fire on 1% move")
 	}
-	if fire, _, _ := decideStraddleHedge(-1.2, 86172, 86000, 0,
+	if fire, _, _ := decideStraddleHedge(-1.2, 0, 86172, 86000, 0,
 		straddleHedgeRules{Rule: hedgePriceBand, PriceBandPct: 1.0}); fire {
 		t.Fatal("price band must rest inside the band")
 	}
-	fire, _, _ = decideStraddleHedge(-1.2, 86000, 0, 0,
+	fire, _, _ = decideStraddleHedge(-1.2, 0, 86000, 0, 0,
 		straddleHedgeRules{Rule: hedgePriceBand, PriceBandPct: 1.0})
 	if !fire {
 		t.Fatal("price band without a mark must hedge once")
+	}
+}
+
+// TestDecideStraddleHedgeCovered pins the covered-straddle target: the +Qty
+// futures cover is maintained, not flattened — a covered position sitting
+// exactly on its cover must rest, drift hedges back toward it.
+func TestDecideStraddleHedgeCovered(t *testing.T) {
+	band := straddleHedgeRules{Rule: hedgeDeltaBand, DeltaBand: 1.5}
+	// Sitting on the cover: no hedge (the old target-0 engine flattened here).
+	if fire, qty, _ := decideStraddleHedge(1.0, 1.0, 86000, 86000, 0, band); fire || qty != 0 {
+		t.Fatalf("on-cover must rest: %v %d", fire, qty)
+	}
+	// Drifted up to +3 with +1 cover: sell 2 back toward the cover.
+	fire, qty, _ := decideStraddleHedge(3.0, 1.0, 87000, 86000, 0, band)
+	if !fire || qty != -2 {
+		t.Fatalf("drift must hedge toward cover: %v %d", fire, qty)
+	}
+	// Drifted down to -1 with +1 cover: buy 2 to restore the cover.
+	fire, qty, _ = decideStraddleHedge(-1.0, 1.0, 85000, 86000, 0, band)
+	if !fire || qty != 2 {
+		t.Fatalf("under-cover must buy back: %v %d", fire, qty)
 	}
 }
 
