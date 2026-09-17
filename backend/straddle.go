@@ -1,0 +1,236 @@
+package main
+
+// Short-straddle module (second trading module): sell an ATM straddle on high
+// IV Rank and keep it delta-neutral with an automatic futures hedger.
+//
+// Two constructions (chosen at open):
+//   - naked:   SELL ATM call + SELL ATM put (max GO, no futures leg);
+//   - covered: naked legs + LONG futures (starts ~+1.0 delta per unit; the
+//     broker-side SPAN offset is what lowers the real GO — our estimate
+//     stays conservative).
+//
+// Four hedge rules (per position, evaluated on every pass):
+//   - delta_band: hedge when |Δ| ≥ band (flatten to zero);
+//   - time:       flatten whatever delta every intervalMin minutes;
+//   - hybrid:     time checks + immediate flatten on big moves (|Δ| ≥
+//     bigMoveMult × band);
+//   - price_band: flatten when spot moved ≥ priceBandPct from the last hedge.
+//
+// Guardrails (paper-first): stop at 2× collected premium, time-stop at
+// timeStopDTE (default 14). Core math is pure and hermetic; market prices
+// arrive via injected pricers so tests need no network.
+
+import (
+	"fmt"
+	"math"
+	"time"
+)
+
+// Hedge rule identifiers.
+const (
+	hedgeDeltaBand = "delta_band"
+	hedgeTime      = "time"
+	hedgeHybrid    = "hybrid"
+	hedgePriceBand = "price_band"
+)
+
+// straddleHedgeRules configures one position's hedger. Zero values mean
+// "use the defaults" (resolved by resolveHedgeRules).
+type straddleHedgeRules struct {
+	Rule         string  `json:"rule"` // delta_band | time | hybrid | price_band
+	DeltaBand    float64 `json:"delta_band"`
+	IntervalMin  int     `json:"interval_min"`
+	BigMoveMult  float64 `json:"big_move_mult"`
+	PriceBandPct float64 `json:"price_band_pct"`
+}
+
+// resolveHedgeRules fills zero values with defaults.
+func resolveHedgeRules(r straddleHedgeRules) straddleHedgeRules {
+	if r.Rule == "" {
+		r.Rule = hedgeHybrid
+	}
+	if r.DeltaBand <= 0 {
+		r.DeltaBand = 1.0
+	}
+	if r.IntervalMin <= 0 {
+		r.IntervalMin = 60
+	}
+	if r.BigMoveMult <= 0 {
+		r.BigMoveMult = 2.0
+	}
+	if r.PriceBandPct <= 0 {
+		r.PriceBandPct = 1.0
+	}
+	return r
+}
+
+// decideStraddleHedge is the pure hedge engine: given the current position
+// delta (in futures-contract equivalents, same convention as the spread
+// manager), spot, last hedge mark and elapsed minutes, it reports whether to
+// hedge now, the signed futures qty (flatten to zero, rounded, dust
+// skipped), and a human reason. Pure — unit-tested.
+func decideStraddleHedge(posDelta, spot, lastHedgeSpot float64, minutesSinceHedge float64, rules straddleHedgeRules) (bool, int, string) {
+	r := resolveHedgeRules(rules)
+	qty := int(math.Round(-posDelta))
+	if qty == 0 {
+		return false, 0, ""
+	}
+	need := func(reason string) (bool, int, string) { return true, qty, reason }
+	switch r.Rule {
+	case hedgeTime:
+		if minutesSinceHedge >= float64(r.IntervalMin) {
+			return need(fmt.Sprintf("время: %0.0f мин ≥ %d", minutesSinceHedge, r.IntervalMin))
+		}
+		return false, 0, ""
+	case hedgePriceBand:
+		if lastHedgeSpot <= 0 {
+			return need("нет точки отсчёта — первый хедж")
+		}
+		move := math.Abs(spot-lastHedgeSpot) / lastHedgeSpot * 100
+		if move >= r.PriceBandPct {
+			return need(fmt.Sprintf("цена ушла %.2f%% ≥ %.2f%%", move, r.PriceBandPct))
+		}
+		return false, 0, ""
+	case hedgeHybrid:
+		big := math.Abs(posDelta) >= r.BigMoveMult*r.DeltaBand
+		if big {
+			return need(fmt.Sprintf("резкое движение: |Δ| %0.2f ≥ %.1f× полоса", math.Abs(posDelta), r.BigMoveMult))
+		}
+		if minutesSinceHedge >= float64(r.IntervalMin) {
+			return need(fmt.Sprintf("время: %0.0f мин ≥ %d", minutesSinceHedge, r.IntervalMin))
+		}
+		return false, 0, ""
+	default: // hedgeDeltaBand
+		if math.Abs(posDelta) >= r.DeltaBand {
+			return need(fmt.Sprintf("|Δ| %0.2f ≥ полоса %0.2f", math.Abs(posDelta), r.DeltaBand))
+		}
+		return false, 0, ""
+	}
+}
+
+// straddleLeg is one leg of a short-straddle plan/position.
+type straddleLeg struct {
+	SecID    string  `json:"secid"`
+	Side     string  `json:"side"` // SELL (options) | BUY (futures cover)
+	Strike   float64 `json:"strike,omitempty"`
+	IsCall   bool    `json:"is_call,omitempty"`
+	IsFuture bool    `json:"is_future,omitempty"`
+	Price    float64 `json:"price"`
+	Qty      int     `json:"qty"`
+}
+
+// straddlePlan is the full economics of a short straddle before opening.
+type straddlePlan struct {
+	Symbol      string        `json:"symbol"`
+	Expiry      string        `json:"expiry"`
+	DaysToExp   int           `json:"days_to_exp"`
+	Spot        float64       `json:"spot"`
+	Strike      float64       `json:"strike"`
+	Qty         int           `json:"qty"`
+	WithFutures bool          `json:"with_futures"`
+	FuturesSec  string        `json:"futures_secid"`
+	Legs        []straddleLeg `json:"legs"`
+	NetCredit   float64       `json:"net_credit"` // premium collected, rubles
+	StopLevel   float64       `json:"stop_level"` // 2× premium, rubles
+	MarginEst   float64       `json:"margin_est"` // conservative GO estimate, rubles
+}
+
+// straddlePricer returns executable prices: call/put mids (or fill levels)
+// and the futures price. Injected so the builder stays hermetic.
+type straddlePricer func(callSecID, putSecID, futuresSecID string) (callPx, putPx, futPx float64, err error)
+
+// buildShortStraddle prices a short ATM straddle: SELL call + SELL put at the
+// given strike, optionally plus a LONG futures cover. Prices come from pricer;
+// economics follow the same money conventions as spread plans (NetCredit>0).
+func buildShortStraddle(symbol, expiry string, daysToExp int, spot, strike float64, qty int, withFutures bool, callSecID, putSecID, futuresSecID string, pricer straddlePricer) (*straddlePlan, error) {
+	if qty < 1 {
+		qty = 1
+	}
+	if strike <= 0 {
+		return nil, fmt.Errorf("нужен страйк ATM")
+	}
+	callPx, putPx, futPx, err := pricer(callSecID, putSecID, futuresSecID)
+	if err != nil {
+		return nil, err
+	}
+	if callPx <= 0 || putPx <= 0 {
+		return nil, fmt.Errorf("нет цен ног (call %.2f, put %.2f)", callPx, putPx)
+	}
+	mult := contractMultiplier(symbol)
+	plan := &straddlePlan{
+		Symbol: symbol, Expiry: expiry, DaysToExp: daysToExp,
+		Spot: spot, Strike: strike, Qty: qty,
+		WithFutures: withFutures, FuturesSec: futuresSecID,
+	}
+	plan.Legs = append(plan.Legs,
+		straddleLeg{SecID: callSecID, Side: "SELL", Strike: strike, IsCall: true, Price: callPx, Qty: qty},
+		straddleLeg{SecID: putSecID, Side: "SELL", Strike: strike, IsCall: false, Price: putPx, Qty: qty},
+	)
+	credit := (callPx + putPx) * mult * float64(qty)
+	if withFutures {
+		if futPx <= 0 {
+			return nil, fmt.Errorf("нет цены фьючерса для покрытия")
+		}
+		plan.Legs = append(plan.Legs,
+			straddleLeg{SecID: futuresSecID, Side: "BUY", IsFuture: true, Price: futPx, Qty: qty})
+	}
+	plan.NetCredit = math.Round(credit*100) / 100
+	plan.StopLevel = math.Round(credit*2*100) / 100
+	// Conservative GO estimate: twice the collected premium (undefined risk
+	// has no wing to anchor on). A futures cover lowers the REAL broker GO
+	// via SPAN offsets — the estimate intentionally ignores that.
+	plan.MarginEst = math.Round(credit*2*100) / 100
+	return plan, nil
+}
+
+// straddleRecord is a live paper short straddle with its hedge state.
+type straddleRecord struct {
+	ID            string             `json:"id"`
+	PositionID    string             `json:"position_id"`
+	Symbol        string             `json:"symbol"`
+	Expiry        string             `json:"expiry"`
+	Strike        float64            `json:"strike"`
+	Qty           int                `json:"qty"`
+	WithFutures   bool               `json:"with_futures"`
+	NetCredit     float64            `json:"net_credit"`
+	StopLevel     float64            `json:"stop_level"`
+	Hedge         straddleHedgeRules `json:"hedge"`
+	TimeStopDTE   int                `json:"time_stop_dte"`
+	Status        string             `json:"status"` // OPEN / CLOSED
+	OpenedAt      string             `json:"opened_at"`
+	HedgeCount    int                `json:"hedge_count"`
+	LastHedgeAt   string             `json:"last_hedge_at"`
+	LastHedgeSpot float64            `json:"last_hedge_spot"`
+}
+
+// straddleShouldStop reports whether the realized loss hit the 2× stop.
+func straddleShouldStop(rec *straddleRecord, pnl float64) bool {
+	if rec == nil || rec.StopLevel <= 0 {
+		return false
+	}
+	return pnl <= -rec.StopLevel
+}
+
+// straddleShouldTimeStop reports whether the series aged into the time-stop.
+func straddleShouldTimeStop(rec *straddleRecord, dte int) bool {
+	if rec == nil {
+		return false
+	}
+	limit := rec.TimeStopDTE
+	if limit <= 0 {
+		limit = 14
+	}
+	return dte <= limit
+}
+
+// minutesSince parses an RFC3339 mark into minutes elapsed (huge when empty).
+func minutesSince(mark string, now time.Time) float64 {
+	if mark == "" {
+		return 1e9
+	}
+	t, err := time.Parse(time.RFC3339, mark)
+	if err != nil {
+		return 1e9
+	}
+	return now.Sub(t).Minutes()
+}
