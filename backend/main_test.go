@@ -100,6 +100,36 @@ func TestNearestStrike(t *testing.T) {
 	}
 }
 
+// TestRepriceFuturesLegPrefersSymbolSpotFallback pins the mark priority for a
+// futures leg without its own quote: symbol spot (override here) wins over a
+// stale stored price. Hermetic: the override short-circuits before network.
+func TestRepriceFuturesLegPrefersSymbolSpotFallback(t *testing.T) {
+	spotMu.Lock()
+	spotOverrides["TST"] = 100.0
+	spotMu.Unlock()
+	defer func() {
+		spotMu.Lock()
+		delete(spotOverrides, "TST")
+		spotMu.Unlock()
+	}()
+
+	p := quant.Position{
+		Symbol: "TST",
+		Legs: []quant.PositionLeg{
+			{SecID: "", Symbol: "TST", Kind: "FUTURES", Side: "BUY", Quantity: 2,
+				EntryPrice: 90, CurrentPrice: 90},
+		},
+	}
+	repricePosition(&p)
+	if p.Legs[0].CurrentPrice != 100.0 {
+		t.Fatalf("futures mark = %v, want symbol spot 100", p.Legs[0].CurrentPrice)
+	}
+	// (100−90) × mult 1 × 2 = +20.
+	if p.PnL != 20 {
+		t.Fatalf("futures pnl = %v, want 20", p.PnL)
+	}
+}
+
 // TestProfileRangeAnchorsOnStrikes pins the payoff-chart window: a narrow
 // vertical wing must fill the chart instead of drowning in ±20% of spot
 // (the old behaviour rendered the kink as a single pixel — a flat line).

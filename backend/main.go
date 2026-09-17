@@ -1800,13 +1800,23 @@ func repricePosition(p *quant.Position) {
 			leg := &p.Legs[idx]
 			var last float64
 			if leg.Kind == "FUTURES" {
-				// Prefer Alor's live feed (getSpotPrice), fall back to the actual
-				// contract quote (leg.SecID like "SiU6") and then the stored price.
-				if s, err := getSpotPrice(p.Symbol); err == nil && s > 0 {
-					last = s
-				} else if leg.SecID != "" && len(leg.SecID) >= 3 {
+				// Mark at the leg's OWN contract first: the symbol spot belongs
+				// to the selected series, which may differ from this leg's
+				// contract (e.g. SiZ6 leg vs SiU6 selection) — marking across
+				// series invents prices like the infamous 84509.
+				if alorMarket != nil && leg.SecID != "" {
+					if q, err := alorMarket.FetchSecurityQuote(leg.SecID); err == nil && q.Price > 0 {
+						last = q.Price
+					}
+				}
+				if last <= 0 && leg.SecID != "" && len(leg.SecID) >= 3 {
 					if c, err := moexISSSpotPrice(leg.SecID); err == nil && c > 0 {
 						last = c
+					}
+				}
+				if last <= 0 {
+					if s, err := getSpotPrice(p.Symbol); err == nil && s > 0 {
+						last = s
 					}
 				}
 				if last <= 0 {
