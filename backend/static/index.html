@@ -1795,6 +1795,7 @@
                         <td class="py-1 pr-2 text-right">${s.net_delta || 0}</td>
                         <td class="py-1 pr-2 text-slate-400">${s.hedge_rule || ''} ×${s.hedge_count || 0}</td>
                         <td class="py-1 text-right whitespace-nowrap"><button onclick="toggleStraddleProfile('${s.id}')" class="px-2 py-1 text-[10px] bg-indigo-700 hover:bg-indigo-600 text-white rounded transition">📊 Профиль</button>
+                        <button onclick="hedgeStraddle('${s.id}')" class="px-2 py-1 text-[10px] bg-sky-700 hover:bg-sky-600 text-white rounded transition">⚖ Хедж</button>
                         <button onclick="closeStraddle('${s.id}')" class="px-2 py-1 text-[10px] bg-rose-700 hover:bg-rose-600 text-white rounded transition">✕ Закрыть</button></td></tr>
                     <tr id="strd-${s.id}" class="hidden"><td colspan="9" class="p-0 border-b border-slate-800 bg-slate-900/40"><div id="strd-box-${s.id}" class="p-3"></div></td></tr>`;
                 });
@@ -1932,6 +1933,16 @@
                     ], []);
                 }
             } catch (e) { box.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${e.message}</div>`; }
+        }
+
+        async function hedgeStraddle(id) {
+            try {
+                const res = await fetch('/api/v1/straddles/hedge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+                const d = await res.json();
+                if (!d.success) { alert('ℹ️ ' + (d.error || 'хедж не нужен')); return; }
+                alert(`✅ Хедж: ${d.side} ${d.qty} фьюч (${d.reason})`);
+                loadStraddles();
+            } catch (e) { alert('❌ ' + e.message); }
         }
 
         async function closeStraddle(id) {

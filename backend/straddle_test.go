@@ -348,6 +348,42 @@ func TestBuildHedgeViewBreached(t *testing.T) {
 	}
 }
 
+// TestHedgeTargetDelta pins cover maintenance: covered classic holds +Qty,
+// everything else (naked, synthetic, legacy empty) flattens to zero.
+func TestHedgeTargetDelta(t *testing.T) {
+	if got := hedgeTargetDelta(&straddleRecord{Construction: "covered", Qty: 2}); got != 2 {
+		t.Fatalf("covered target = %v, want 2", got)
+	}
+	if got := hedgeTargetDelta(&straddleRecord{Construction: "synthetic", Qty: 2, WithFutures: true}); got != 0 {
+		t.Fatalf("synthetic target = %v, want 0", got)
+	}
+	if got := hedgeTargetDelta(&straddleRecord{Construction: "classic", Qty: 3}); got != 0 {
+		t.Fatalf("naked target = %v, want 0", got)
+	}
+	if got := hedgeTargetDelta(&straddleRecord{Qty: 2, WithFutures: true}); got != 2 {
+		t.Fatalf("legacy covered target = %v, want 2", got)
+	}
+	if got := hedgeTargetDelta(nil); got != 0 {
+		t.Fatalf("nil target = %v, want 0", got)
+	}
+}
+
+// TestBuildHedgeViewCoveredTarget: a covered position sitting on its cover
+// must report holding (not a hedge-now breach).
+func TestBuildHedgeViewCoveredTarget(t *testing.T) {
+	rec := &straddleRecord{Symbol: "Si", Construction: "covered", Qty: 2,
+		Hedge: straddleHedgeRules{Rule: hedgeDeltaBand, DeltaBand: 1.0}}
+	spots := []float64{84000, 85000, 86000, 87000, 88000}
+	deltas := []float64{0.5, 1.5, 2.1, 2.6, 3.1}
+	v := buildHedgeView(rec, spots, deltas, 86000, time.Now())
+	if strings.Contains(v.Text, "уже за полосой") {
+		t.Fatalf("on-cover must not breach, got %q", v.Text)
+	}
+	if !strings.Contains(v.Text, "цель +2") {
+		t.Fatalf("text must name the target, got %q", v.Text)
+	}
+}
+
 // TestHedgeSpotForecast pins crossing search on a V-shaped delta curve.
 func TestHedgeSpotForecast(t *testing.T) {
 	spots := []float64{84000, 85000, 86000, 87000, 88000}

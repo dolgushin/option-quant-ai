@@ -3649,6 +3649,7 @@ func main() {
 	http.HandleFunc("/api/v1/straddles/meta", straddleMetaHandler)
 	http.HandleFunc("/api/v1/straddles/strikes", straddleStrikesHandler)
 	http.HandleFunc("/api/v1/straddles/discover", straddleDiscoverHandler)
+	http.HandleFunc("/api/v1/straddles/hedge", straddleHedgeHandler)
 	http.HandleFunc("/api/v1/straddles/analytics", straddleAnalyticsHandler)
 	http.HandleFunc("/api/v1/straddles", straddleListHandler)
 	http.HandleFunc("/api/v1/straddles/open", straddleOpenHandler)

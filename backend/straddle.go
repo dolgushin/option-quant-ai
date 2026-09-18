@@ -160,6 +160,8 @@ type straddlePricer func(callSecID, putSecID, futuresSecID string) (callPx, putP
 // buildShortStraddle prices a short ATM straddle: SELL call + SELL put at the
 // given strike, optionally plus a LONG futures cover. Prices come from pricer;
 // economics follow the same money conventions as spread plans (NetCredit>0).
+// Classic covered straddle (Fidelity): covered call + short put, starts
+// ~+1.0 delta per unit — bullish tilt, double loss below the strike.
 func buildShortStraddle(symbol, expiry string, daysToExp int, spot, strike float64, qty int, withFutures bool, callSecID, putSecID, futuresSecID string, pricer straddlePricer) (*straddlePlan, error) {
 	if qty < 1 {
 		qty = 1
@@ -201,6 +203,71 @@ func buildShortStraddle(symbol, expiry string, daysToExp int, spot, strike float
 	return plan, nil
 }
 
+// Straddle construction identifiers.
+const (
+	straddleClassic   = "classic"   // SELL call + SELL put (+ LONG futures if covered)
+	straddleCovered   = "covered"   // classic + LONG futures cover
+	straddleSynthetic = "synthetic" // SELL 2× call + LONG futures (delta-neutral at entry)
+)
+
+// buildSyntheticStraddle prices the synthetic short straddle: SELL 2× ATM
+// call + LONG futures. By put-call parity (+1F = +1C − 1P) this replicates
+// SELL call + SELL put, but starts delta-neutral (≈ −1.0 + 1.0) instead of
+// the classic covered +1.0 tilt. Same stop/margin conventions as classic.
+func buildSyntheticStraddle(symbol, expiry string, daysToExp int, spot, strike float64, qty int, callSecID, futuresSecID string, pricer straddlePricer) (*straddlePlan, error) {
+	if qty < 1 {
+		qty = 1
+	}
+	if strike <= 0 {
+		return nil, fmt.Errorf("нужен страйк ATM")
+	}
+	callPx, _, futPx, err := pricer(callSecID, "", futuresSecID)
+	if err != nil {
+		return nil, err
+	}
+	if callPx <= 0 {
+		return nil, fmt.Errorf("нет цены колла (%.2f)", callPx)
+	}
+	if futPx <= 0 {
+		return nil, fmt.Errorf("нет цены фьючерса для синтетики")
+	}
+	mult := contractMultiplier(symbol)
+	plan := &straddlePlan{
+		Symbol: symbol, Expiry: expiry, DaysToExp: daysToExp,
+		Spot: spot, Strike: strike, Qty: qty,
+		WithFutures: true, FuturesSec: futuresSecID,
+	}
+	plan.Legs = append(plan.Legs,
+		straddleLeg{SecID: callSecID, Side: "SELL", Strike: strike, IsCall: true, Price: callPx, Qty: 2 * qty},
+		straddleLeg{SecID: futuresSecID, Side: "BUY", IsFuture: true, Price: futPx, Qty: qty},
+	)
+	credit := 2 * callPx * mult * float64(qty)
+	plan.NetCredit = math.Round(credit*100) / 100
+	plan.StopLevel = math.Round(credit*2*100) / 100
+	plan.MarginEst = math.Round(credit*2*100) / 100
+	return plan, nil
+}
+
+// hedgeTargetDelta returns the delta the hedger maintains: covered classic
+// holds its +Qty futures cover, everything else (naked classic, synthetic)
+// flattens to zero. Legacy records without Construction fall back to
+// WithFutures. Pure.
+func hedgeTargetDelta(rec *straddleRecord) float64 {
+	if rec == nil {
+		return 0
+	}
+	covered := rec.Construction == straddleCovered ||
+		(rec.Construction == "" && rec.WithFutures)
+	if !covered {
+		return 0
+	}
+	q := float64(rec.Qty)
+	if q < 1 {
+		q = 1
+	}
+	return q
+}
+
 // straddleRecord is a live paper short straddle with its hedge state.
 type straddleRecord struct {
 	ID            string             `json:"id"`
@@ -209,7 +276,9 @@ type straddleRecord struct {
 	Expiry        string             `json:"expiry"`
 	Strike        float64            `json:"strike"`
 	Qty           int                `json:"qty"`
+	Construction  string             `json:"construction"` // classic | covered | synthetic
 	WithFutures   bool               `json:"with_futures"`
+	FuturesSecID  string             `json:"futures_secid,omitempty"`
 	NetCredit     float64            `json:"net_credit"`
 	StopLevel     float64            `json:"stop_level"`
 	Hedge         straddleHedgeRules `json:"hedge"`
@@ -340,7 +409,7 @@ func alorStraddlePricer(callSecID, putSecID, futuresSecID string) (float64, floa
 	}
 	priceLeg := func(secid, name string) (float64, error) {
 		if secid == "" {
-			return 0, fmt.Errorf("не указан secid %s-ноги", name)
+			return 0, nil // unneeded leg (e.g. no put in synthetic)
 		}
 		ob, err := alorMarket.FetchOrderbook("MOEX", secid)
 		if err != nil {
@@ -377,8 +446,10 @@ func alorStraddlePricer(callSecID, putSecID, futuresSecID string) (float64, floa
 // ---- HTTP API ----
 
 // POST /api/v1/straddles/open {"symbol":"Si","expiry":"2026-12-17","strike":86000,
-// "qty":1,"with_futures":false,"call_secid":"...","put_secid":"...","futures_secid":"...",
+// "qty":1,"construction":"covered","call_secid":"...","put_secid":"...","futures_secid":"...",
 // "hedge":{"rule":"hybrid",...},"time_stop_dte":14}
+// construction: classic (C+P) | covered (C+P+F) | synthetic (2C+F).
+// with_futures is kept for backward compat (true → covered).
 func straddleOpenHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {
@@ -390,6 +461,7 @@ func straddleOpenHandler(w http.ResponseWriter, r *http.Request) {
 		Expiry       string             `json:"expiry"`
 		Strike       float64            `json:"strike"`
 		Qty          int                `json:"qty"`
+		Construction string             `json:"construction"`
 		WithFutures  bool               `json:"with_futures"`
 		CallSecID    string             `json:"call_secid"`
 		PutSecID     string             `json:"put_secid"`
@@ -404,9 +476,18 @@ func straddleOpenHandler(w http.ResponseWriter, r *http.Request) {
 	if req.Symbol == "" {
 		req.Symbol = "Si"
 	}
-	// Futures auto-resolve: checked box with empty secid must not open a
-	// zero-price leg — resolve the front contract or refuse with guidance.
-	if req.WithFutures && req.FuturesSecID == "" {
+	construction := req.Construction
+	if construction == "" {
+		if req.WithFutures {
+			construction = straddleCovered
+		} else {
+			construction = straddleClassic
+		}
+	}
+	needsFutures := construction == straddleCovered || construction == straddleSynthetic
+	// Futures auto-resolve: empty secid must not open a zero-price leg —
+	// resolve the front contract or refuse with guidance.
+	if needsFutures && req.FuturesSecID == "" {
 		if alorMarket == nil {
 			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "укажи secid фьючерса (Alor не настроен)"})
 			return
@@ -424,9 +505,18 @@ func straddleOpenHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	spot, _ := getSpotPrice(req.Symbol)
-	plan, err := buildShortStraddle(req.Symbol, req.Expiry, dteInDays(req.Expiry, time.Now()),
-		spot, req.Strike, req.Qty, req.WithFutures, req.CallSecID, req.PutSecID, req.FuturesSecID,
-		alorStraddlePricer)
+	withFutures := construction == straddleCovered
+	var plan *straddlePlan
+	var err error
+	if construction == straddleSynthetic {
+		plan, err = buildSyntheticStraddle(req.Symbol, req.Expiry, dteInDays(req.Expiry, time.Now()),
+			spot, req.Strike, req.Qty, req.CallSecID, req.FuturesSecID, alorStraddlePricer)
+		withFutures = true
+	} else {
+		plan, err = buildShortStraddle(req.Symbol, req.Expiry, dteInDays(req.Expiry, time.Now()),
+			spot, req.Strike, req.Qty, withFutures, req.CallSecID, req.PutSecID, req.FuturesSecID,
+			alorStraddlePricer)
+	}
 	if err != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
 		return
@@ -461,7 +551,9 @@ func straddleOpenHandler(w http.ResponseWriter, r *http.Request) {
 	rec := straddleRecord{
 		ID: recID("str"), PositionID: p.ID,
 		Symbol: plan.Symbol, Expiry: plan.Expiry, Strike: plan.Strike, Qty: plan.Qty,
-		WithFutures: plan.WithFutures, NetCredit: plan.NetCredit, StopLevel: plan.StopLevel,
+		Construction: construction, WithFutures: plan.WithFutures,
+		FuturesSecID: plan.FuturesSec,
+		NetCredit:    plan.NetCredit, StopLevel: plan.StopLevel,
 		Hedge: resolveHedgeRules(req.Hedge), TimeStopDTE: tsd,
 		Status: "OPEN", OpenedAt: time.Now().Format(time.RFC3339),
 	}
@@ -936,6 +1028,7 @@ func hedgeSpotForecast(spots, deltas []float64, curIdx int, band float64) (lo, h
 type straddleHedgeView struct {
 	Rule          string  `json:"rule"`
 	Band          float64 `json:"band"`
+	Target        float64 `json:"target"`
 	CurrentDelta  float64 `json:"current_delta"`
 	SpotLo        float64 `json:"spot_lo"`
 	SpotHi        float64 `json:"spot_hi"`
@@ -944,10 +1037,13 @@ type straddleHedgeView struct {
 }
 
 // buildHedgeView composes the "when is the first hedge" forecast from the
-// rule, the delta curve and the last hedge mark. Pure apart from time.
+// rule, the delta curve and the last hedge mark. Deviation is measured from
+// the hedge target (covered holds +Qty, rest flatten to zero) — not from
+// raw delta. Pure apart from time.
 func buildHedgeView(rec *straddleRecord, spots, deltas []float64, curSpot float64, now time.Time) straddleHedgeView {
 	r := resolveHedgeRules(rec.Hedge)
-	v := straddleHedgeView{Rule: r.Rule, Band: r.DeltaBand}
+	target := hedgeTargetDelta(rec)
+	v := straddleHedgeView{Rule: r.Rule, Band: r.DeltaBand, Target: target}
 	curIdx := -1
 	best := math.MaxFloat64
 	for i, s := range spots {
@@ -955,26 +1051,40 @@ func buildHedgeView(rec *straddleRecord, spots, deltas []float64, curSpot float6
 			best, curIdx = d, i
 		}
 	}
+	// Deviation curve: distance from the maintained target.
+	dev := make([]float64, len(deltas))
+	for i, d := range deltas {
+		dev[i] = d - target
+	}
 	if curIdx >= 0 && curIdx < len(deltas) {
 		v.CurrentDelta = math.Round(deltas[curIdx]*100) / 100
 	}
-	lo, hi := hedgeSpotForecast(spots, deltas, curIdx, r.DeltaBand)
+	lo, hi := hedgeSpotForecast(spots, dev, curIdx, r.DeltaBand)
 	v.SpotLo, v.SpotHi = math.Round(lo), math.Round(hi)
 	left := r.IntervalMin - int(minutesSince(rec.LastHedgeAt, now))
 	if left < 0 {
 		left = 0
 	}
 	v.MinutesToTime = left
+	tgtNote := ""
+	if target != 0 {
+		sign := ""
+		if target > 0 {
+			sign = "+"
+		}
+		tgtNote = fmt.Sprintf(", цель %s%0.0f", sign, target)
+	}
 	switch r.Rule {
 	case hedgeTime:
-		v.Text = fmt.Sprintf("временной хедж через ~%d мин (интервал %d)", left, r.IntervalMin)
+		v.Text = fmt.Sprintf("временной хедж через ~%d мин (интервал %d%s)", left, r.IntervalMin, tgtNote)
 	case hedgePriceBand:
-		v.Text = fmt.Sprintf("хедж при уходе спота на %.2f%% от %.0f", r.PriceBandPct, curSpot)
-	default: // delta_band + hybrid: spot triggers
+		v.Text = fmt.Sprintf("хедж при уходе спота на %.2f%% от %.0f%s", r.PriceBandPct, curSpot, tgtNote)
+	default: // delta_band + hybrid: spot triggers on deviation
+		curDev := v.CurrentDelta - target
 		// Band already breached: don't print nonsense "≤ X или ≥ X"
 		// around the current spot — say hedge is due now.
-		if math.Abs(v.CurrentDelta) >= r.DeltaBand {
-			v.Text = fmt.Sprintf("Δ %0.2f уже за полосой %0.2f — хедж сейчас", v.CurrentDelta, r.DeltaBand)
+		if math.Abs(curDev) >= r.DeltaBand {
+			v.Text = fmt.Sprintf("отклонение %0.2f уже за полосой %0.2f — хедж сейчас%s", curDev, r.DeltaBand, tgtNote)
 			if r.Rule == hedgeHybrid {
 				v.Text += fmt.Sprintf(" (либо по времени через ~%d мин)", left)
 			}
@@ -988,9 +1098,9 @@ func buildHedgeView(rec *straddleRecord, spots, deltas []float64, curSpot float6
 			parts = append(parts, fmt.Sprintf("≥ %.0f", hi))
 		}
 		if len(parts) == 0 {
-			v.Text = fmt.Sprintf("полоса |Δ| %.2f в диапазоне кривой не задевается", r.DeltaBand)
+			v.Text = fmt.Sprintf("полоса |Δ| %.2f в диапазоне кривой не задевается%s", r.DeltaBand, tgtNote)
 		} else {
-			v.Text = fmt.Sprintf("первый хедж при споте %s (|Δ| %.2f)", strings.Join(parts, " или "), r.DeltaBand)
+			v.Text = fmt.Sprintf("первый хедж при споте %s (|Δ| %.2f%s)", strings.Join(parts, " или "), r.DeltaBand, tgtNote)
 		}
 		if r.Rule == hedgeHybrid {
 			v.Text += fmt.Sprintf("; либо по времени через ~%d мин", left)
@@ -1062,7 +1172,8 @@ func straddleListHandler(w http.ResponseWriter, r *http.Request) {
 		item := map[string]interface{}{
 			"id": s.ID, "symbol": s.Symbol, "expiry": s.Expiry,
 			"strike": s.Strike, "qty": s.Qty, "with_futures": s.WithFutures,
-			"net_credit": s.NetCredit, "stop_level": s.StopLevel,
+			"construction": s.Construction,
+			"net_credit":   s.NetCredit, "stop_level": s.StopLevel,
 			"hedge_rule": s.Hedge.Rule, "time_stop_dte": s.TimeStopDTE,
 			"status": s.Status, "opened_at": s.OpenedAt,
 			"hedge_count": s.HedgeCount,
@@ -1081,6 +1192,86 @@ func straddleListHandler(w http.ResponseWriter, r *http.Request) {
 		out = append(out, item)
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{"straddles": out})
+}
+
+// straddleFuturesSecID resolves the hedge futures contract: the recorded
+// cover secid first, else the earliest futures leg in the position.
+func straddleFuturesSecID(rec *straddleRecord, pos *quant.Position) string {
+	if rec.FuturesSecID != "" {
+		return rec.FuturesSecID
+	}
+	for i := range pos.Legs {
+		if pos.Legs[i].Kind == "FUTURES" && pos.Legs[i].SecID != "" {
+			return pos.Legs[i].SecID
+		}
+	}
+	return ""
+}
+
+// POST /api/v1/straddles/hedge {"id":"str-..."} — one manual hedge step:
+// evaluate the record's rule against live delta and append a paper futures
+// leg toward the target (covered holds +Qty, rest flatten to zero).
+func straddleHedgeHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	s, found := straddleByID(req.ID)
+	if !found || s.Status != "OPEN" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "straddle not found or not open"})
+		return
+	}
+	pos, ok := quant.GetPositionByID(s.PositionID)
+	if !ok {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "position not found"})
+		return
+	}
+	repricePosition(pos)
+	wasDelta := pos.Delta
+	spot, _ := getSpotPrice(pos.Symbol)
+	target := hedgeTargetDelta(&s)
+	now := time.Now()
+	fire, qty, reason := decideStraddleHedge(wasDelta, target, spot, s.LastHedgeSpot,
+		minutesSince(s.LastHedgeAt, now), s.Hedge)
+	if !fire {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "хедж не требуется (Δ в полосе): " + reason})
+		return
+	}
+	futSec := straddleFuturesSecID(&s, pos)
+	if futSec == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "нет фьючерса для хеджа"})
+		return
+	}
+	side := "BUY"
+	if qty < 0 {
+		side = "SELL"
+		qty = -qty
+	}
+	mult := contractMultiplier(pos.Symbol)
+	margin := spot * mult * 0.15
+	pos.Legs = append(pos.Legs, quant.PositionLeg{
+		SecID: futSec, Symbol: pos.Symbol, Kind: "FUTURES",
+		Side: side, Quantity: qty, EntryPrice: spot, CurrentPrice: spot,
+	})
+	pos.Margin += margin * float64(qty)
+	repricePosition(pos)
+	quant.SavePosition(*pos)
+	s.HedgeCount++
+	s.LastHedgeAt = now.Format(time.RFC3339)
+	s.LastHedgeSpot = spot
+	saveStraddleRecord(s)
+	logTelegramErr("straddle-hedge", sendTelegramMessage(
+		fmt.Sprintf("🔧 Стрэддл %s %s: хедж %s %d фьюч (%s) · Δ была %0.2f",
+			telegramEscape(s.Symbol), telegramEscape(s.ID), side, qty, telegramEscape(reason), wasDelta)))
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "side": side, "qty": qty, "reason": reason})
 }
 
 // POST /api/v1/straddles/close {"id":"str-..."}
