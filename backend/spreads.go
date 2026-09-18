@@ -64,6 +64,23 @@ func shortLegIsCall(spreadType string) (isCall, ok bool) {
 	return false, false
 }
 
+// alorLegMid returns the live Alor book mid for an option, or 0 when the
+// book is not two-sided. Plan entries prefer live market over MOEX/stale.
+func alorLegMid(secid string) float64 {
+	if alorMarket == nil || secid == "" {
+		return 0
+	}
+	ob, err := alorMarket.FetchOrderbook("MOEX", secid)
+	if err != nil || len(ob.Bids) == 0 || len(ob.Asks) == 0 {
+		return 0
+	}
+	bid, ask := ob.Bids[0].Price, ob.Asks[0].Price
+	if bid <= 0 || ask < bid {
+		return 0
+	}
+	return (bid + ask) / 2
+}
+
 // spreadLeg is a planned/executed leg of a vertical spread.
 type spreadLeg struct {
 	SecID       string  `json:"secid"`
@@ -359,14 +376,18 @@ func buildVerticalSpread(symbol, spreadType, expiry string, qty int) (*spreadPla
 		if opt == nil {
 			return nil, fmt.Errorf("%s: option not found at %v", meta.Display, strike)
 		}
-		last, _, _, _ := moexOptionQuote(opt.SecID)
+		// Live market first: Alor book mid, then MOEX. A stale PrevPrice
+		// is not a market price — refuse rather than corrupt the P&L.
+		last := alorLegMid(opt.SecID)
 		if last <= 0 {
-			last = opt.PrevPrice
+			if m, _, _, _ := moexOptionQuote(opt.SecID); m > 0 {
+				last = m
+			}
 		}
 		if last <= 0 {
 			// Opening or rolling into a leg with no market price would record
 			// entry=0 and corrupt the P&L — refuse instead.
-			return nil, fmt.Errorf("нет рыночной цены для %s — операция отменена", opt.SecID)
+			return nil, fmt.Errorf("нет живой цены для %s — операция отменена", opt.SecID)
 		}
 		iv := quant.ImpliedVolatility(sp.isCall, last, spot, strike, t, rRate)
 		if iv <= 0 {
@@ -522,14 +543,14 @@ func buildSpreadFromLegs(symbol, expiry string, qty int, legs []rollLegSpec, isD
 		if opt == nil {
 			return nil, fmt.Errorf("option not found at %v", sp.TargetStrike)
 		}
-		last, bid, offer, _ := moexOptionQuote(opt.SecID)
+		last := alorLegMid(opt.SecID)
 		if last <= 0 {
-			last = opt.PrevPrice
+			if m, _, _, _ := moexOptionQuote(opt.SecID); m > 0 {
+				last = m
+			}
 		}
-		_ = bid
-		_ = offer
 		if last <= 0 {
-			return nil, fmt.Errorf("нет рыночной цены для %s — операция отменена", opt.SecID)
+			return nil, fmt.Errorf("нет живой цены для %s — операция отменена", opt.SecID)
 		}
 		iv := quant.ImpliedVolatility(sp.IsCall, last, spot, sp.TargetStrike, t, rRate)
 		if iv <= 0 {
