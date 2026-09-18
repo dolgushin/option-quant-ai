@@ -315,8 +315,8 @@ func buildVerticalSpread(symbol, spreadType, expiry string, qty int) (*spreadPla
 	}
 
 	spot, err := getSpotPrice(symbol)
-	if err != nil || spot <= 0 {
-		spot = 83200.0
+	if err != nil || spot <= 0 || isEstimatePrice(spot) {
+		return nil, fmt.Errorf("нет живого спота %s — план не построить", symbol)
 	}
 
 	if expiry == "" {
@@ -498,8 +498,8 @@ func buildSpreadFromLegs(symbol, expiry string, qty int, legs []rollLegSpec, isD
 	}
 
 	spot, err := getSpotPrice(symbol)
-	if err != nil || spot <= 0 {
-		spot = 83200.0
+	if err != nil || spot <= 0 || isEstimatePrice(spot) {
+		return nil, fmt.Errorf("нет живого спота %s — план не построить", symbol)
 	}
 
 	strikes, findOpt, err := optionChainFor(symbol, expiry)

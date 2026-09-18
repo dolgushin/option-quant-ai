@@ -62,6 +62,11 @@ func mcPLHandler(w http.ResponseWriter, r *http.Request) {
 			spot, _ = getSpotPrice(symbol)
 		}
 	}
+	// An estimate spot silently corrupts every scenario — refuse instead.
+	if isEstimatePrice(spot) {
+		json.NewEncoder(w).Encode(map[string]string{"error": "нет живого спота — введи вручную"})
+		return
+	}
 
 	if credit == 0 || spot == 0 || iv == 0 || dte <= 0 {
 		json.NewEncoder(w).Encode(map[string]string{"error": "missing required params"})
@@ -274,6 +279,10 @@ func mcScanHandler(w http.ResponseWriter, r *http.Request) {
 	spot := req.Spot
 	if spot <= 0 && req.Symbol != "" {
 		spot, _ = getSpotPrice(req.Symbol)
+	}
+	if isEstimatePrice(spot) {
+		json.NewEncoder(w).Encode(map[string]string{"error": "нет живого спота — задай вручную"})
+		return
 	}
 	if req.Credit == 0 || spot <= 0 {
 		json.NewEncoder(w).Encode(map[string]string{"error": "нужны кредит и спот (или инструмент)"})

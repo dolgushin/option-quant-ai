@@ -4430,7 +4430,8 @@
                     return;
                 }
                 document.getElementById('profile-modal-title').innerText = `📊 Профиль позиции — ${data.strategy}`;
-                document.getElementById('profile-modal-subtitle').innerText = `${data.symbol} | Спот: ₽${Math.round(data.spot).toLocaleString()}`;
+                document.getElementById('profile-modal-subtitle').innerText = `${data.symbol} | Спот: ₽${Math.round(data.spot).toLocaleString()}` +
+                    (data.spot_suspect ? ' ⚠ спот под вопросом' : '');
                 document.getElementById('profile-modal').classList.remove('hidden');
 
                 const ctx = document.getElementById('positionProfileChart').getContext('2d');

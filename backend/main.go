@@ -2365,9 +2365,12 @@ func positionProfileHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	repricePosition(pos)
 
-	spot, _ := getSpotPrice(pos.Symbol)
+	// Futures-leg mark wins (same staleness disease as the analytics);
+	// an estimate spot must never anchor the payoff grid.
+	spot, spotSuspect := analyticsSpot(pos.Legs, pos.Symbol)
 	if spot <= 0 {
 		spot = pos.CurrentValue
+		spotSuspect = true
 	}
 	mult := contractMultiplier(pos.Symbol)
 
@@ -2408,14 +2411,15 @@ func positionProfileHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"id":       pos.ID,
-		"strategy": pos.Strategy,
-		"symbol":   pos.Symbol,
-		"spot":     spot,
-		"points":   points,
+		"id":           pos.ID,
+		"strategy":     pos.Strategy,
+		"symbol":       pos.Symbol,
+		"spot":         spot,
+		"spot_suspect": spotSuspect,
+		"points":       points,
 	})
-}
 
+}
 // selectedSeriesFor returns the currently selected futures series code for a symbol.
 func selectedSeriesFor(symbol string) string {
 	seriesMu.Lock()

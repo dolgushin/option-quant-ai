@@ -137,7 +137,9 @@ func evaluateSpread(s spreadRecord) managerRun {
 	ivSum, ivN := 0.0, 0
 
 	spotOK, spot := false, 0.0
-	if v, err := getSpotPrice(s.Symbol); err == nil && v > 0 {
+	// An estimate spot must never arm price triggers (proximity/TPR on
+	// fake data rolls real positions) — DTE/stop/T-P need no spot anyway.
+	if v, err := getSpotPrice(s.Symbol); err == nil && v > 0 && !isEstimatePrice(v) {
 		spot, spotOK = v, true
 	}
 

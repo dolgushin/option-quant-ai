@@ -101,6 +101,9 @@ func decideStraddleHedge(posDelta, targetDelta, spot, lastHedgeSpot float64, min
 		}
 		return false, 0, ""
 	case hedgePriceBand:
+		if spot <= 0 {
+			return false, 0, ""
+		}
 		if lastHedgeSpot <= 0 {
 			return need("нет точки отсчёта — первый хедж")
 		}
@@ -1344,6 +1347,11 @@ func runStraddleManagerPass() {
 		repricePosition(pos)
 		quant.SavePosition(*pos)
 		spot, _ := getSpotPrice(pos.Symbol)
+		if isEstimatePrice(spot) {
+			// Freeze on the last mark instead of firing price-band hedges
+			// off fake data; delta/time rules don't need spot.
+			spot = s.LastHedgeSpot
+		}
 		dte := dteInDays(s.Expiry, now)
 		ev := evaluateStraddle(&s, pos.PnL, pos.Delta, spot, dte, now)
 		switch ev.Action {

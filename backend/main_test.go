@@ -130,6 +130,21 @@ func TestRepriceFuturesLegPrefersSymbolSpotFallback(t *testing.T) {
 	}
 }
 
+// TestIsEstimatePrice pins the hardcoded fallback values that must never
+// feed decisions or analytics as if live.
+func TestIsEstimatePrice(t *testing.T) {
+	for _, v := range []float64{83200.0, 80240.0, 1010.0, 271.0} {
+		if !isEstimatePrice(v) {
+			t.Fatalf("%v must be an estimate", v)
+		}
+	}
+	for _, v := range []float64{0, 1, 86200, 274.35, 83200.02} {
+		if isEstimatePrice(v) {
+			t.Fatalf("%v must not be an estimate", v)
+		}
+	}
+}
+
 // TestProfileRangeAnchorsOnStrikes pins the payoff-chart window: a narrow
 // vertical wing must fill the chart instead of drowning in ±20% of spot
 // (the old behaviour rendered the kink as a single pixel — a flat line).

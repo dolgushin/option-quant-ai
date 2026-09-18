@@ -255,7 +255,9 @@ func collectCoreInstrument(symbol string) coreInstrument {
 		}
 	} else {
 		in.Err = "мало истории цен"
-		if s, err := getSpotPrice(symbol); err == nil {
+		// Estimate spots build garbage candidates (wrong ATM/strikes) —
+		// leave Spot empty so the instrument is skipped with a reason.
+		if s, err := getSpotPrice(symbol); err == nil && !isEstimatePrice(s) {
 			in.Spot = s
 		}
 	}

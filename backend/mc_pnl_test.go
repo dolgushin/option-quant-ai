@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"math/rand"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -34,6 +36,21 @@ func TestSimulateSpreadPnLDeepOTM(t *testing.T) {
 	}
 	if avg := sum / 500; avg != 80 {
 		t.Fatalf("deep OTM avg = %v, want credit 80", avg)
+	}
+}
+
+// TestMCRefusesEstimateSpot: an estimate spot must fail loudly instead of
+// silently corrupting every scenario (explicit value — no globals touched).
+func TestMCRefusesEstimateSpot(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/v1/mc-pnl?credit=80&spot=83200&iv=0.2&short=86000&long=85500&dte=20&n=100", nil)
+	rec := httptest.NewRecorder()
+	mcPLHandler(rec, req)
+	var out map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out["error"] == "" {
+		t.Fatalf("estimate spot must error, got %v", out)
 	}
 }
 
