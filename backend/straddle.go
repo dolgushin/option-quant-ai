@@ -1250,39 +1250,157 @@ func straddleHedgeHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "хедж не требуется (Δ в полосе): " + reason})
 		return
 	}
-	futSec := straddleFuturesSecID(&s, pos)
-	if futSec == "" {
-		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "нет фьючерса для хеджа"})
+	side := "BUY"
+	if qty < 0 {
+		side = "SELL"
+		qty = -qty
+	}
+	if err := executeStraddleHedge(&s, pos, straddleEval{"HEDGE", side, qty, reason}, spot); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
 		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "side": side, "qty": qty, "reason": reason})
+}
+
+// straddleEval is one loop decision: close (stop/time-stop), hedge, or hold.
+type straddleEval struct {
+	Action string // "CLOSE_STOP" | "CLOSE_TIME" | "HEDGE" | "NONE"
+	Side   string // futures side for HEDGE
+	Qty    int    // futures qty for HEDGE
+	Reason string
+}
+
+// evaluateStraddle applies stops first, then the hedge rule. Pure apart from
+// inputs — unit-tested.
+func evaluateStraddle(rec *straddleRecord, pnl, delta, spot float64, dte int, now time.Time) straddleEval {
+	if straddleShouldStop(rec, pnl) {
+		return straddleEval{"CLOSE_STOP", "", 0,
+			fmt.Sprintf("стоп 2× премии: P&L %s ₽", formatRub(pnl, 0))}
+	}
+	if straddleShouldTimeStop(rec, dte) {
+		return straddleEval{"CLOSE_TIME", "", 0,
+			fmt.Sprintf("time-stop: DTE %d ≤ %d", dte, ifPositive(rec.TimeStopDTE, 14))}
+	}
+	target := hedgeTargetDelta(rec)
+	fire, qty, reason := decideStraddleHedge(delta, target, spot, rec.LastHedgeSpot,
+		minutesSince(rec.LastHedgeAt, now), rec.Hedge)
+	if !fire {
+		return straddleEval{"NONE", "", 0, ""}
 	}
 	side := "BUY"
 	if qty < 0 {
 		side = "SELL"
 		qty = -qty
 	}
-	// Executable entry only — never the symbol spot or an estimate.
-	fill, err := futuresFillPrice(futSec, side)
-	if err != nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "хедж невозможен: " + err.Error()})
+	return straddleEval{"HEDGE", side, qty, reason}
+}
+
+func ifPositive(v, def int) int {
+	if v > 0 {
+		return v
+	}
+	return def
+}
+
+var (
+	straddleManagerMu sync.Mutex
+	straddleManagerOn bool
+)
+
+// startStraddleManager launches the 60s loop over OPEN paper straddles:
+// stops, time-stops, then hedge rules. Live exchange orders are never
+// placed (paper only) — fills are recorded at executable touches.
+func startStraddleManager() {
+	straddleManagerMu.Lock()
+	if straddleManagerOn {
+		straddleManagerMu.Unlock()
 		return
 	}
+	straddleManagerOn = true
+	straddleManagerMu.Unlock()
+
+	go func() {
+		for {
+			time.Sleep(60 * time.Second)
+			runStraddleManagerPass()
+		}
+	}()
+}
+
+// runStraddleManagerPass evaluates every OPEN straddle once.
+func runStraddleManagerPass() {
+	now := time.Now()
+	for _, s := range openStraddles() {
+		pos, ok := quant.GetPositionByID(s.PositionID)
+		if !ok {
+			continue
+		}
+		repricePosition(pos)
+		quant.SavePosition(*pos)
+		spot, _ := getSpotPrice(pos.Symbol)
+		dte := dteInDays(s.Expiry, now)
+		ev := evaluateStraddle(&s, pos.PnL, pos.Delta, spot, dte, now)
+		switch ev.Action {
+		case "CLOSE_STOP", "CLOSE_TIME":
+			closeStraddlePosition(&s, pos, ev.Reason, true)
+		case "HEDGE":
+			executeStraddleHedge(&s, pos, ev, spot)
+		}
+	}
+}
+
+// closeStraddlePosition closes the position, journals the trade and notifies.
+// notify controls the Telegram message (auto closes always notify).
+func closeStraddlePosition(s *straddleRecord, pos *quant.Position, reason string, notify bool) {
+	repricePosition(pos)
+	removed, found := quant.RemovePosition(pos.ID)
+	if !found {
+		return
+	}
+	quant.AddTrade(quant.Trade{
+		ID: fmt.Sprintf("trd-%d", time.Now().Unix()), Strategy: "Short Straddle",
+		Symbol: removed.Symbol, OpenedAt: removed.OpenedAt, ClosedAt: time.Now(),
+		EntryValue: removed.EntryValue, ExitValue: removed.CurrentValue,
+		RealizedPnL: removed.PnL, PnLPercent: removed.PnLPercent,
+	})
+	s.Status = "CLOSED"
+	saveStraddleRecord(*s)
+	if notify {
+		logTelegramErr("straddle-close", sendTelegramMessage(
+			fmt.Sprintf("📕 Стрэддл %s %s закрыт: %s\nP&L %s ₽",
+				telegramEscape(s.Symbol), telegramEscape(s.ID),
+				telegramEscape(reason), formatRub(removed.PnL, 0))))
+	}
+}
+
+// executeStraddleHedge appends a paper futures hedge leg at the executable
+// touch and notifies. Shared by the manual endpoint and the loop.
+func executeStraddleHedge(s *straddleRecord, pos *quant.Position, ev straddleEval, spot float64) error {
+	futSec := straddleFuturesSecID(s, pos)
+	if futSec == "" {
+		return fmt.Errorf("нет фьючерса для хеджа")
+	}
+	fill, err := futuresFillPrice(futSec, ev.Side)
+	if err != nil {
+		return fmt.Errorf("хедж невозможен: %v", err)
+	}
 	mult := contractMultiplier(pos.Symbol)
-	margin := fill * mult * 0.15
 	pos.Legs = append(pos.Legs, quant.PositionLeg{
 		SecID: futSec, Symbol: pos.Symbol, Kind: "FUTURES",
-		Side: side, Quantity: qty, EntryPrice: fill, CurrentPrice: fill,
+		Side: ev.Side, Quantity: ev.Qty, EntryPrice: fill, CurrentPrice: fill,
 	})
-	pos.Margin += margin * float64(qty)
+	pos.Margin += fill * mult * 0.15 * float64(ev.Qty)
 	repricePosition(pos)
 	quant.SavePosition(*pos)
+	now := time.Now()
 	s.HedgeCount++
 	s.LastHedgeAt = now.Format(time.RFC3339)
 	s.LastHedgeSpot = spot
-	saveStraddleRecord(s)
+	saveStraddleRecord(*s)
 	logTelegramErr("straddle-hedge", sendTelegramMessage(
-		fmt.Sprintf("🔧 Стрэддл %s %s: хедж %s %d фьюч (%s) · Δ была %0.2f",
-			telegramEscape(s.Symbol), telegramEscape(s.ID), side, qty, telegramEscape(reason), wasDelta)))
-	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "side": side, "qty": qty, "reason": reason})
+		fmt.Sprintf("🔧 Стрэддл %s %s: хедж %s %d фьюч (%s)",
+			telegramEscape(s.Symbol), telegramEscape(s.ID), ev.Side, ev.Qty, telegramEscape(ev.Reason))))
+	return nil
 }
 
 // POST /api/v1/straddles/close {"id":"str-..."}
@@ -1304,18 +1422,11 @@ func straddleCloseHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "straddle not found or not open"})
 		return
 	}
-	if pos, ok := quant.GetPositionByID(s.PositionID); ok {
-		repricePosition(pos)
-		if removed, found := quant.RemovePosition(pos.ID); found {
-			quant.AddTrade(quant.Trade{
-				ID: fmt.Sprintf("trd-%d", time.Now().Unix()), Strategy: "Short Straddle",
-				Symbol: removed.Symbol, OpenedAt: removed.OpenedAt, ClosedAt: time.Now(),
-				EntryValue: removed.EntryValue, ExitValue: removed.CurrentValue,
-				RealizedPnL: removed.PnL, PnLPercent: removed.PnLPercent,
-			})
-		}
+	pos, ok := quant.GetPositionByID(s.PositionID)
+	if !ok {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "position not found"})
+		return
 	}
-	s.Status = "CLOSED"
-	saveStraddleRecord(s)
+	closeStraddlePosition(&s, pos, "закрыт вручную", true)
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
 }

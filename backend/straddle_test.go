@@ -233,6 +233,33 @@ func TestSellPriceFromBook(t *testing.T) {
 	}
 }
 
+// TestEvaluateStraddle pins loop priorities: stop beats time-stop beats
+// hedge beats hold; hedge carries side/qty toward the target.
+func TestEvaluateStraddle(t *testing.T) {
+	now := time.Now()
+	rec := &straddleRecord{StopLevel: 2000, TimeStopDTE: 14,
+		Hedge: straddleHedgeRules{Rule: hedgeDeltaBand, DeltaBand: 1.0}}
+	if ev := evaluateStraddle(rec, -2000, 0.2, 86000, 30, now); ev.Action != "CLOSE_STOP" {
+		t.Fatalf("stop = %q, want CLOSE_STOP", ev.Action)
+	}
+	if ev := evaluateStraddle(rec, -100, 0.2, 86000, 10, now); ev.Action != "CLOSE_TIME" {
+		t.Fatalf("time = %q, want CLOSE_TIME", ev.Action)
+	}
+	ev := evaluateStraddle(rec, -100, 2.5, 86000, 30, now)
+	if ev.Action != "HEDGE" || ev.Side != "SELL" || ev.Qty != 3 {
+		t.Fatalf("hedge = %+v, want SELL 3", ev)
+	}
+	// Covered target: +2 held, no hedge.
+	crec := &straddleRecord{StopLevel: 2000, TimeStopDTE: 14, Construction: "covered", Qty: 2,
+		Hedge: straddleHedgeRules{Rule: hedgeDeltaBand, DeltaBand: 1.0}}
+	if ev := evaluateStraddle(crec, -100, 2.1, 86000, 30, now); ev.Action != "NONE" {
+		t.Fatalf("on-cover = %q, want NONE", ev.Action)
+	}
+	if ev := evaluateStraddle(rec, -100, 0.2, 86000, 30, now); ev.Action != "NONE" {
+		t.Fatalf("calm = %q, want NONE", ev.Action)
+	}
+}
+
 // TestParseStrikesFromSymbols pins Alor-search strike parsing: digits right
 // after the root pass, everything else (futures, stocks, garbage) drops out.
 func TestParseStrikesFromSymbols(t *testing.T) {

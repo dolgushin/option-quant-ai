@@ -3553,6 +3553,7 @@ func main() {
 	initTelegram()
 	initSpreads(dataDir)
 	initStraddles(dataDir)
+	startStraddleManager()
 	initCore(dataDir)
 
 	// Background Telegram notifier (stop channel unused for lifetime app).
