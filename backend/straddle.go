@@ -1066,6 +1066,11 @@ func buildHedgeView(rec *straddleRecord, spots, deltas []float64, curSpot float6
 		left = 0
 	}
 	v.MinutesToTime = left
+	// Never hedged: the time rule is due at the first check, not "in 0 min".
+	timeNote := fmt.Sprintf("через ~%d мин", left)
+	if rec.LastHedgeAt == "" {
+		timeNote = "при первой проверке"
+	}
 	tgtNote := ""
 	if target != 0 {
 		sign := ""
@@ -1076,7 +1081,7 @@ func buildHedgeView(rec *straddleRecord, spots, deltas []float64, curSpot float6
 	}
 	switch r.Rule {
 	case hedgeTime:
-		v.Text = fmt.Sprintf("временной хедж через ~%d мин (интервал %d%s)", left, r.IntervalMin, tgtNote)
+		v.Text = fmt.Sprintf("временной хедж %s (интервал %d%s)", timeNote, r.IntervalMin, tgtNote)
 	case hedgePriceBand:
 		v.Text = fmt.Sprintf("хедж при уходе спота на %.2f%% от %.0f%s", r.PriceBandPct, curSpot, tgtNote)
 	default: // delta_band + hybrid: spot triggers on deviation
@@ -1086,7 +1091,7 @@ func buildHedgeView(rec *straddleRecord, spots, deltas []float64, curSpot float6
 		if math.Abs(curDev) >= r.DeltaBand {
 			v.Text = fmt.Sprintf("отклонение %0.2f уже за полосой %0.2f — хедж сейчас%s", curDev, r.DeltaBand, tgtNote)
 			if r.Rule == hedgeHybrid {
-				v.Text += fmt.Sprintf(" (либо по времени через ~%d мин)", left)
+				v.Text += fmt.Sprintf(" (либо по времени %s)", timeNote)
 			}
 			break
 		}
@@ -1103,7 +1108,7 @@ func buildHedgeView(rec *straddleRecord, spots, deltas []float64, curSpot float6
 			v.Text = fmt.Sprintf("первый хедж при споте %s (|Δ| %.2f%s)", strings.Join(parts, " или "), r.DeltaBand, tgtNote)
 		}
 		if r.Rule == hedgeHybrid {
-			v.Text += fmt.Sprintf("; либо по времени через ~%d мин", left)
+			v.Text += fmt.Sprintf("; либо по времени %s", timeNote)
 		}
 	}
 	return v
