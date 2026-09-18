@@ -1185,7 +1185,7 @@
             document.getElementById(views[tab]).classList.remove('hidden');
             document.getElementById(btns[tab]).className = tabActive;
             if (tab === 'spreads') updateSpreads();
-            if (tab === 'straddles') loadStraddles();
+            if (tab === 'straddles') { loadStraddleMeta(); loadStraddles(); }
             if (tab === 'stats') loadStats();
             if (tab === 'forecast') loadForecast();
             if (tab === 'core') loadCoreTab();
@@ -1742,12 +1742,21 @@
 
         async function loadStraddleMeta() {
             const sym = document.getElementById('str-symbol').value;
+            // Remember the user's choice: rebuilding the options must never
+            // wipe a selected expiry/strike (that bug ate the date every 5s).
+            const keepEx = document.getElementById('str-expiry').value;
+            const keepSt = document.getElementById('str-strike').value;
+            const restore = (id, v) => {
+                const el = document.getElementById(id);
+                if (v && [...el.options].some(o => o.value === v)) el.value = v;
+            };
             try {
                 const res = await fetch(`/api/v1/straddles/meta?symbol=${encodeURIComponent(sym)}`);
                 const d = await res.json();
                 const ex = document.getElementById('str-expiry');
                 ex.innerHTML = '<option value="">—</option>' + (d.expiries || []).map(e =>
                     `<option value="${e.date}">${e.date} ${e.tenor} (${e.dte}д)</option>`).join('');
+                restore('str-expiry', keepEx);
                 let srows = d.strikes || [];
                 if (!srows.length && d.spot) {
                     // MOEX chain down: fall back to the Alor strike grid
@@ -1769,6 +1778,7 @@
                 st.innerHTML = '<option value="">—</option>' + srows.map(s =>
                     s.divider ? `<option value="" disabled>${s.label}</option>`
                               : `<option value="${s.strike}">${s.label}${s.atm ? ' ●' : ''}</option>`).join('');
+                restore('str-strike', keepSt);
                 if (d.spot) {
                     const hint = document.getElementById('str-spot-hint');
                     if (hint) hint.innerText = `спот ${Math.round(d.spot).toLocaleString('ru-RU')}`;
@@ -1799,7 +1809,6 @@
         }
 
         async function loadStraddles() {
-            loadStraddleMeta();
             const el = document.getElementById('straddle-list');
             el.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Загрузка...</div>';
             try {
