@@ -1785,8 +1785,10 @@
                     </thead><tbody>`;
                 d.straddles.forEach(s => {
                     const pnlCls = (s.pnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                    const nm = s.construction === 'synthetic' ? 'Synthetic 2C+F'
+                        : (s.construction === 'covered' || s.with_futures) ? 'Short Straddle +F' : 'Short Straddle';
                     html += `<tr class="border-b border-slate-800">
-                        <td class="py-1 pr-2 text-slate-100 font-bold">Short Straddle${s.with_futures ? ' +F' : ''}<div class="text-[10px] text-slate-500 font-normal">${s.symbol} · ${s.id} · эксп. ${s.expiry}</div></td>
+                        <td class="py-1 pr-2 text-slate-100 font-bold">${nm}<div class="text-[10px] text-slate-500 font-normal">${s.symbol} · ${s.id} · эксп. ${s.expiry}</div></td>
                         <td class="py-1 pr-2 text-right">${s.strike}</td>
                         <td class="py-1 pr-2 text-right">${s.dte}</td>
                         <td class="py-1 pr-2 text-right">${s.qty}</td>
@@ -1879,7 +1881,7 @@
                 const a = d.analytics;
                 let legs = `<table class="w-full text-left text-[10px] font-mono text-slate-300 mb-2">
                     <thead class="text-slate-500 border-b border-slate-700 uppercase">
-                    <tr><th class="py-1 pr-2">Стор.</th><th class="py-1 pr-2">Тикер</th><th class="py-1 pr-2 text-right">Страйк</th><th class="py-1 pr-2 text-right">Вход</th><th class="py-1 pr-2 text-right">Сейчас</th><th class="py-1 pr-2 text-right">P&L</th><th class="py-1 pr-2 text-right">Δ</th><th class="py-1 pr-2 text-right">Θ/д</th><th class="py-1 pr-2 text-right">Метка</th></tr>
+                    <tr><th class="py-1 pr-2">Стор.</th><th class="py-1 pr-2">Тикер</th><th class="py-1 pr-2 text-right">К-во</th><th class="py-1 pr-2 text-right">Страйк</th><th class="py-1 pr-2 text-right">Вход</th><th class="py-1 pr-2 text-right">Сейчас</th><th class="py-1 pr-2 text-right">P&L</th><th class="py-1 pr-2 text-right">Δ</th><th class="py-1 pr-2 text-right">Θ/д</th><th class="py-1 pr-2 text-right">Метка</th></tr>
                     </thead><tbody>`;
                 (a.legs || []).forEach(l => {
                     const cls = l.side === 'SELL' ? 'text-rose-300' : 'text-emerald-300';
@@ -1888,6 +1890,7 @@
                         : `<span class="text-amber-400" title="Нет свежих котировок — цена заморожена на входе">stale</span>`;
                     legs += `<tr class="border-b border-slate-800/60">
                         <td class="py-1 pr-2 ${cls}">${l.side}</td><td class="py-1 pr-2">${l.secid || ''}</td>
+                        <td class="py-1 pr-2 text-right">${l.quantity || ''}</td>
                         <td class="py-1 pr-2 text-right">${l.kind === 'FUTURES' ? '—' : l.strike}</td>
                         <td class="py-1 pr-2 text-right">${l.entry}</td><td class="py-1 pr-2 text-right">${l.current}</td>
                         <td class="py-1 pr-2 text-right ${pnlCls}">${(l.pnl || 0) >= 0 ? '+' : ''}${(l.pnl || 0).toLocaleString('ru-RU')}</td>
@@ -1896,11 +1899,13 @@
                 });
                 legs += '</tbody></table>';
                 const h = d.hedge || {};
+                const spotLine = a.spot ? `<div class="text-[10px] font-mono text-slate-500 mb-2">Кривые посчитаны при споте ${Math.round(a.spot).toLocaleString('ru-RU')} · эксп. ${a.expiry || ''}</div>` : '';
                 box.innerHTML = `
                     <div class="text-[11px] font-mono text-slate-300 bg-slate-800/60 border border-slate-700 rounded p-2 mb-2">
                         <span class="text-amber-300 font-bold">Первый хедж:</span> ${h.text || '—'}
                         <span class="text-slate-500">(Δ сейчас ${h.current_delta || 0}, полоса ${h.band || 0})</span>
                     </div>
+                    ${spotLine}
                     ${legs}
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
                         <div class="bg-slate-900/60 rounded-lg p-2 border border-slate-700">
