@@ -859,10 +859,14 @@
                         <input id="str-call" type="text" placeholder="Si86000BU6" class="w-32 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
                     <label class="text-slate-400">Put secid
                         <input id="str-put" type="text" placeholder="Si86000BU6" class="w-32 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
-                    <label class="text-slate-400 flex items-center gap-1">+ фьючерс
-                        <input id="str-fut-on" type="checkbox" class="w-4 h-4"></label>
+                    <label class="text-slate-400">Конструкция
+                        <select id="str-constr" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white">
+                            <option value="classic">Классика (C+P)</option>
+                            <option value="covered">Покрытый (+F)</option>
+                            <option value="synthetic">Синтетика (2C+F)</option>
+                        </select></label>
                     <label class="text-slate-400">Фьюч secid
-                        <input id="str-fut" type="text" placeholder="SiZ6" class="w-24 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
+                        <input id="str-fut" type="text" placeholder="авто" class="w-24 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
                     <label class="text-slate-400">Хедж
                         <select id="str-hedge" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white">
                             <option value="hybrid">Гибрид</option><option value="delta_band">Полоса Δ</option>
@@ -1842,7 +1846,7 @@
                 expiry: document.getElementById('str-expiry').value.trim(),
                 strike: parseFloat(document.getElementById('str-strike').value) || 0,
                 qty: parseInt(document.getElementById('str-qty').value) || 1,
-                with_futures: document.getElementById('str-fut-on').checked,
+                construction: document.getElementById('str-constr').value,
                 call_secid: document.getElementById('str-call').value.trim(),
                 put_secid: document.getElementById('str-put').value.trim(),
                 futures_secid: document.getElementById('str-fut').value.trim(),
@@ -1911,13 +1915,17 @@
                             <canvas id="strd-ch-theta-${id}" height="150"></canvas>
                         </div>
                     </div>`;
+                const mk = [];
+                if (a.spot) mk.push({ x: a.spot, label: 'спот', color: '#f59e0b', dash: [4, 4] });
+                const optLeg = (a.legs || []).find(l => l.kind !== 'FUTURES' && l.strike);
+                if (optLeg) mk.push({ x: optLeg.strike, label: 'страйк', color: '#22d3ee', dash: [] });
                 drawCurvesChart(`strd-ch-pnl-${id}`, a.curves.spots, [
                     { label: 'P&L сейчас', data: a.curves.pnl_now, color: '#f87171' },
                     { label: 'P&L на экспирацию', data: a.curves.pnl_expiry, color: '#818cf8' },
-                ], []);
+                ], mk);
                 drawCurvesChart(`strd-ch-delta-${id}`, a.curves.spots, [
                     { label: 'дельта', data: a.curves.delta_now, color: '#f87171' },
-                ], []);
+                ], mk);
                 if (d.theta_accrual) {
                     drawCurvesChart(`strd-ch-theta-${id}`, d.theta_accrual.days, [
                         { label: 'накопленная тета', data: d.theta_accrual.cumul, color: '#34d399' },
@@ -4817,6 +4825,11 @@
             setInterval(() => {
                 const sprView = document.getElementById('spreads-view');
                 if (sprView && !sprView.classList.contains('hidden')) updateSpreads();
+                const strView = document.getElementById('straddles-view');
+                // Skip while a straddle profile is expanded — a full re-render
+                // would collapse it mid-view (refresh manually with ↻ instead).
+                const expandedProfile = strView && strView.querySelector('[id^="strd-"]:not(.hidden)');
+                if (strView && !strView.classList.contains('hidden') && !expandedProfile) loadStraddles();
             }, 5000);
         });
 
