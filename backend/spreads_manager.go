@@ -1278,6 +1278,42 @@ func rollProfitOnTarget(s *spreadRecord) error {
 	return nil
 }
 
+// futuresFillPrice returns the executable touch for a futures leg: best ask
+// for BUY, best bid for SELL. Entries must be executable — a spot estimate
+// (e.g. the hardcoded 83200 fallback) poisons P&L accounting forever, so the
+// absence of a live book is an error, not a fallback. Pure network read.
+func futuresFillPrice(secid, side string) (float64, error) {
+	if alorMarket == nil || secid == "" {
+		return 0, fmt.Errorf("нет книги %s", secid)
+	}
+	ob, err := alorMarket.FetchOrderbook("MOEX", secid)
+	if err != nil {
+		return 0, err
+	}
+	if side == "SELL" {
+		if len(ob.Bids) > 0 && ob.Bids[0].Price > 0 {
+			return ob.Bids[0].Price, nil
+		}
+		return 0, fmt.Errorf("в стакане %s нет бидов", secid)
+	}
+	if len(ob.Asks) > 0 && ob.Asks[0].Price > 0 {
+		return ob.Asks[0].Price, nil
+	}
+	return 0, fmt.Errorf("в стакане %s нет асков", secid)
+}
+
+// isEstimatePrice reports hardcoded getSpotPrice fallback values. Legs
+// recorded at these prices were poisoned by an estimate (e.g. a hedge opened
+// while feeds were down) — see the straddle repair endpoint.
+func isEstimatePrice(v float64) bool {
+	for _, e := range []float64{83200.0, 80240.0, 1010.0, 271.0} {
+		if math.Abs(v-e) < 0.01 {
+			return true
+		}
+	}
+	return false
+}
+
 // autoHedgePosition places a delta hedge (paper unless the spread is live) and
 // records the FUTURES/SHARES leg on the position.
 func autoHedgePosition(pos *quant.Position, hedgeQty int) error {
@@ -1294,14 +1330,16 @@ func autoHedgePosition(pos *quant.Position, hedgeQty int) error {
 		futureSecid = pos.Symbol
 	}
 
-	spot, _ := getSpotPrice(pos.Symbol)
-	if spot <= 0 {
-		spot = pos.CurrentValue
+	// Executable entry only: never the symbol spot (wrong series) and never
+	// a hardcoded estimate.
+	fill, err := futuresFillPrice(futureSecid, side)
+	if err != nil {
+		return fmt.Errorf("хедж невозможен: %v", err)
 	}
 	mult := contractMultiplier(pos.Symbol)
 	margin := moexFutureInitialMargin(futureSecid)
 	if margin <= 0 {
-		margin = spot * mult * 0.15
+		margin = fill * mult * 0.15
 	}
 
 	pos.Legs = append(pos.Legs, quant.PositionLeg{
@@ -1310,8 +1348,8 @@ func autoHedgePosition(pos *quant.Position, hedgeQty int) error {
 		Kind:         "FUTURES",
 		Side:         side,
 		Quantity:     hedgeQty,
-		EntryPrice:   spot,
-		CurrentPrice: spot,
+		EntryPrice:   fill,
+		CurrentPrice: fill,
 	})
 	pos.Margin += margin * float64(hedgeQty)
 	repricePosition(pos)

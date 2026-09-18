@@ -1255,11 +1255,17 @@ func straddleHedgeHandler(w http.ResponseWriter, r *http.Request) {
 		side = "SELL"
 		qty = -qty
 	}
+	// Executable entry only — never the symbol spot or an estimate.
+	fill, err := futuresFillPrice(futSec, side)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "хедж невозможен: " + err.Error()})
+		return
+	}
 	mult := contractMultiplier(pos.Symbol)
-	margin := spot * mult * 0.15
+	margin := fill * mult * 0.15
 	pos.Legs = append(pos.Legs, quant.PositionLeg{
 		SecID: futSec, Symbol: pos.Symbol, Kind: "FUTURES",
-		Side: side, Quantity: qty, EntryPrice: spot, CurrentPrice: spot,
+		Side: side, Quantity: qty, EntryPrice: fill, CurrentPrice: fill,
 	})
 	pos.Margin += margin * float64(qty)
 	repricePosition(pos)
