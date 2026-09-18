@@ -65,17 +65,18 @@ type analyticsCurves struct {
 }
 
 type spreadAnalytics struct {
-	Symbol  string             `json:"symbol"`
-	Expiry  string             `json:"expiry"`
-	Spot    float64            `json:"spot"`
-	DTE     int                `json:"dte"`
-	Mult    float64            `json:"multiplier"`
-	Qty     int                `json:"qty"`
-	Central float64            `json:"central_strike"`
-	Source  string             `json:"source"` // "moex-optcalc" or "local"
-	Legs    []analyticsLeg     `json:"legs"`
-	Totals  map[string]float64 `json:"totals"`
-	Curves  analyticsCurves    `json:"curves"`
+	Symbol      string             `json:"symbol"`
+	Expiry      string             `json:"expiry"`
+	Spot        float64            `json:"spot"`
+	SpotSuspect bool               `json:"spot_suspect,omitempty"`
+	DTE         int                `json:"dte"`
+	Mult        float64            `json:"multiplier"`
+	Qty         int                `json:"qty"`
+	Central     float64            `json:"central_strike"`
+	Source      string             `json:"source"` // "moex-optcalc" or "local"
+	Legs        []analyticsLeg     `json:"legs"`
+	Totals      map[string]float64 `json:"totals"`
+	Curves      analyticsCurves    `json:"curves"`
 }
 
 func intrinsicValue(S, strike float64, isCall bool) float64 {
@@ -83,6 +84,33 @@ func intrinsicValue(S, strike float64, isCall bool) float64 {
 		return math.Max(S-strike, 0)
 	}
 	return math.Max(strike-S, 0)
+}
+
+// analyticsSpot picks the spot for curve analytics. A live futures-leg mark
+// wins: getSpotPrice may return a stale hardcoded estimate (e.g. 83200) or a
+// different series' price, which silently shifts every curve and poisons the
+// IV back-out. Returns the spot plus a suspect flag (selected series
+// disagrees >2%, or nothing live at all). Pure apart from the getSpotPrice
+// read — unit-tested with overrides.
+func analyticsSpot(legs []quant.PositionLeg, symbol string) (float64, bool) {
+	fut := 0.0
+	for i := range legs {
+		if legs[i].Kind == "FUTURES" && legs[i].CurrentPrice > 0 {
+			fut = legs[i].CurrentPrice
+			break
+		}
+	}
+	spot, _ := getSpotPrice(symbol)
+	if fut > 0 {
+		if spot > 0 && math.Abs(spot-fut)/fut > 0.02 {
+			return fut, true
+		}
+		return fut, false
+	}
+	if spot <= 0 || isEstimatePrice(spot) {
+		return spot, true
+	}
+	return spot, false
 }
 
 // buildSpreadAnalytics computes per-leg greeks at the current spot and the
@@ -275,6 +303,7 @@ func spreadAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		spot, mult     float64
 		dte, qty       int
 		central        float64
+		spotSuspect    bool
 	)
 
 	if id != "" {
@@ -294,9 +323,10 @@ func spreadAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		mult = contractMultiplier(symbol)
 		qty = s.Qty
 		central = s.CentralStrike
-		spot, _ = getSpotPrice(symbol)
+		spot, spotSuspect = analyticsSpot(pos.Legs, symbol)
 		if spot <= 0 {
 			spot = pos.CurrentValue
+			spotSuspect = true
 		}
 		for _, l := range pos.Legs {
 			legsIn = append(legsIn, analyticsLeg{
@@ -349,6 +379,11 @@ func spreadAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 	a := buildSpreadAnalytics(symbol, expiry, spot, dte, mult, enriched)
 	a.Qty = qty
 	a.Central = central
+	if id != "" {
+		a.SpotSuspect = spotSuspect
+	} else {
+		a.SpotSuspect = isEstimatePrice(spot)
+	}
 	if applied {
 		a.Source = "moex-optcalc"
 	} else {

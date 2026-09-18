@@ -34,6 +34,47 @@ func TestAnalyticsCurvesShape(t *testing.T) {
 	}
 }
 
+// TestAnalyticsSpot prefers a live futures mark over getSpotPrice and flags
+// disagreement; with no futures leg an estimate spot is suspect.
+func TestAnalyticsSpot(t *testing.T) {
+	spotMu.Lock()
+	spotOverrides["TST"] = 85000.0
+	spotMu.Unlock()
+	defer func() {
+		spotMu.Lock()
+		delete(spotOverrides, "TST")
+		spotMu.Unlock()
+	}()
+	futLegs := []quant.PositionLeg{
+		{SecID: "F", Kind: "FUTURES", Side: "BUY", Quantity: 1, CurrentPrice: 85784},
+	}
+	// Agreeing (±2%): futures mark wins, clean.
+	if spot, suspect := analyticsSpot(futLegs, "TST"); spot != 85784 || suspect {
+		t.Fatalf("agreeing = (%v, %v), want (85784, false)", spot, suspect)
+	}
+	// Selected series far off: futures mark wins, flagged.
+	spotMu.Lock()
+	spotOverrides["TST"] = 80000.0
+	spotMu.Unlock()
+	if spot, suspect := analyticsSpot(futLegs, "TST"); spot != 85784 || !suspect {
+		t.Fatalf("diverged = (%v, %v), want (85784, true)", spot, suspect)
+	}
+	// No futures: live override passes clean.
+	spotMu.Lock()
+	spotOverrides["TST"] = 85000.0
+	spotMu.Unlock()
+	if spot, suspect := analyticsSpot(nil, "TST"); spot != 85000 || suspect {
+		t.Fatalf("plain = (%v, %v), want (85000, false)", spot, suspect)
+	}
+	// No futures + estimate value: flagged.
+	spotMu.Lock()
+	spotOverrides["TST"] = 83200.0
+	spotMu.Unlock()
+	if spot, suspect := analyticsSpot(nil, "TST"); spot != 83200 || !suspect {
+		t.Fatalf("estimate = (%v, %v), want (83200, true)", spot, suspect)
+	}
+}
+
 // TestAnalyticsThetaScalesWithMult pins money units: theta curves carry the
 // multiplier (rubles/day like p.Theta), while delta curves stay in contract
 // units for the hedge engine.

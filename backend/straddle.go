@@ -1132,7 +1132,11 @@ func straddleAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 	repricePosition(pos)
 	quant.SavePosition(*pos)
 	mult := contractMultiplier(pos.Symbol)
-	spot, _ := getSpotPrice(pos.Symbol)
+	spot, spotSuspect := analyticsSpot(pos.Legs, pos.Symbol)
+	if spot <= 0 {
+		spot, _ = getSpotPrice(pos.Symbol)
+		spotSuspect = true
+	}
 	dte := dteInDays(s.Expiry, time.Now())
 
 	legs := make([]analyticsLeg, 0, len(pos.Legs))
@@ -1167,6 +1171,7 @@ func straddleAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		"hedge":         hv,
 		"pnl":           math.Round(pos.PnL*100) / 100,
 		"realized":      math.Round(pos.RealizedPnL*100) / 100,
+		"spot_suspect":  spotSuspect,
 	})
 }
 

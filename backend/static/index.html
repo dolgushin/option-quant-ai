@@ -1899,7 +1899,8 @@
                 });
                 legs += '</tbody></table>';
                 const h = d.hedge || {};
-                const spotLine = a.spot ? `<div class="text-[10px] font-mono text-slate-500 mb-2">Кривые посчитаны при споте ${Math.round(a.spot).toLocaleString('ru-RU')} · эксп. ${a.expiry || ''}</div>` : '';
+                const spotWarn = (d.spot_suspect || a.spot_suspect) ? ' <span class="text-amber-400" title="Спот не подтверждён живой ногой: кривые могут врать">⚠ спот под вопросом</span>' : '';
+                const spotLine = a.spot ? `<div class="text-[10px] font-mono text-slate-500 mb-2">Кривые посчитаны при споте ${Math.round(a.spot).toLocaleString('ru-RU')} · эксп. ${a.expiry || ''}${spotWarn}</div>` : '';
                 // Attribution: futures vs options P&L from live legs, closed
                 // hedges from the position accumulator.
                 let fut = 0, opt = 0;
