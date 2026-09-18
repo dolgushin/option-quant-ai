@@ -3,6 +3,7 @@ package quant
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -24,19 +25,88 @@ type PositionLeg struct {
 
 // Position is a multi-leg strategy position.
 type Position struct {
-	ID        string        `json:"id"`
-	Strategy  string        `json:"strategy"`
-	Symbol    string        `json:"symbol"`
-	Expiry    string        `json:"expiry"`
-	Legs      []PositionLeg `json:"legs"`
-	OpenedAt  time.Time     `json:"opened_at"`
-	Delta     float64       `json:"delta"`
-	Theta     float64       `json:"theta"`
-	Margin    float64       `json:"margin"`
-	EntryValue float64      `json:"entry_value"`
-	CurrentValue float64    `json:"current_value"`
-	PnL       float64       `json:"pnl"`
-	PnLPercent float64      `json:"pnl_percent"`
+	ID           string        `json:"id"`
+	Strategy     string        `json:"strategy"`
+	Symbol       string        `json:"symbol"`
+	Expiry       string        `json:"expiry"`
+	Legs         []PositionLeg `json:"legs"`
+	OpenedAt     time.Time     `json:"opened_at"`
+	Delta        float64       `json:"delta"`
+	Theta        float64       `json:"theta"`
+	Margin       float64       `json:"margin"`
+	EntryValue   float64       `json:"entry_value"`
+	CurrentValue float64       `json:"current_value"`
+	PnL          float64       `json:"pnl"`
+	PnLPercent   float64       `json:"pnl_percent"`
+	// RealizedPnL accumulates P&L of legs netted away mid-life (opposite
+	// futures hedges cancelling each other). Live-leg P&L stays in PnL;
+	// the journal adds both at close so nothing is lost.
+	RealizedPnL float64 `json:"realized_pnl,omitempty"`
+}
+
+// NetFuturesLegs nets a new futures leg against opposite same-contract legs
+// (FIFO): matched quantity cancels, its P&L at the exit price moves to
+// realized, and only the residual remains to open. Returns the new leg list,
+// the realized amount and the residual qty to open (0 = fully netted).
+// Pure — unit-tested.
+func NetFuturesLegs(legs []PositionLeg, secid, side string, qty int, exitPrice, mult float64) ([]PositionLeg, float64, int) {
+	if qty <= 0 {
+		return legs, 0, 0
+	}
+	var opposite string
+	if side == "BUY" {
+		opposite = "SELL"
+	} else {
+		opposite = "BUY"
+	}
+	remain := qty
+	realized := 0.0
+	out := make([]PositionLeg, 0, len(legs)+1)
+	for i := range legs {
+		l := legs[i]
+		if remain > 0 && l.Kind == "FUTURES" && l.SecID == secid && l.Side == opposite && l.Quantity > 0 {
+			dir := 1.0
+			if l.Side == "SELL" {
+				dir = -1.0
+			}
+			m := l.Quantity
+			if m > remain {
+				m = remain
+			}
+			realized += dir * (exitPrice - l.EntryPrice) * mult * float64(m)
+			remain -= m
+			l.Quantity -= m
+			if l.Quantity > 0 {
+				out = append(out, l)
+			}
+			continue
+		}
+		out = append(out, l)
+	}
+	return out, realized, remain
+}
+
+// SettleTrade builds the journal entry for a removed position. P&L realized
+// by netted legs (Position.RealizedPnL) folds in exactly once — callers must
+// not add it separately, including roll intermediates (the reborn position
+// starts clean).
+func SettleTrade(p Position) Trade {
+	realized := p.PnL + p.RealizedPnL
+	pct := 0.0
+	if p.EntryValue != 0 {
+		pct = realized / math.Abs(p.EntryValue) * 100
+	}
+	return Trade{
+		ID:          fmt.Sprintf("trd-%d", time.Now().UnixNano()),
+		Strategy:    p.Strategy,
+		Symbol:      p.Symbol,
+		OpenedAt:    p.OpenedAt,
+		ClosedAt:    time.Now(),
+		EntryValue:  p.EntryValue,
+		ExitValue:   p.CurrentValue,
+		RealizedPnL: realized,
+		PnLPercent:  pct,
+	}
 }
 
 // Trade is a closed position with realized PnL.
@@ -62,17 +132,17 @@ type Trade struct {
 
 // Stats aggregates closed-trade statistics.
 type Stats struct {
-	TotalTrades       int     `json:"total_trades"`
-	WinningTrades     int     `json:"winning_trades"`
-	LosingTrades      int     `json:"losing_trades"`
-	WinRate           float64 `json:"win_rate"`
-	TotalRealizedPnL  float64 `json:"total_realized_pnl"`
+	TotalTrades        int     `json:"total_trades"`
+	WinningTrades      int     `json:"winning_trades"`
+	LosingTrades       int     `json:"losing_trades"`
+	WinRate            float64 `json:"win_rate"`
+	TotalRealizedPnL   float64 `json:"total_realized_pnl"`
 	TotalUnrealizedPnL float64 `json:"total_unrealized_pnl"`
-	AvgWin            float64 `json:"avg_win"`
-	AvgLoss           float64 `json:"avg_loss"`
-	ProfitFactor      float64 `json:"profit_factor"`
-	BestTrade         float64 `json:"best_trade"`
-	WorstTrade        float64 `json:"worst_trade"`
+	AvgWin             float64 `json:"avg_win"`
+	AvgLoss            float64 `json:"avg_loss"`
+	ProfitFactor       float64 `json:"profit_factor"`
+	BestTrade          float64 `json:"best_trade"`
+	WorstTrade         float64 `json:"worst_trade"`
 }
 
 type PortfolioState struct {
@@ -84,11 +154,11 @@ type PortfolioState struct {
 }
 
 var (
-	positionsMu    sync.Mutex
-	initialCapital = 1000000.0
+	positionsMu     sync.Mutex
+	initialCapital  = 1000000.0
 	activePositions []Position
-	tradeHistory   []Trade
-	dataFile       string
+	tradeHistory    []Trade
+	dataFile        string
 )
 
 // SetDataFile sets the JSON file used for persistence (absolute path).
@@ -115,7 +185,7 @@ func Load() {
 		return
 	}
 	var state struct {
-		InitialCapital float64   `json:"initial_capital"`
+		InitialCapital float64    `json:"initial_capital"`
 		Positions      []Position `json:"positions"`
 		Trades         []Trade    `json:"trades"`
 	}

@@ -1241,17 +1241,7 @@ func spreadCloseHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repricePosition(&pos)
-	trade := quant.Trade{
-		ID:          fmt.Sprintf("trd-%d", time.Now().Unix()),
-		Strategy:    pos.Strategy,
-		Symbol:      pos.Symbol,
-		OpenedAt:    pos.OpenedAt,
-		ClosedAt:    time.Now(),
-		EntryValue:  pos.EntryValue,
-		ExitValue:   pos.CurrentValue,
-		RealizedPnL: pos.PnL,
-		PnLPercent:  pos.PnLPercent,
-	}
+	trade := quant.SettleTrade(pos)
 	enrichTradeContext(&trade, s.Symbol, s.Expiry, s.EntrySpot)
 	quant.AddTrade(trade)
 
@@ -1334,17 +1324,7 @@ func spreadRollHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repricePosition(&pos)
-	rollTrade := quant.Trade{
-		ID:          fmt.Sprintf("trd-%d", time.Now().Unix()),
-		Strategy:    pos.Strategy,
-		Symbol:      pos.Symbol,
-		OpenedAt:    pos.OpenedAt,
-		ClosedAt:    time.Now(),
-		EntryValue:  pos.EntryValue,
-		ExitValue:   pos.CurrentValue,
-		RealizedPnL: pos.PnL,
-		PnLPercent:  pos.PnLPercent,
-	}
+	rollTrade := quant.SettleTrade(pos)
 	enrichTradeContext(&rollTrade, s.Symbol, s.Expiry, s.EntrySpot)
 	quant.AddTrade(rollTrade)
 	s.Status = "ROLLED"

@@ -1900,12 +1900,22 @@
                 legs += '</tbody></table>';
                 const h = d.hedge || {};
                 const spotLine = a.spot ? `<div class="text-[10px] font-mono text-slate-500 mb-2">Кривые посчитаны при споте ${Math.round(a.spot).toLocaleString('ru-RU')} · эксп. ${a.expiry || ''}</div>` : '';
+                // Attribution: futures vs options P&L from live legs, closed
+                // hedges from the position accumulator.
+                let fut = 0, opt = 0;
+                (a.legs || []).forEach(l => {
+                    const v = (l.pnl || 0);
+                    if (l.kind === 'FUTURES') fut += v; else opt += v;
+                });
+                const sgn = v => (v >= 0 ? '+' : '') + Math.round(v).toLocaleString('ru-RU');
+                const attrLine = `<div class="text-[10px] font-mono text-slate-400 mb-2">в т.ч. опционы ${sgn(opt)} ₽ · фьючерсы ${sgn(fut)} ₽ · закрытые хеджи ${sgn(d.realized || 0)} ₽</div>`;
                 box.innerHTML = `
                     <div class="text-[11px] font-mono text-slate-300 bg-slate-800/60 border border-slate-700 rounded p-2 mb-2">
                         <span class="text-amber-300 font-bold">Первый хедж:</span> ${h.text || '—'}
                         <span class="text-slate-500">(Δ сейчас ${h.current_delta || 0}, полоса ${h.band || 0})</span>
                     </div>
                     ${spotLine}
+                    ${attrLine}
                     ${legs}
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
                         <div class="bg-slate-900/60 rounded-lg p-2 border border-slate-700">

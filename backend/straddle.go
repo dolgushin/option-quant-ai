@@ -1166,6 +1166,7 @@ func straddleAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		"theta_accrual": map[string]interface{}{"days": xs, "cumul": cumul},
 		"hedge":         hv,
 		"pnl":           math.Round(pos.PnL*100) / 100,
+		"realized":      math.Round(pos.RealizedPnL*100) / 100,
 	})
 }
 
@@ -1357,12 +1358,8 @@ func closeStraddlePosition(s *straddleRecord, pos *quant.Position, reason string
 	if !found {
 		return
 	}
-	quant.AddTrade(quant.Trade{
-		ID: fmt.Sprintf("trd-%d", time.Now().Unix()), Strategy: "Short Straddle",
-		Symbol: removed.Symbol, OpenedAt: removed.OpenedAt, ClosedAt: time.Now(),
-		EntryValue: removed.EntryValue, ExitValue: removed.CurrentValue,
-		RealizedPnL: removed.PnL, PnLPercent: removed.PnLPercent,
-	})
+	// SettleTrade folds netted-hedge realized P&L in exactly once.
+	quant.AddTrade(quant.SettleTrade(removed))
 	s.Status = "CLOSED"
 	saveStraddleRecord(*s)
 	if notify {
@@ -1373,8 +1370,9 @@ func closeStraddlePosition(s *straddleRecord, pos *quant.Position, reason string
 	}
 }
 
-// executeStraddleHedge appends a paper futures hedge leg at the executable
-// touch and notifies. Shared by the manual endpoint and the loop.
+// executeStraddleHedge nets/appends a paper futures hedge leg at the
+// executable touch and notifies. Opposite legs net FIFO with realized P&L
+// preserved on the position (never lost). Shared by manual endpoint & loop.
 func executeStraddleHedge(s *straddleRecord, pos *quant.Position, ev straddleEval, spot float64) error {
 	futSec := straddleFuturesSecID(s, pos)
 	if futSec == "" {
@@ -1385,11 +1383,18 @@ func executeStraddleHedge(s *straddleRecord, pos *quant.Position, ev straddleEva
 		return fmt.Errorf("хедж невозможен: %v", err)
 	}
 	mult := contractMultiplier(pos.Symbol)
-	pos.Legs = append(pos.Legs, quant.PositionLeg{
-		SecID: futSec, Symbol: pos.Symbol, Kind: "FUTURES",
-		Side: ev.Side, Quantity: ev.Qty, EntryPrice: fill, CurrentPrice: fill,
-	})
-	pos.Margin += fill * mult * 0.15 * float64(ev.Qty)
+	legs, realized, residual := quant.NetFuturesLegs(pos.Legs, futSec, ev.Side, ev.Qty, fill, mult)
+	pos.Legs = legs
+	pos.RealizedPnL += realized
+	if residual > 0 {
+		pos.Legs = append(pos.Legs, quant.PositionLeg{
+			SecID: futSec, Symbol: pos.Symbol, Kind: "FUTURES",
+			Side: ev.Side, Quantity: residual, EntryPrice: fill, CurrentPrice: fill,
+		})
+		pos.Margin += fill * mult * 0.15 * float64(residual)
+	}
+	// Margin stays conservative on netting (released amount unknown
+	// per-leg); broker nets for real, we never understate.
 	repricePosition(pos)
 	quant.SavePosition(*pos)
 	now := time.Now()
@@ -1397,9 +1402,12 @@ func executeStraddleHedge(s *straddleRecord, pos *quant.Position, ev straddleEva
 	s.LastHedgeAt = now.Format(time.RFC3339)
 	s.LastHedgeSpot = spot
 	saveStraddleRecord(*s)
-	logTelegramErr("straddle-hedge", sendTelegramMessage(
-		fmt.Sprintf("🔧 Стрэддл %s %s: хедж %s %d фьюч (%s)",
-			telegramEscape(s.Symbol), telegramEscape(s.ID), ev.Side, ev.Qty, telegramEscape(ev.Reason))))
+	msg := fmt.Sprintf("🔧 Стрэддл %s %s: хедж %s %d фьюч (%s)",
+		telegramEscape(s.Symbol), telegramEscape(s.ID), ev.Side, ev.Qty, telegramEscape(ev.Reason))
+	if realized != 0 {
+		msg += fmt.Sprintf(" · закрыто хеджей: %s ₽", formatRub(realized, 0))
+	}
+	logTelegramErr("straddle-hedge", sendTelegramMessage(msg))
 	return nil
 }
 

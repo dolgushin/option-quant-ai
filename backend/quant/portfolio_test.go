@@ -13,6 +13,74 @@ func resetState() {
 	SetInitialCapital(1000000)
 }
 
+// TestNetFuturesLegs pins FIFO netting: opposite same-contract legs cancel,
+// realized moves to the accumulator at the exit price, residual opens.
+func TestNetFuturesLegs(t *testing.T) {
+	mk := func() []PositionLeg {
+		return []PositionLeg{
+			{SecID: "SiZ6", Kind: "FUTURES", Side: "BUY", Quantity: 2, EntryPrice: 86000},
+			{SecID: "SiZ6", Kind: "FUTURES", Side: "BUY", Quantity: 1, EntryPrice: 86100},
+			{SecID: "SiU6", Kind: "FUTURES", Side: "BUY", Quantity: 5, EntryPrice: 85000},
+		}
+	}
+	// Sell 2 against two BUY lots: full net, realized at exit 86200.
+	legs, realized, residual := NetFuturesLegs(mk(), "SiZ6", "SELL", 2, 86200, 1)
+	if residual != 0 {
+		t.Fatalf("residual = %d, want 0 (fully netted)", residual)
+	}
+	// Lot1: +(86200-86000)*2 = 400; lot2 untouched (FIFO took lot1 fully? no:
+	// 2 requested, lot1 has 2 → lot1 closes fully, lot2 stays).
+	if realized != 400 {
+		t.Fatalf("realized = %v, want 400", realized)
+	}
+	if len(legs) != 2 || legs[0].Quantity != 1 {
+		t.Fatalf("legs wrong after netting: %+v", legs)
+	}
+	// Sell 5: closes lot1 (2) + lot2 (1), residual 2 to open.
+	legs, realized, residual = NetFuturesLegs(mk(), "SiZ6", "SELL", 5, 86200, 1)
+	if residual != 2 {
+		t.Fatalf("residual = %d, want 2", residual)
+	}
+	// 400 + (86200-86100)*1 = 500.
+	if realized != 500 {
+		t.Fatalf("realized = %v, want 500", realized)
+	}
+	// Different contract untouched; same-side adds (no netting within call).
+	legs, realized, residual = NetFuturesLegs(mk(), "SiZ6", "BUY", 3, 86200, 1)
+	if realized != 0 || residual != 3 || len(legs) != 3 {
+		t.Fatalf("same-side must pass through: %+v %v %d", legs, realized, residual)
+	}
+	// Options never net.
+	opt := []PositionLeg{{SecID: "X", Kind: "OPTION", Side: "SELL", Quantity: 2, EntryPrice: 100}}
+	legs, realized, residual = NetFuturesLegs(opt, "X", "BUY", 2, 90, 1)
+	if realized != 0 || residual != 2 || len(legs) != 1 {
+		t.Fatalf("options must not net: %+v %v %d", legs, realized, residual)
+	}
+	// Mult scales realized.
+	_, realized, _ = NetFuturesLegs(mk(), "SiZ6", "SELL", 2, 86200, 100)
+	if realized != 40000 {
+		t.Fatalf("mult-scaled realized = %v, want 40000", realized)
+	}
+}
+
+// TestSettleTradeFoldsRealized: journaled P&L = live + netted, counted once.
+func TestSettleTradeFoldsRealized(t *testing.T) {
+	p := Position{Strategy: "S", Symbol: "Si", EntryValue: -1000, CurrentValue: -600,
+		PnL: 400, RealizedPnL: 150}
+	tr := SettleTrade(p)
+	if tr.RealizedPnL != 550 {
+		t.Fatalf("settled = %v, want 550", tr.RealizedPnL)
+	}
+	if math.Abs(tr.PnLPercent-55) > 1e-9 {
+		t.Fatalf("percent = %v, want 55", tr.PnLPercent)
+	}
+	plain := Position{Strategy: "S", Symbol: "Si", EntryValue: -1000, CurrentValue: -600, PnL: 400}
+	tr2 := SettleTrade(plain)
+	if tr2.RealizedPnL != 400 || math.Abs(tr2.PnLPercent-40) > 1e-9 {
+		t.Fatalf("plain settle = %+v, want 400/40", tr2)
+	}
+}
+
 // TestAddTradeAndStats verifies statistics over a win/loss trade set.
 func TestAddTradeAndStats(t *testing.T) {
 	resetState()

@@ -2244,17 +2244,7 @@ func closePositionHandler(w http.ResponseWriter, r *http.Request) {
 	// Mark-to-market before closing so realized PnL reflects live prices.
 	repricePosition(&pos)
 
-	trade := quant.Trade{
-		ID:          fmt.Sprintf("trd-%d", time.Now().Unix()),
-		Strategy:    pos.Strategy,
-		Symbol:      pos.Symbol,
-		OpenedAt:    pos.OpenedAt,
-		ClosedAt:    time.Now(),
-		EntryValue:  pos.EntryValue,
-		ExitValue:   pos.CurrentValue,
-		RealizedPnL: pos.PnL,
-		PnLPercent:  pos.PnLPercent,
-	}
+	trade := quant.SettleTrade(pos)
 	enrichTradeContext(&trade, pos.Symbol, pos.Expiry, 0)
 	quant.AddTrade(trade)
 

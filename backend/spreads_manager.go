@@ -1049,17 +1049,7 @@ func execSpreadAction(s *spreadRecord, run *managerRun) {
 			return
 		}
 		repricePosition(&pos)
-		stopTrade := quant.Trade{
-			ID:          fmt.Sprintf("trd-%d", time.Now().Unix()),
-			Strategy:    pos.Strategy,
-			Symbol:      pos.Symbol,
-			OpenedAt:    pos.OpenedAt,
-			ClosedAt:    time.Now(),
-			EntryValue:  pos.EntryValue,
-			ExitValue:   pos.CurrentValue,
-			RealizedPnL: pos.PnL,
-			PnLPercent:  pos.PnLPercent,
-		}
+		stopTrade := quant.SettleTrade(pos)
 		enrichTradeContext(&stopTrade, s.Symbol, s.Expiry, s.EntrySpot)
 		quant.AddTrade(stopTrade)
 		s.Status = "CLOSED"
@@ -1342,16 +1332,21 @@ func autoHedgePosition(pos *quant.Position, hedgeQty int) error {
 		margin = fill * mult * 0.15
 	}
 
-	pos.Legs = append(pos.Legs, quant.PositionLeg{
-		SecID:        futureSecid,
-		Symbol:       pos.Symbol,
-		Kind:         "FUTURES",
-		Side:         side,
-		Quantity:     hedgeQty,
-		EntryPrice:   fill,
-		CurrentPrice: fill,
-	})
-	pos.Margin += margin * float64(hedgeQty)
+	legs, realized, residual := quant.NetFuturesLegs(pos.Legs, futureSecid, side, hedgeQty, fill, mult)
+	pos.Legs = legs
+	pos.RealizedPnL += realized
+	if residual > 0 {
+		pos.Legs = append(pos.Legs, quant.PositionLeg{
+			SecID:        futureSecid,
+			Symbol:       pos.Symbol,
+			Kind:         "FUTURES",
+			Side:         side,
+			Quantity:     residual,
+			EntryPrice:   fill,
+			CurrentPrice: fill,
+		})
+		pos.Margin += margin * float64(residual)
+	}
 	repricePosition(pos)
 	quant.SavePosition(*pos)
 	return nil
