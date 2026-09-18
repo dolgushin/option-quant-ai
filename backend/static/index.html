@@ -846,19 +846,11 @@
                         <select id="str-symbol" onchange="loadStraddleMeta()" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option>Si</option><option>RI</option></select></label>
                     <span id="str-spot-hint" class="text-slate-500 self-center"></span>
                     <label class="text-slate-400">Экспирация
-                        <input id="str-expiry" type="text" placeholder="2026-12-17" class="w-28 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
-                    <label class="text-slate-400">⤵
-                        <select id="str-expiry-pick" onchange="document.getElementById('str-expiry').value=this.value" class="w-28 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option value="">—</option></select></label>
-                    <label class="text-slate-400">Страйк ATM
-                        <input id="str-strike" type="number" placeholder="86000" class="w-28 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
-                    <label class="text-slate-400">⤵
-                        <select id="str-strike-pick" onchange="document.getElementById('str-strike').value=this.value" class="w-28 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"><option value="">—</option></select></label>
+                        <select id="str-expiry" onchange="previewStraddleLegs()" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option value="">—</option></select></label>
+                    <label class="text-slate-400">Страйк
+                        <select id="str-strike" onchange="previewStraddleLegs()" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"><option value="">—</option></select></label>
                     <label class="text-slate-400">Кол-во
                         <input id="str-qty" type="number" value="1" min="1" class="w-14 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
-                    <label class="text-slate-400">Call secid
-                        <input id="str-call" type="text" placeholder="Si86000BU6" class="w-32 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
-                    <label class="text-slate-400">Put secid
-                        <input id="str-put" type="text" placeholder="Si86000BU6" class="w-32 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
                     <label class="text-slate-400">Конструкция
                         <select id="str-constr" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white">
                             <option value="classic">Классика (C+P)</option>
@@ -872,17 +864,20 @@
                             <option value="hybrid">Гибрид</option><option value="delta_band">Полоса Δ</option>
                             <option value="time">По времени</option><option value="price_band">Полоса цены</option>
                         </select></label>
-                    <button onclick="discoverStraddle()" id="str-find" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg transition">🔍 Найти ноги</button>
                     <button onclick="openStraddle()" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg transition">Открыть (бумага)</button>
+                    <button onclick="document.getElementById('str-manual').style.display=document.getElementById('str-manual').style.display==='none'?'':'none'" class="px-2 py-1.5 text-slate-400 hover:text-white text-[11px] transition" title="Ручной ввод secid и дат">✎</button>
                 </div>
-                <div class="flex flex-wrap items-end gap-2 font-mono text-[11px] mt-2" id="str-discover" style="display:none">
-                    <label class="text-slate-400">Call
-                        <select id="str-call-pick" onchange="document.getElementById('str-call').value=this.value" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white max-w-[220px]"></select></label>
-                    <label class="text-slate-400">Put
-                        <select id="str-put-pick" onchange="document.getElementById('str-put').value=this.value" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white max-w-[220px]"></select></label>
-                    <label class="text-slate-400">Фьючерс
-                        <select id="str-fut-pick" onchange="document.getElementById('str-fut').value=this.value" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white max-w-[220px]"></select></label>
-                    <span id="str-discover-note" class="text-slate-500 self-center"></span>
+                <div id="str-legs-line" class="font-mono text-[11px] text-slate-400 mt-1"></div>
+                <div class="flex flex-wrap items-end gap-2 font-mono text-[11px] mt-2" id="str-manual" style="display:none">
+                    <span class="text-slate-500 self-center">Вручную:</span>
+                    <label class="text-slate-400">Экспирация
+                        <input id="str-expiry-m" type="text" placeholder="2026-12-17" class="w-28 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
+                    <label class="text-slate-400">Страйк
+                        <input id="str-strike-m" type="number" placeholder="86000" class="w-28 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="text-slate-400">Call secid
+                        <input id="str-call" type="text" placeholder="Si86000BU6" class="w-32 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
+                    <label class="text-slate-400">Put secid
+                        <input id="str-put" type="text" placeholder="Si86000BU6" class="w-32 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
                 </div>
                 <div class="text-[10px] text-slate-500 font-mono mt-2">Покрытие фьючерсом снижает реальное ГО брокера (SPAN-зачёт). Движок хеджа и авто-вход — следующим шагом; пока хедж ручной.</div>
             </div>
@@ -1732,12 +1727,25 @@
         }
 
         // ---- Short Straddles ----
+        function straddleFormValues() {
+            const manOn = document.getElementById('str-manual').style.display !== 'none';
+            const pick = id => document.getElementById(id).value;
+            const manual = id => document.getElementById(id).value.trim();
+            return {
+                symbol: pick('str-symbol'),
+                expiry: manOn && manual('str-expiry-m') ? manual('str-expiry-m') : pick('str-expiry'),
+                strike: manOn && manual('str-strike-m') ? parseFloat(manual('str-strike-m')) : parseFloat(pick('str-strike')),
+                callSecid: manOn ? manual('str-call') : '',
+                putSecid: manOn ? manual('str-put') : '',
+            };
+        }
+
         async function loadStraddleMeta() {
             const sym = document.getElementById('str-symbol').value;
             try {
                 const res = await fetch(`/api/v1/straddles/meta?symbol=${encodeURIComponent(sym)}`);
                 const d = await res.json();
-                const ex = document.getElementById('str-expiry-pick');
+                const ex = document.getElementById('str-expiry');
                 ex.innerHTML = '<option value="">—</option>' + (d.expiries || []).map(e =>
                     `<option value="${e.date}">${e.date} ${e.tenor} (${e.dte}д)</option>`).join('');
                 let srows = d.strikes || [];
@@ -1755,9 +1763,9 @@
                             if (s === atm && atm > 0) srows.push({ divider: true, label: '━━━ ATM ━━━' });
                             srows.push({ strike: s, label: String(s), atm: s === atm && atm > 0 });
                         });
-                    } catch (e) { /* manual input stays */ }
+                    } catch (e) { /* manual toggle stays */ }
                 }
-                const st = document.getElementById('str-strike-pick');
+                const st = document.getElementById('str-strike');
                 st.innerHTML = '<option value="">—</option>' + srows.map(s =>
                     s.divider ? `<option value="" disabled>${s.label}</option>`
                               : `<option value="${s.strike}">${s.label}${s.atm ? ' ●' : ''}</option>`).join('');
@@ -1765,7 +1773,29 @@
                     const hint = document.getElementById('str-spot-hint');
                     if (hint) hint.innerText = `спот ${Math.round(d.spot).toLocaleString('ru-RU')}`;
                 }
-            } catch (e) { /* manual inputs stay as fallback */ }
+                previewStraddleLegs();
+            } catch (e) { /* manual toggle stays as fallback */ }
+        }
+
+        // Live legs preview: what auto-open would use (MOEX exact or refuse).
+        async function previewStraddleLegs() {
+            const el = document.getElementById('str-legs-line');
+            const v = straddleFormValues();
+            if (!v.expiry || !v.strike) { el.innerHTML = ''; return; }
+            el.innerHTML = '<span class="text-slate-500">ищу ноги...</span>';
+            try {
+                const res = await fetch(`/api/v1/straddles/discover?symbol=${encodeURIComponent(v.symbol)}&strike=${v.strike}&expiry=${encodeURIComponent(v.expiry)}`);
+                const d = await res.json();
+                const fmtLeg = l => `${l.secid} (${l.bid || '—'}/${l.ask || '—'})`;
+                const parts = [];
+                (d.calls || []).forEach(l => parts.push('C ' + fmtLeg(l)));
+                (d.puts || []).forEach(l => parts.push('P ' + fmtLeg(l)));
+                (d.futures || []).forEach(l => parts.push('F ' + fmtLeg(l)));
+                const src = d.source === 'moex' ? 'MOEX точно' : 'Alor, проверь!';
+                el.innerHTML = parts.length
+                    ? `ноги: ${parts.join(' · ')} <span class="text-slate-500">[${src}]</span>`
+                    : `<span class="text-amber-400">ноги не разобраны — укажи secid вручную (✎)</span>`;
+            } catch (e) { el.innerHTML = ''; }
         }
 
         async function loadStraddles() {
@@ -1805,53 +1835,16 @@
             } catch (e) { el.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${e.message}</div>`; }
         }
 
-        function straddleLegOptions(legs) {
-            return (legs || []).map(l => {
-                const px = (l.bid > 0 && l.ask > 0) ? `${l.bid}/${l.ask}` : (l.bid > 0 ? `bid ${l.bid}` : (l.ask > 0 ? `ask ${l.ask}` : 'нет цен'));
-                const lbl = l.label ? ` (${l.label})` : '';
-                return `<option value="${l.secid}">${l.secid}${lbl} · ${px}</option>`;
-            }).join('');
-        }
-
-        async function discoverStraddle() {
-            const btn = document.getElementById('str-find');
-            const sym = document.getElementById('str-symbol').value;
-            const strike = parseFloat(document.getElementById('str-strike').value) || 0;
-            const expiry = document.getElementById('str-expiry').value.trim();
-            btn.disabled = true;
-            btn.innerText = '⏳ Ищу...';
-            try {
-                const res = await fetch(`/api/v1/straddles/discover?symbol=${encodeURIComponent(sym)}&strike=${strike}&expiry=${encodeURIComponent(expiry)}`);
-                const d = await res.json();
-                if (d.error) { alert('❌ ' + d.error); return; }
-                document.getElementById('str-discover').style.display = '';
-                const fill = (id, legs, inputId) => {
-                    const el = document.getElementById(id);
-                    el.innerHTML = '<option value="">— выбрать —</option>' + straddleLegOptions(legs);
-                    if (legs && legs.length === 1) {
-                        el.value = legs[0].secid;
-                        document.getElementById(inputId).value = legs[0].secid;
-                    }
-                };
-                fill('str-call-pick', d.calls, 'str-call');
-                fill('str-put-pick', d.puts, 'str-put');
-                fill('str-fut-pick', d.futures, 'str-fut');
-                const nU = (d.unknown || []).length;
-                document.getElementById('str-discover-note').innerText =
-                    `источник: ${d.source === 'moex' ? 'MOEX (точно)' : 'Alor (проверь тип!)'}${nU ? ` · неопознанных: ${nU}` : ''}${d.note ? ' · ' + d.note : ''}`;
-            } catch (e) { alert('❌ ' + e.message); }
-            finally { btn.disabled = false; btn.innerText = '🔍 Найти ноги'; }
-        }
-
         async function openStraddle() {
+            const v = straddleFormValues();
             const body = JSON.stringify({
-                symbol: document.getElementById('str-symbol').value,
-                expiry: document.getElementById('str-expiry').value.trim(),
-                strike: parseFloat(document.getElementById('str-strike').value) || 0,
+                symbol: v.symbol,
+                expiry: v.expiry,
+                strike: v.strike || 0,
                 qty: parseInt(document.getElementById('str-qty').value) || 1,
                 construction: document.getElementById('str-constr').value,
-                call_secid: document.getElementById('str-call').value.trim(),
-                put_secid: document.getElementById('str-put').value.trim(),
+                call_secid: v.callSecid,
+                put_secid: v.putSecid,
                 futures_secid: document.getElementById('str-fut').value.trim(),
                 hedge: { rule: document.getElementById('str-hedge').value },
             });

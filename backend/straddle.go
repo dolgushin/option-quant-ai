@@ -507,6 +507,20 @@ func straddleOpenHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Option legs auto-resolve: exact MOEX pair wins; anything else is
+	// refused (guessing call/put opens wrong trades) with guidance.
+	if req.Strike > 0 && (req.CallSecID == "" || (construction != straddleSynthetic && req.PutSecID == "")) {
+		calls, puts, _, _, source := discoverStraddleLegs(req.Symbol, req.Strike, req.Expiry)
+		if source != "moex" || len(calls) != 1 || (construction != straddleSynthetic && len(puts) != 1) {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false,
+				"error": "не нашёл ноги точно — укажи secid вручную (MOEX недоступен или пары нет)"})
+			return
+		}
+		req.CallSecID = calls[0].SecID
+		if construction != straddleSynthetic {
+			req.PutSecID = puts[0].SecID
+		}
+	}
 	spot, _ := getSpotPrice(req.Symbol)
 	withFutures := construction == straddleCovered
 	var plan *straddlePlan
@@ -773,46 +787,44 @@ func parseAlorOptionInfo(raw map[string]interface{}) (strike float64, expiry, ki
 // resolve leg secids without typing them. MOEX chain first (exact, with
 // expiry); Alor search fallback (strike-matched candidates with live book
 // previews for manual pick). Futures auto-resolved from month codes.
-func straddleDiscoverHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	symbol := r.URL.Query().Get("symbol")
-	if symbol == "" {
-		symbol = "Si"
-	}
-	var strike float64
-	fmt.Sscanf(r.URL.Query().Get("strike"), "%f", &strike)
-	expiry := r.URL.Query().Get("expiry")
-
-	withBook := func(secid string) discoverLeg {
-		leg := discoverLeg{SecID: secid}
-		if alorMarket == nil {
-			return leg
-		}
-		if ob, err := alorMarket.FetchOrderbook("MOEX", secid); err == nil {
-			if len(ob.Bids) > 0 {
-				leg.Bid = ob.Bids[0].Price
-			}
-			if len(ob.Asks) > 0 {
-				leg.Ask = ob.Asks[0].Price
-			}
-		}
+func discoverWithBook(secid string) discoverLeg {
+	leg := discoverLeg{SecID: secid}
+	if alorMarket == nil {
 		return leg
 	}
+	if ob, err := alorMarket.FetchOrderbook("MOEX", secid); err == nil {
+		if len(ob.Bids) > 0 {
+			leg.Bid = ob.Bids[0].Price
+		}
+		if len(ob.Asks) > 0 {
+			leg.Ask = ob.Asks[0].Price
+		}
+	}
+	return leg
+}
 
-	// Futures first (month codes are standard).
-	futures := []discoverLeg{}
+func futuresMonthLabel(code string) string {
+	if _, y, m, ok := parseFuturesCode(code); ok {
+		return fmt.Sprintf("%s %d", map[time.Month]string{
+			time.January: "янв", time.February: "фев", time.March: "мар",
+			time.April: "апр", time.May: "май", time.June: "июн",
+			time.July: "июл", time.August: "авг", time.September: "сен",
+			time.October: "окт", time.November: "ноя", time.December: "дек",
+		}[m], y)
+	}
+	return ""
+}
+
+// discoverStraddleLegs resolves leg candidates: MOEX chain first (exact
+// call/put at the strike+expiry), Alor search fallback (book previews,
+// unverified types). Shared by the discover endpoint and auto-open.
+func discoverStraddleLegs(symbol string, strike float64, expiry string) (calls, puts, unknown, futures []discoverLeg, source string) {
+	futures = []discoverLeg{}
 	if alorMarket != nil {
 		if syms, err := alorMarket.FetchOptionChain(symbol); err == nil {
 			if code := resolveFuturesAlor(syms, symbol, time.Now()); code != "" {
-				f := withBook(code)
-				if _, y, m, ok := parseFuturesCode(code); ok {
-					f.Label = fmt.Sprintf("%s %d", map[time.Month]string{
-						time.January: "янв", time.February: "фев", time.March: "мар",
-						time.April: "апр", time.May: "май", time.June: "июн",
-						time.July: "июл", time.August: "авг", time.September: "сен",
-						time.October: "окт", time.November: "ноя", time.December: "дек",
-					}[m], y)
-				}
+				f := discoverWithBook(code)
+				f.Label = futuresMonthLabel(code)
 				futures = append(futures, f)
 			}
 		}
@@ -823,25 +835,23 @@ func straddleDiscoverHandler(w http.ResponseWriter, r *http.Request) {
 		if chain := moexOptionsForAsset(symbol, expiry); len(chain) > 0 {
 			if strikes, findOpt, err := optionChainFor(symbol, expiry); err == nil && len(strikes) > 0 {
 				_ = strikes
-				out := map[string]interface{}{"source": "moex", "futures": futures}
 				if c := findOpt(strike, true); c != nil {
-					leg := withBook(c.SecID)
+					leg := discoverWithBook(c.SecID)
 					leg.Kind = "call"
-					out["calls"] = []discoverLeg{leg}
+					calls = append(calls, leg)
 				}
 				if p := findOpt(strike, false); p != nil {
-					leg := withBook(p.SecID)
+					leg := discoverWithBook(p.SecID)
 					leg.Kind = "put"
-					out["puts"] = []discoverLeg{leg}
+					puts = append(puts, leg)
 				}
-				json.NewEncoder(w).Encode(out)
-				return
+				return calls, puts, nil, futures, "moex"
 			}
 		}
 	}
 
 	// Alor fallback: strike-matched candidates with book previews.
-	calls, puts, unknown := []discoverLeg{}, []discoverLeg{}, []discoverLeg{}
+	calls, puts, unknown = []discoverLeg{}, []discoverLeg{}, []discoverLeg{}
 	if alorMarket != nil && strike > 0 {
 		syms, err := alorMarket.FetchOptionChain(symbol)
 		if err == nil {
@@ -862,7 +872,7 @@ func straddleDiscoverHandler(w http.ResponseWriter, r *http.Request) {
 				wg.Add(1)
 				go func(idx int, id string) {
 					defer wg.Done()
-					leg := withBook(id)
+					leg := discoverWithBook(id)
 					leg.Label = id
 					if _, _, kind := parseAlorOptionInfo(map[string]interface{}{"shortname": id}); kind != "" {
 						leg.Kind = kind
@@ -892,10 +902,35 @@ func straddleDiscoverHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"source": "alor", "calls": calls, "puts": puts, "unknown": unknown, "futures": futures,
-		"note": "тип опциона из Alor не подтверждён — сверь secid перед открытием",
-	})
+	return calls, puts, unknown, futures, "alor"
+}
+
+func straddleDiscoverHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "Si"
+	}
+	var strike float64
+	fmt.Sscanf(r.URL.Query().Get("strike"), "%f", &strike)
+	expiry := r.URL.Query().Get("expiry")
+
+	calls, puts, unknown, futures, source := discoverStraddleLegs(symbol, strike, expiry)
+	out := map[string]interface{}{"source": source, "futures": futures}
+	if source == "moex" {
+		if len(calls) > 0 {
+			out["calls"] = calls
+		}
+		if len(puts) > 0 {
+			out["puts"] = puts
+		}
+	} else {
+		out["calls"] = calls
+		out["puts"] = puts
+		out["unknown"] = unknown
+		out["note"] = "тип опциона из Alor не подтверждён — сверь secid перед открытием"
+	}
+	json.NewEncoder(w).Encode(out)
 }
 
 // GET /api/v1/straddles/strikes?symbol=Si — strike grid from live Alor
