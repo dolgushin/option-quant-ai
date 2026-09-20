@@ -94,10 +94,17 @@ func decideStraddleHedge(posDelta, targetDelta, spot, lastHedgeSpot float64, min
 		return false, 0, ""
 	}
 	need := func(reason string) (bool, int, string) { return true, qty, reason }
+	// First-ever time fire reads as such, not absurd minutes.
+	timeReason := func() string {
+		if minutesSinceHedge >= 10*float64(r.IntervalMin) {
+			return "первый хедж по времени"
+		}
+		return fmt.Sprintf("время: %0.0f мин ≥ %d", minutesSinceHedge, r.IntervalMin)
+	}
 	switch r.Rule {
 	case hedgeTime:
 		if minutesSinceHedge >= float64(r.IntervalMin) {
-			return need(fmt.Sprintf("время: %0.0f мин ≥ %d", minutesSinceHedge, r.IntervalMin))
+			return need(timeReason())
 		}
 		return false, 0, ""
 	case hedgePriceBand:
@@ -118,7 +125,7 @@ func decideStraddleHedge(posDelta, targetDelta, spot, lastHedgeSpot float64, min
 			return need(fmt.Sprintf("резкое движение: отклонение %0.2f ≥ %.1f× полоса", math.Abs(dev), r.BigMoveMult))
 		}
 		if minutesSinceHedge >= float64(r.IntervalMin) {
-			return need(fmt.Sprintf("время: %0.0f мин ≥ %d", minutesSinceHedge, r.IntervalMin))
+			return need(timeReason())
 		}
 		return false, 0, ""
 	default: // hedgeDeltaBand
@@ -1352,7 +1359,7 @@ func straddleHedgeHandler(w http.ResponseWriter, r *http.Request) {
 		side = "SELL"
 		qty = -qty
 	}
-	if err := executeStraddleHedge(&s, pos, straddleEval{"HEDGE", side, qty, reason}, spot); err != nil {
+	if err := executeStraddleHedge(&s, pos, straddleEval{"HEDGE", side, qty, reason}, spot, true); err != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
 		return
 	}
@@ -1446,7 +1453,7 @@ func runStraddleManagerPass() {
 		case "CLOSE_STOP", "CLOSE_TIME":
 			closeStraddlePosition(&s, pos, ev.Reason, true)
 		case "HEDGE":
-			executeStraddleHedge(&s, pos, ev, spot)
+			executeStraddleHedge(&s, pos, ev, spot, false)
 		}
 	}
 }
@@ -1471,10 +1478,28 @@ func closeStraddlePosition(s *straddleRecord, pos *quant.Position, reason string
 	}
 }
 
+// hedgeNotifyWanted decides whether a hedge deserves a Telegram message:
+// manual clicks always do; the loop only reports significant ones
+// (band-size deviations or multi-lot tickets) — routine time top-ups stay
+// in the manager log instead of spamming the chat. Pure — unit-tested.
+func hedgeNotifyWanted(manual bool, dev, band float64, qty int) bool {
+	if manual {
+		return true
+	}
+	if math.Abs(dev) >= band {
+		return true
+	}
+	return qty >= 2 || qty <= -2
+}
+
 // executeStraddleHedge nets/appends a paper futures hedge leg at the
 // executable touch and notifies. Opposite legs net FIFO with realized P&L
-// preserved on the position (never lost). Shared by manual endpoint & loop.
-func executeStraddleHedge(s *straddleRecord, pos *quant.Position, ev straddleEval, spot float64) error {
+// preserved on the position (never lost). Shared by manual endpoint & loop;
+// manual controls whether the Telegram receipt always fires.
+func executeStraddleHedge(s *straddleRecord, pos *quant.Position, ev straddleEval, spot float64, manual bool) error {
+	// Pre-hedge deviation drives the notify gate (post-hedge delta sits on
+	// target by construction and would gate everything shut).
+	dev := pos.Delta - hedgeTargetDelta(s)
 	futSec := straddleFuturesSecID(s, pos)
 	if futSec == "" {
 		return fmt.Errorf("нет фьючерса для хеджа")
@@ -1503,12 +1528,15 @@ func executeStraddleHedge(s *straddleRecord, pos *quant.Position, ev straddleEva
 	s.LastHedgeAt = now.Format(time.RFC3339)
 	s.LastHedgeSpot = spot
 	saveStraddleRecord(*s)
-	msg := fmt.Sprintf("🔧 Стрэддл %s %s: хедж %s %d фьюч (%s)",
-		telegramEscape(s.Symbol), telegramEscape(s.ID), ev.Side, ev.Qty, telegramEscape(ev.Reason))
-	if realized != 0 {
-		msg += fmt.Sprintf(" · закрыто хеджей: %s ₽", formatRub(realized, 0))
+	band := resolveHedgeRules(s.Hedge).DeltaBand
+	if hedgeNotifyWanted(manual, dev, band, ev.Qty) {
+		msg := fmt.Sprintf("🔧 Стрэддл %s %s: хедж %s %d фьюч (%s)",
+			telegramEscape(s.Symbol), telegramEscape(s.ID), ev.Side, ev.Qty, telegramEscape(ev.Reason))
+		if realized != 0 {
+			msg += fmt.Sprintf(" · закрыто хеджей: %s ₽", formatRub(realized, 0))
+		}
+		logTelegramErr("straddle-hedge", sendTelegramMessage(msg))
 	}
-	logTelegramErr("straddle-hedge", sendTelegramMessage(msg))
 	return nil
 }
 

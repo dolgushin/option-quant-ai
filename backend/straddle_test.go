@@ -440,6 +440,33 @@ func TestBuildHedgeViewCoveredTarget(t *testing.T) {
 	}
 }
 
+// TestHedgeNotifyWanted pins the spam gate: manual clicks always notify,
+// the loop only reports band-size deviations or multi-lot tickets.
+func TestHedgeNotifyWanted(t *testing.T) {
+	if !hedgeNotifyWanted(true, 0.1, 1.0, 1) {
+		t.Fatal("manual must always notify")
+	}
+	if !hedgeNotifyWanted(false, 1.5, 1.0, 1) {
+		t.Fatal("band-size deviation must notify")
+	}
+	if !hedgeNotifyWanted(false, 0.3, 1.0, 3) {
+		t.Fatal("multi-lot ticket must notify")
+	}
+	if hedgeNotifyWanted(false, 0.3, 1.0, 1) {
+		t.Fatal("routine time top-up must stay silent")
+	}
+}
+
+// TestDecideFirstHedgeReadsPlainly: the first-ever time fire must not print
+// absurd minutes.
+func TestDecideFirstHedgeReadsPlainly(t *testing.T) {
+	_, _, reason := decideStraddleHedge(0.8, 0, 86000, 86000, 5000,
+		straddleHedgeRules{Rule: hedgeTime, IntervalMin: 60})
+	if !strings.Contains(reason, "первый хедж по времени") {
+		t.Fatalf("want first-hedge text, got %q", reason)
+	}
+}
+
 // TestHedgeSpotForecast pins crossing search on a V-shaped delta curve.
 func TestHedgeSpotForecast(t *testing.T) {
 	spots := []float64{84000, 85000, 86000, 87000, 88000}
