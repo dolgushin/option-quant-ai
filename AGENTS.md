@@ -14,8 +14,12 @@
 - Trade universe is Si + RI only (`coreSymbols`, brief symbols, UI selects trimmed); other symbols' code paths and trade history are untouched.
 - Vertical spreads: `spreads.go` (records/builders/handlers), `spreads_manager.go` (auto-manager loop every 60s + state machine), rules via `POST /api/v1/spreads/rules`, log via `GET /api/v1/spreads/manager`.
 - Core candidates (`core_data.go`): economics sanity (`planEconomicsSane`) → quality floor (`planMeetsQualityFloor`, credit ≥10% wing) → twin check → score (KB 0–100 + PoP ±8 + ATR adjust, RAW — weights never scale it) → gate 45. Skip reasons ride in `brief.Skipped`.
-- Short straddles: `straddle.go` (naked/covered builder, 4 hedge rules via `decideStraddleHedge`, 2× stop, 14d time-stop, profile with theta accrual + hedge forecast).
-- ML scan (`ml_module.go`, `POST /api/v2/ml/scan`) and MC grid scan (`mc_pnl.go`, `POST /api/v1/mc-scan`).
+- Short straddles: `straddle.go` (classic/covered/synthetic builders, 4 hedge rules via `decideStraddleHedge` with cover-aware target, 60s loop with stops, manual hedge button, profile with theta accrual + hedge forecast + leg quote provenance).
+- Futures legs are marked at their own contract (never the selected-series spot); analytics uses the futures mark as curve spot with a suspect flag.
+- Hedge fills are executable book touches only; opposite futures legs net FIFO via `quant.NetFuturesLegs` with realized P&L preserved and journaled once via `quant.SettleTrade` (all close sites including roll intermediates).
+- All automation loops halt on weekends MSK (`weekendHalt`; crypto exempt).
+- No estimate prices anywhere: builders refuse, analytics flags, MC asks for manual input, managers stand down price triggers on estimate spots.
+- ML scan (`ml_module.go`, `POST /api/v2/ml/scan`) and MC grid scan (`mc_pnl.go`, `POST /api/v1/mc-scan`, fixed seed 42).
 - Telegram alerts carry payoff PNGs (`spread_chart.go`, stdlib + `golang.org/x/image` basicfont, light theme); dedup keys persist in `core_state.json` and are marked only after successful send; send failures log as `telegram: … failed:`.
 - Pre-trade decision panel: `spread_advice.go` (`GET /api/v1/spreads/advice`, weighted 0–100 score).
 - MOEX-constructor analytics: `spread_analytics.go` (`GET /api/v1/spreads/analytics?id=…` or plan params) — P&L now (BS at per-leg IV) vs expiry curves, delta/theta curves, per-leg greeks + totals.
@@ -38,7 +42,7 @@
 ## Conventions
 - `KNOWLEDGE.md` is the trading knowledge base; manager defaults and rule semantics reference it by section. Update it together with management-rule changes. `README.md` is the user-facing overview (features, quick start, API map) — keep both in sync when adding modules.
 - Commit style: short imperative English ("Add ...", "Fix ...").
-- Tests are hermetic where possible: decision logic lives in pure functions (`decideSpreadAction`, `classifyExpiry`, `computeStatsOverview`, `mcFan`, `scoreSpreadAdvice`, `buildSpreadAnalytics`, `planEconomicsSane`, `planMeetsQualityFloor`, `popScoreAdjust`, `scanMLCombinations`, `simulateSpreadPnL`, `decideStraddleHedge`, `profileRange`, `managerEarlyWarnings`, `applyLotCap`, `encodeStrategyName`, `tenorOf`) so no network is needed; use `quant.SetDataFile` + temp dirs for store tests.
+- Tests are hermetic where possible: decision logic lives in pure functions (`decideSpreadAction`, `classifyExpiry`, `computeStatsOverview`, `mcFan`, `scoreSpreadAdvice`, `buildSpreadAnalytics`, `planEconomicsSane`, `planMeetsQualityFloor`, `popScoreAdjust`, `scanMLCombinations`, `simulateSpreadPnL`, `decideStraddleHedge`, `hedgeTargetDelta`, `hedgeNotifyWanted`, `profileRange`, `managerEarlyWarnings`, `applyLotCap`, `encodeStrategyName`, `tenorOf`, `analyticsSpot`, `tradingHalted`, `parseStrikesFromSymbols`, `buildStrikeOptions`) so no network is needed; use `quant.SetDataFile` + temp dirs for store tests.
 - The module is no longer stdlib-only: `golang.org/x/image` (basicfont) is used for Telegram payoff-chart labels. Fresh clones need network once for `go mod download`; after that builds/tests are offline via the module cache.
 
 ## Environment gotchas (Windows / PowerShell 5.1)
