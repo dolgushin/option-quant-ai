@@ -136,6 +136,51 @@ func aiQuietHoursNow() bool {
 	return inAiQuietHours(time.Now().In(loc).Hour())
 }
 
+// mskLoc is Moscow time (UTC+3), shared by quiet hours and weekend halt.
+func mskLoc() *time.Location {
+	return time.FixedZone("MSK", 3*60*60)
+}
+
+// isCryptoSymbol reports 24/7 instruments exempt from market-hours gating
+// (ready for the future crypto module).
+func isCryptoSymbol(symbol string) bool {
+	return symbol == "BTC" || symbol == "ETH"
+}
+
+// tradingHalted reports whether automated trading is paused: MOEX is closed
+// on weekends, so loops must not hedge/roll/scan on stale Friday data.
+// Crypto is exempt. Pure — unit-tested.
+func tradingHalted(symbol string, now time.Time) bool {
+	if isCryptoSymbol(symbol) {
+		return false
+	}
+	wd := now.In(mskLoc()).Weekday()
+	return wd == time.Saturday || wd == time.Sunday
+}
+
+var (
+	weekendGateMu       sync.Mutex
+	weekendGateNotified bool
+)
+
+// weekendHalt gates the automation loops (spreads, straddles, autoscan):
+// true while MOEX is closed for the weekend. Logs transitions once instead
+// of spamming every pass. Manual UI actions stay available.
+func weekendHalt() bool {
+	halted := tradingHalted("", time.Now())
+	weekendGateMu.Lock()
+	defer weekendGateMu.Unlock()
+	if halted && !weekendGateNotified {
+		log.Printf("core: weekend halt — automated trading paused")
+		weekendGateNotified = true
+	}
+	if !halted && weekendGateNotified {
+		log.Printf("core: weekend over — automated trading resumed")
+		weekendGateNotified = false
+	}
+	return halted
+}
+
 // callLLM consults an OpenAI-compatible chat completions endpoint.
 func callLLM(brief *coreBrief) (*coreAIVerdict, error) {
 	if coreSet.APIKey == "" || coreSet.BaseURL == "" {
@@ -597,6 +642,10 @@ func coreAutoScanLoop() {
 		coreMu.Unlock()
 		if !enabled {
 			time.Sleep(30 * time.Second)
+			continue
+		}
+		if weekendHalt() {
+			time.Sleep(interval)
 			continue
 		}
 		if v, err := runCoreAnalysis(false); err != nil {

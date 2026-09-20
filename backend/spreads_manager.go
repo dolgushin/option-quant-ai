@@ -100,6 +100,9 @@ func startSpreadManager() {
 	go func() {
 		for {
 			time.Sleep(60 * time.Second)
+			if weekendHalt() {
+				continue
+			}
 			runSpreadManagerPass()
 		}
 	}()

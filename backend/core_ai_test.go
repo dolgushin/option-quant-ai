@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSpreadsAlreadyOpen(t *testing.T) {
@@ -249,6 +250,37 @@ func TestCountPricedInstruments(t *testing.T) {
 	}}
 	if got := countPricedInstruments(b); got != 2 {
 		t.Fatalf("got %d, want 2", got)
+	}
+}
+
+// TestTradingHalted pins the weekend gate in MSK (server locale independent)
+// with the crypto exemption. 2026-09-18/19/20/21 = Fri/Sat/Sun/Mon.
+func TestTradingHalted(t *testing.T) {
+	utc := func(y, m, d, h int) time.Time {
+		return time.Date(y, time.Month(m), d, h, 0, 0, 0, time.UTC)
+	}
+	if tradingHalted("Si", utc(2026, 9, 18, 12)) {
+		t.Fatal("Friday midday must trade")
+	}
+	if !tradingHalted("Si", utc(2026, 9, 19, 12)) {
+		t.Fatal("Saturday must halt")
+	}
+	if !tradingHalted("Si", utc(2026, 9, 20, 12)) {
+		t.Fatal("Sunday must halt")
+	}
+	if tradingHalted("Si", utc(2026, 9, 21, 12)) {
+		t.Fatal("Monday must trade")
+	}
+	// Friday 22:00 UTC is already Saturday in MSK.
+	if !tradingHalted("Si", utc(2026, 9, 18, 22)) {
+		t.Fatal("Friday night UTC is Saturday MSK and must halt")
+	}
+	// Crypto never halts, even on Sunday.
+	if tradingHalted("BTC", utc(2026, 9, 20, 12)) {
+		t.Fatal("BTC must trade 24/7")
+	}
+	if tradingHalted("ETH", utc(2026, 9, 20, 12)) {
+		t.Fatal("ETH must trade 24/7")
 	}
 }
 

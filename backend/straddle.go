@@ -1426,6 +1426,9 @@ func startStraddleManager() {
 	go func() {
 		for {
 			time.Sleep(60 * time.Second)
+			if weekendHalt() {
+				continue
+			}
 			runStraddleManagerPass()
 		}
 	}()
