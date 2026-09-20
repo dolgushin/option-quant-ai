@@ -1767,8 +1767,12 @@
                         const sts = (d2.strikes || []).slice().sort((a, b) => a - b);
                         let atm = 0, best = Infinity;
                         sts.forEach(s => { const dd = Math.abs(s - d.spot); if (dd < best) { best = dd; atm = s; } });
+                        // Same ±7 window as the backend picker.
+                        const below = sts.filter(s => s < atm).slice(-7);
+                        const above = sts.filter(s => s > atm).slice(0, 7);
+                        const win = atm > 0 ? [...below, atm, ...above] : sts;
                         srows = [];
-                        sts.forEach(s => {
+                        win.forEach(s => {
                             if (s === atm && atm > 0) srows.push({ divider: true, label: '━━━ ATM ━━━' });
                             srows.push({ strike: s, label: String(s), atm: s === atm && atm > 0 });
                         });

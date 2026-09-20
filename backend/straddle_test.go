@@ -177,9 +177,9 @@ func TestBuildExpiryOptions(t *testing.T) {
 	}
 }
 
-// TestBuildStrikeOptions pins the ATM divider placement.
+// TestBuildStrikeOptions pins the ATM divider placement and the ±7 window.
 func TestBuildStrikeOptions(t *testing.T) {
-	rows := buildStrikeOptions([]float64{87000, 85000, 86000}, 86000)
+	rows := buildStrikeOptions([]float64{87000, 85000, 86000}, 86000, 7)
 	if len(rows) != 4 {
 		t.Fatalf("got %d rows, want 3 strikes + divider", len(rows))
 	}
@@ -193,9 +193,38 @@ func TestBuildStrikeOptions(t *testing.T) {
 		t.Fatalf("sorting wrong: %+v", rows)
 	}
 	// No ATM (no spot): plain sorted list, no divider.
-	plain := buildStrikeOptions([]float64{86000, 85000}, 0)
+	plain := buildStrikeOptions([]float64{86000, 85000}, 0, 7)
 	if len(plain) != 2 || plain[0].Divider || plain[1].Divider {
 		t.Fatalf("no-ATM must have no divider: %+v", plain)
+	}
+	// Wide grid is windowed to ≤7 below + ATM + ≤7 above (grid edges cap it:
+	// only 6 strikes exist on each side here).
+	wide := []float64{}
+	for s := 80000.0; s <= 92000; s += 1000 {
+		wide = append(wide, s)
+	}
+	win := buildStrikeOptions(wide, 86000, 7)
+	strikes := 0
+	for _, r := range win {
+		if !r.Divider {
+			strikes++
+		}
+	}
+	if strikes != 13 {
+		t.Fatalf("windowed strikes = %d, want 13 (6+ATM+6)", strikes)
+	}
+	if win[0].Strike != 80000 || win[len(win)-1].Strike != 92000 {
+		t.Fatalf("window bounds wrong: %+v", win)
+	}
+	// Divider sits right above ATM.
+	found := false
+	for i, r := range win {
+		if r.Divider && i+1 < len(win) && win[i+1].Strike == 86000 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no divider above ATM: %+v", win)
 	}
 }
 

@@ -686,10 +686,27 @@ type strikeOption struct {
 }
 
 // buildStrikeOptions turns a strike grid into dropdown rows with a divider
-// row glued right above the ATM strike (pure).
-func buildStrikeOptions(strikes []float64, atm float64) []strikeOption {
+// row glued right above the ATM strike, windowed to ±window strikes around
+// it (the full chain is noise — nobody scrolls 60 strikes). window <= 0 or
+// no ATM means the full sorted grid. Pure.
+func buildStrikeOptions(strikes []float64, atm float64, window int) []strikeOption {
 	sorted := append([]float64{}, strikes...)
 	sort.Float64s(sorted)
+	if window > 0 && atm > 0 {
+		low := []float64{}
+		for i := len(sorted) - 1; i >= 0 && len(low) < window; i-- {
+			if sorted[i] < atm {
+				low = append([]float64{sorted[i]}, low...)
+			}
+		}
+		high := []float64{}
+		for _, s := range sorted {
+			if s > atm && len(high) < window {
+				high = append(high, s)
+			}
+		}
+		sorted = append(append(low, atm), high...)
+	}
 	out := []strikeOption{}
 	for _, s := range sorted {
 		if s == atm && atm > 0 {
@@ -699,6 +716,36 @@ func buildStrikeOptions(strikes []float64, atm float64) []strikeOption {
 			Label: fmt.Sprintf("%g", s), ATM: s == atm && atm > 0})
 	}
 	return out
+}
+
+// alorFrontFuturesPrice returns the live quote of the front futures
+// contract (resolved from Alor search by month codes), or 0. Used where a
+// fresh underlying price matters (ATM selection) and getSpotPrice may serve
+// a stale estimate or another series.
+func alorFrontFuturesPrice(symbol string) float64 {
+	if alorMarket == nil {
+		return 0
+	}
+	syms, err := alorMarket.FetchOptionChain(symbol)
+	if err != nil {
+		return 0
+	}
+	code := resolveFuturesAlor(syms, symbol, time.Now())
+	if code == "" {
+		return 0
+	}
+	if q, err := alorMarket.FetchSecurityQuote(code); err == nil && q.Price > 0 {
+		return q.Price
+	}
+	if ob, err := alorMarket.FetchOrderbook("MOEX", code); err == nil {
+		if len(ob.Bids) > 0 && len(ob.Asks) > 0 && ob.Bids[0].Price > 0 && ob.Asks[0].Price >= ob.Bids[0].Price {
+			return (ob.Bids[0].Price + ob.Asks[0].Price) / 2
+		}
+		if len(ob.Bids) > 0 && ob.Bids[0].Price > 0 {
+			return ob.Bids[0].Price
+		}
+	}
+	return 0
 }
 
 // parseStrikesFromSymbols extracts the strike grid from Alor instrument
@@ -966,7 +1013,13 @@ func straddleMetaHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	today := now.Format("2006-01-02")
-	spot, _ := getSpotPrice(symbol)
+	// Live spot prefers the front futures' own Alor quote: getSpotPrice may
+	// serve a stale estimate or a different series, which then plants a
+	// wrong ATM strike (e.g. 83000 instead of live 86000).
+	spot := alorFrontFuturesPrice(symbol)
+	if spot <= 0 {
+		spot, _ = getSpotPrice(symbol)
+	}
 
 	dates := []string{}
 	for _, s := range optionSeriesForSymbol(symbol) {
@@ -999,7 +1052,7 @@ func straddleMetaHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"symbol": symbol, "spot": math.Round(spot*100) / 100,
-		"expiries": expiries, "strikes": buildStrikeOptions(strikes, atm),
+		"expiries": expiries, "strikes": buildStrikeOptions(strikes, atm, 7),
 		"atm_strike": atm, "chain_expiry": pick,
 	})
 }
