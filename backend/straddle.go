@@ -1295,6 +1295,7 @@ func straddleListHandler(w http.ResponseWriter, r *http.Request) {
 			item["entry_value"] = math.Round(pos.EntryValue*100) / 100
 			item["current_value"] = math.Round(pos.CurrentValue*100) / 100
 			item["net_delta"] = math.Round(pos.Delta*100) / 100
+			item["margin"] = math.Round(pos.Margin)
 		} else {
 			item["note"] = "позиция не найдена"
 		}

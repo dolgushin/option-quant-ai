@@ -1824,7 +1824,7 @@
                 }
                 let html = `<table class="w-full text-left text-[11px] font-mono text-slate-300">
                     <thead class="text-slate-500 border-b border-slate-700 uppercase">
-                    <tr><th class="py-1 pr-2">Стрэддл</th><th class="py-1 pr-2 text-right">Страйк</th><th class="py-1 pr-2 text-right">DTE</th><th class="py-1 pr-2 text-right">К-во</th><th class="py-1 pr-2 text-right">Кредит ₽</th><th class="py-1 pr-2 text-right">P&L ₽</th><th class="py-1 pr-2 text-right">Δ</th><th class="py-1 pr-2">Хедж</th><th class="py-1"></th></tr>
+                    <tr><th class="py-1 pr-2">Стрэддл</th><th class="py-1 pr-2 text-right">Страйк</th><th class="py-1 pr-2 text-right">DTE</th><th class="py-1 pr-2 text-right">К-во</th><th class="py-1 pr-2 text-right">Кредит ₽</th><th class="py-1 pr-2 text-right">P&L ₽</th><th class="py-1 pr-2 text-right">ГО ₽</th><th class="py-1 pr-2 text-right">Δ</th><th class="py-1 pr-2">Хедж</th><th class="py-1"></th></tr>
                     </thead><tbody>`;
                 d.straddles.forEach(s => {
                     const pnlCls = (s.pnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400';
@@ -1837,12 +1837,13 @@
                         <td class="py-1 pr-2 text-right">${s.qty}</td>
                         <td class="py-1 pr-2 text-right text-sky-300">${(s.net_credit || 0).toLocaleString('ru-RU')}</td>
                         <td class="py-1 pr-2 text-right font-bold ${pnlCls}">${(s.pnl || 0) >= 0 ? '+' : ''}${(s.pnl || 0).toLocaleString('ru-RU')}</td>
+                        <td class="py-1 pr-2 text-right text-amber-300">${(s.margin || 0).toLocaleString('ru-RU')}</td>
                         <td class="py-1 pr-2 text-right">${s.net_delta || 0}</td>
                         <td class="py-1 pr-2 text-slate-400">${s.hedge_rule || ''} ×${s.hedge_count || 0}</td>
                         <td class="py-1 text-right whitespace-nowrap"><button onclick="toggleStraddleProfile('${s.id}')" class="px-2 py-1 text-[10px] bg-indigo-700 hover:bg-indigo-600 text-white rounded transition">📊 Профиль</button>
                         <button onclick="hedgeStraddle('${s.id}')" class="px-2 py-1 text-[10px] bg-sky-700 hover:bg-sky-600 text-white rounded transition">⚖ Хедж</button>
                         <button onclick="closeStraddle('${s.id}')" class="px-2 py-1 text-[10px] bg-rose-700 hover:bg-rose-600 text-white rounded transition">✕ Закрыть</button></td></tr>
-                    <tr id="strd-${s.id}" class="hidden"><td colspan="9" class="p-0 border-b border-slate-800 bg-slate-900/40"><div id="strd-box-${s.id}" class="p-3"></div></td></tr>`;
+                    <tr id="strd-${s.id}" class="hidden"><td colspan="10" class="p-0 border-b border-slate-800 bg-slate-900/40"><div id="strd-box-${s.id}" class="p-3"></div></td></tr>`;
                 });
                 el.innerHTML = html + '</tbody></table>';
             } catch (e) { el.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${e.message}</div>`; }
