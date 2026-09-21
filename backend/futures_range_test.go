@@ -201,3 +201,47 @@ func TestAggregateBars(t *testing.T) {
 		t.Fatalf("bucket1 = %+v", bars[1])
 	}
 }
+
+func TestArbAlign(t *testing.T) {
+	mk := func(day, hh, mm int, close float64) rangeOHLC {
+		return rangeOHLC{
+			Date: time.Date(2026, 9, day, hh, mm, 0, 0, time.UTC),
+			Open: close, High: close, Low: close, Close: close,
+		}
+	}
+	// Si ~85000, ED ~1.15: after rebase both start at 100.
+	a := []rangeOHLC{mk(21, 10, 0, 85000), mk(21, 11, 0, 85850), mk(21, 12, 0, 84150)}
+	b := []rangeOHLC{mk(21, 10, 0, 1.15), mk(21, 11, 0, 1.1615), mk(21, 13, 0, 1.17)}
+	times, ai, bi, sp := arbAlign(a, b)
+	if len(times) != 2 { // 12:00 has no ED bar → inner join drops it
+		t.Fatalf("joined = %d, want 2", len(times))
+	}
+	if ai[0] != 100 || bi[0] != 100 || sp[0] != 0 {
+		t.Fatalf("start = %v %v %v, want 100 100 0", ai[0], bi[0], sp[0])
+	}
+	if math.Abs(ai[1]-101) > 1e-9 || math.Abs(bi[1]-101) > 1e-9 {
+		t.Fatalf("+1%% legs = %v %v", ai[1], bi[1])
+	}
+	if math.Abs(sp[1]) > 1e-9 {
+		t.Fatalf("spread of co-moved legs = %v, want 0", sp[1])
+	}
+	if _, _, _, s := arbAlign(nil, b); s != nil {
+		t.Fatalf("empty leg must give nil spread")
+	}
+}
+
+func TestArbStats(t *testing.T) {
+	last, mean, std, z := arbStats([]float64{1, 2, 3})
+	if last != 3 || mean != 2 {
+		t.Fatalf("last/mean = %v %v", last, mean)
+	}
+	if math.Abs(std-math.Sqrt(2.0/3)) > 1e-9 {
+		t.Fatalf("std = %v", std)
+	}
+	if math.Abs(z-1/math.Sqrt(2.0/3)) > 1e-6 {
+		t.Fatalf("z = %v", z)
+	}
+	if l, m, s, zz := arbStats(nil); l != 0 || m != 0 || s != 0 || zz != 0 {
+		t.Fatalf("empty stats must be zero")
+	}
+}

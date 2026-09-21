@@ -960,6 +960,36 @@
                 <div id="rg-table-title" class="text-[11px] text-slate-400 font-mono mb-2">По дням</div>
                 <div id="rg-table" class="overflow-x-auto"></div>
             </div>
+            <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                <div class="flex justify-between items-center flex-wrap gap-2 mb-2">
+                    <h3 class="text-sm font-semibold text-slate-200">⚖️ Арбитраж пары: расхождение ног</h3>
+                    <div class="flex items-center gap-1 font-mono text-[11px]">
+                        <select id="rg-arb-a" onchange="loadRangesArb()" class="bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-white">
+                            <option value="Si">Si</option>
+                            <option value="ED">ED</option>
+                            <option value="RI">RI</option>
+                        </select>
+                        <span class="text-slate-500">/</span>
+                        <select id="rg-arb-b" onchange="loadRangesArb()" class="bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-white">
+                            <option value="Si">Si</option>
+                            <option value="ED" selected>ED</option>
+                            <option value="RI">RI</option>
+                        </select>
+                        <select id="rg-arb-tf" onchange="loadRangesArb()" class="bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-white">
+                            <option value="5">5 мин</option>
+                            <option value="10">10 мин</option>
+                            <option value="60" selected>1 час</option>
+                        </select>
+                        <button id="rg-arb-w100" onclick="setRgArbWin(100)" class="px-2.5 py-1.5 bg-slate-900 text-slate-300 border border-slate-700 rounded-lg transition">100</button>
+                        <button id="rg-arb-w200" onclick="setRgArbWin(200)" class="px-2.5 py-1.5 bg-slate-900 text-slate-300 border border-slate-700 rounded-lg transition">200</button>
+                        <button id="rg-arb-w400" onclick="setRgArbWin(0)" class="px-2.5 py-1.5 bg-emerald-600 text-white font-bold rounded-lg transition">Все</button>
+                        <button onclick="loadRangesArb()" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg transition">Обновить</button>
+                    </div>
+                </div>
+                <div class="text-[11px] text-slate-500 font-mono mb-2">Обе ноги приведены к 100 на старте окна — масштаб цен больше не важен. Зазор между линиями — расхождение в п.п.; пунктир — его величина. Кнопки 100/200/Все — масштаб (окно последних баров).</div>
+                <div id="rg-arb-stats" class="font-mono text-[11px] text-slate-400 mb-2"></div>
+                <div class="relative" style="height:360px"><canvas id="rg-arb-chart"></canvas></div>
+            </div>
         </div>
 
         <!-- Forecast Module -->
@@ -1539,6 +1569,7 @@
             try {
                 const tRes = await fetch('/api/v1/range/today?symbols=' + encodeURIComponent(symbol));
                 renderRangesToday(await tRes.json(), symbol);
+                loadRangesArb();
                 if (rgTF === 'day') {
                     const [hRes, wRes] = await Promise.all([
                         fetch('/api/v1/range/history?symbol=' + encodeURIComponent(symbol) + '&days=' + days),
@@ -1710,6 +1741,81 @@
                             y: { ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 7 }, grid: { color: '#1e293b' } },
                         },
                         plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 9 }, boxWidth: 12 } } },
+                    },
+                });
+            }
+        }
+
+        let rgArbChart = null;
+        let rgArbWin = 0; // 0 = all
+        let rgArbData = null;
+
+        function setRgArbWin(n) {
+            rgArbWin = n;
+            [['rg-arb-w100', 100], ['rg-arb-w200', 200], ['rg-arb-w400', 0]].forEach(([id, v]) => {
+                const b = document.getElementById(id);
+                if (b) b.className = (v === n)
+                    ? 'px-2.5 py-1.5 bg-emerald-600 text-white font-bold rounded-lg transition'
+                    : 'px-2.5 py-1.5 bg-slate-900 text-slate-300 border border-slate-700 rounded-lg transition';
+            });
+            if (rgArbData) renderRangesArb(rgArbData);
+        }
+
+        async function loadRangesArb() {
+            const aEl = document.getElementById('rg-arb-a');
+            const bEl = document.getElementById('rg-arb-b');
+            const tfEl = document.getElementById('rg-arb-tf');
+            const a = aEl ? aEl.value : 'Si';
+            const b = bEl ? bEl.value : 'ED';
+            const tf = tfEl ? tfEl.value : '60';
+            const box = document.getElementById('rg-arb-stats');
+            if (box) box.textContent = 'Загружаю пару…';
+            try {
+                const res = await fetch('/api/v1/range/arb?a=' + encodeURIComponent(a) + '&b=' + encodeURIComponent(b) + '&tf=' + encodeURIComponent(tf));
+                const d = await res.json();
+                rgArbData = d;
+                renderRangesArb(d);
+            } catch (e) {
+                console.error('Arb failed', e);
+                if (box) box.innerHTML = '<span class="text-rose-400">Не удалось загрузить пару: MOEX недоступна.</span>';
+            }
+        }
+
+        function renderRangesArb(d) {
+            const box = document.getElementById('rg-arb-stats');
+            const canvas = document.getElementById('rg-arb-chart');
+            if (!d || d.error) {
+                if (box) box.innerHTML = '<span class="text-rose-400">MOEX недоступна: ' + (d && d.error ? d.error : 'ошибка') + '</span>';
+                if (rgArbChart) { rgArbChart.destroy(); rgArbChart = null; }
+                return;
+            }
+            let times = d.times || [], ad = d.a_data || [], bd = d.b_data || [], sp = d.spread || [];
+            if (rgArbWin > 0 && times.length > rgArbWin) {
+                times = times.slice(-rgArbWin); ad = ad.slice(-rgArbWin); bd = bd.slice(-rgArbWin); sp = sp.slice(-rgArbWin);
+            }
+            const z = d.z || 0;
+            const zCls = Math.abs(z) >= 2 ? 'text-rose-400' : Math.abs(z) >= 1 ? 'text-amber-300' : 'text-emerald-400';
+            if (box) box.innerHTML = `Пара <span class="text-slate-100 font-bold">${d.a}/${d.b}</span> · баров: ${times.length} · расхождение сейчас: <span class="text-slate-100 font-bold">${d.spread_last} п.п.</span> · среднее: ${d.spread_mean} · σ: ${d.spread_std} · z: <span class="${zCls} font-bold">${z > 0 ? '+' : ''}${d.z}</span>`;
+            if (canvas && typeof Chart !== 'undefined' && times.length) {
+                if (rgArbChart) rgArbChart.destroy();
+                rgArbChart = new Chart(canvas.getContext('2d'), {
+                    type: 'line',
+                    data: {
+                        labels: times.map(t => t.slice(5)),
+                        datasets: [
+                            { label: d.a + ' (к 100)', data: ad, borderColor: '#34d399', borderWidth: 2, pointRadius: 0, fill: false },
+                            { label: d.b + ' (к 100)', data: bd, borderColor: '#fbbf24', borderWidth: 2, pointRadius: 0, fill: false },
+                            { label: 'Расхождение, п.п.', data: sp, borderColor: 'rgba(251,113,133,.8)', borderWidth: 1, borderDash: [5, 4], pointRadius: 0, fill: false },
+                        ],
+                    },
+                    options: {
+                        animation: false,
+                        interaction: { mode: 'index', intersect: false },
+                        scales: {
+                            x: { ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 14 }, grid: { color: '#1e293b' } },
+                            y: { ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 9 }, grid: { color: '#1e293b' } },
+                        },
+                        plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 10 }, boxWidth: 14 } } },
                     },
                 });
             }

@@ -946,3 +946,155 @@ func rangeIntradayPayload(symbol, secid string, tf int, bars []rangeBar) map[str
 		"avg_range": avg, "max_range": maxR, "count": len(bars), "bars": bars,
 	}
 }
+
+// ---- pair arbitrage: two legs rebased to 100 on one chart ----
+
+// arbAlign joins two legs' closes on common timestamps (inner join, oldest
+// first) and rebases each leg to 100 at the window start, so instruments of
+// wildly different magnitude (Si ~85000, ED ~1.15) share one scale without
+// any manual ×10/×100 hacks. The gap between the lines is the divergence in
+// percentage points. Pure — covered by unit tests.
+func arbAlign(a, b []rangeOHLC) (times []string, aIdx, bIdx, spread []float64) {
+	ma := map[string]float64{}
+	for _, c := range a {
+		ma[c.Date.Format("2006-01-02 15:04")] = c.Close
+	}
+	mb := map[string]float64{}
+	for _, c := range b {
+		mb[c.Date.Format("2006-01-02 15:04")] = c.Close
+	}
+	keys := []string{}
+	for k := range ma {
+		if _, ok := mb[k]; ok {
+			keys = append(keys, k)
+		}
+	}
+	for i := 0; i < len(keys); i++ {
+		for j := i + 1; j < len(keys); j++ {
+			if keys[j] < keys[i] {
+				keys[i], keys[j] = keys[j], keys[i]
+			}
+		}
+	}
+	if len(keys) == 0 {
+		return nil, nil, nil, nil
+	}
+	a0, b0 := ma[keys[0]], mb[keys[0]]
+	if a0 <= 0 || b0 <= 0 {
+		return nil, nil, nil, nil
+	}
+	for _, k := range keys {
+		ai := ma[k] / a0 * 100
+		bi := mb[k] / b0 * 100
+		times = append(times, k)
+		aIdx = append(aIdx, math.Round(ai*10000)/10000)
+		bIdx = append(bIdx, math.Round(bi*10000)/10000)
+		spread = append(spread, math.Round((ai-bi)*10000)/10000)
+	}
+	return times, aIdx, bIdx, spread
+}
+
+// arbStats summarizes the spread series: last, mean, std and z-score.
+// Pure — covered by unit tests.
+func arbStats(spread []float64) (last, mean, std, z float64) {
+	if len(spread) == 0 {
+		return 0, 0, 0, 0
+	}
+	last = spread[len(spread)-1]
+	sum := 0.0
+	for _, v := range spread {
+		sum += v
+	}
+	mean = sum / float64(len(spread))
+	var sq float64
+	for _, v := range spread {
+		sq += (v - mean) * (v - mean)
+	}
+	std = math.Sqrt(sq / float64(len(spread)))
+	if std > 0 {
+		z = (last - mean) / std
+	}
+	return last, mean, std, z
+}
+
+type rangeArbEntry struct {
+	at   time.Time
+	data map[string]interface{}
+}
+
+var (
+	rangeArbMu    sync.Mutex
+	rangeArbCache = map[string]rangeArbEntry{}
+)
+
+// rangeArbHandler returns two rebased legs plus their divergence series.
+// URL: /api/v1/range/arb?a=Si&b=ED&tf=60
+func rangeArbHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	symA := normalizeRangeSymbol(r.URL.Query().Get("a"))
+	if symA == "" {
+		symA = "Si"
+	}
+	symB := normalizeRangeSymbol(r.URL.Query().Get("b"))
+	if symB == "" {
+		symB = "ED"
+	}
+	tf := parseRangeTF(r.URL.Query().Get("tf"))
+	if r.URL.Query().Get("tf") == "" {
+		tf = 60
+	}
+	key := symA + "|" + symB + "|" + strconv.Itoa(tf)
+
+	rangeArbMu.Lock()
+	if e, ok := rangeArbCache[key]; ok && time.Since(e.at) < time.Minute {
+		d := e.data
+		rangeArbMu.Unlock()
+		json.NewEncoder(w).Encode(d)
+		return
+	}
+	rangeArbMu.Unlock()
+
+	secA := resolveRangeCode(symA)
+	secB := resolveRangeCode(symB)
+	if secA == "" || secB == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "нет серии для пары"})
+		return
+	}
+	from := time.Now().AddDate(0, 0, -6).Format("2006-01-02")
+	till := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	ca, err := fetchIntradayCandles(secA, tf, from, till)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+		return
+	}
+	cb, err := fetchIntradayCandles(secB, tf, from, till)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+		return
+	}
+	times, aIdx, bIdx, spread := arbAlign(ca, cb)
+	const maxPts = 400
+	if len(times) > maxPts {
+		times = times[len(times)-maxPts:]
+		aIdx = aIdx[len(aIdx)-maxPts:]
+		bIdx = bIdx[len(bIdx)-maxPts:]
+		spread = spread[len(spread)-maxPts:]
+	}
+	last, mean, std, z := arbStats(spread)
+	if times == nil {
+		times = []string{}
+	}
+	payload := map[string]interface{}{
+		"a": symA, "b": symB, "seca": secA, "secb": secB, "tf": tf,
+		"times": times, "a_data": aIdx, "b_data": bIdx, "spread": spread,
+		"spread_last": math.Round(last*1000) / 1000,
+		"spread_mean": math.Round(mean*1000) / 1000,
+		"spread_std":  math.Round(std*1000) / 1000,
+		"z":           math.Round(z*100) / 100,
+		"count":       len(times),
+	}
+	rangeArbMu.Lock()
+	rangeArbCache[key] = rangeArbEntry{at: time.Now(), data: payload}
+	rangeArbMu.Unlock()
+	json.NewEncoder(w).Encode(payload)
+}
