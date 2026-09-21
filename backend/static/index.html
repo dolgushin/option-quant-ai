@@ -1803,9 +1803,9 @@
                     data: {
                         labels: times.map(t => t.slice(5)),
                         datasets: [
-                            { label: d.a + ' (к 100)', data: ad, borderColor: '#34d399', borderWidth: 2, pointRadius: 0, fill: false },
-                            { label: d.b + ' (к 100)', data: bd, borderColor: '#fbbf24', borderWidth: 2, pointRadius: 0, fill: false },
-                            { label: 'Расхождение, п.п.', data: sp, borderColor: 'rgba(251,113,133,.8)', borderWidth: 1, borderDash: [5, 4], pointRadius: 0, fill: false },
+                            { label: d.a + ' (к 100)', data: ad, borderColor: '#34d399', borderWidth: 2, pointRadius: 0, fill: false, yAxisID: 'y' },
+                            { label: d.b + ' (к 100)', data: bd, borderColor: '#fbbf24', borderWidth: 2, pointRadius: 0, fill: false, yAxisID: 'y' },
+                            { label: 'Расхождение, п.п.', data: sp, borderColor: 'rgba(251,113,133,.8)', borderWidth: 1, borderDash: [5, 4], pointRadius: 0, fill: false, yAxisID: 'y1' },
                         ],
                     },
                     options: {
@@ -1813,7 +1813,8 @@
                         interaction: { mode: 'index', intersect: false },
                         scales: {
                             x: { ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 14 }, grid: { color: '#1e293b' } },
-                            y: { ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 9 }, grid: { color: '#1e293b' } },
+                            y: { position: 'left', title: { display: true, text: 'Ноги (к 100)', color: '#64748b', font: { size: 9 } }, ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 9 }, grid: { color: '#1e293b' } },
+                            y1: { position: 'right', title: { display: true, text: 'Спред, п.п.', color: '#64748b', font: { size: 9 } }, ticks: { color: '#fda4af', font: { size: 9 }, maxTicksLimit: 9 }, grid: { drawOnChartArea: false } },
                         },
                         plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 10 }, boxWidth: 14 } } },
                     },
