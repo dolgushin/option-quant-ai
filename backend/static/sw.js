@@ -1,4 +1,4 @@
-const CACHE = 'optionquant-v2';
+const CACHE = 'optionquant-v3';
 const CORE = [
   '/',
   '/manifest.json',
@@ -27,6 +27,23 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET') return;
   if (url.origin !== self.location.origin && !url.hostname.endsWith('cdn.jsdelivr.net') && url.hostname !== 'cdn.tailwindcss.com') return;
+
+  // HTML shell: network-first, so redeploys show up on the next visit
+  // instead of hiding behind the app-shell cache (offline still works).
+  if (url.pathname === '/' || url.pathname.endsWith('.html')) {
+    e.respondWith(
+      fetch(e.request)
+        .then((resp) => {
+          if (resp && resp.status === 200) {
+            const copy = resp.clone();
+            caches.open(CACHE).then((c) => c.put(e.request, copy));
+          }
+          return resp;
+        })
+        .catch(() => caches.match(e.request, { ignoreSearch: true }))
+    );
+    return;
+  }
 
   e.respondWith(
     caches.open(CACHE).then(async (cache) => {
