@@ -696,3 +696,253 @@ func rangeWeeksHandler(w http.ResponseWriter, r *http.Request) {
 		"symbol": symbol, "secid": secid, "weeks": all,
 	})
 }
+
+// ---- intraday ranges (5 / 10 / 60 minutes) ----
+
+// rangeBar is one intraday candle with its travelled range.
+type rangeBar struct {
+	Time   string  `json:"time"` // YYYY-MM-DD HH:MM
+	Open   float64 `json:"open"`
+	High   float64 `json:"high"`
+	Low    float64 `json:"low"`
+	Close  float64 `json:"close"`
+	Range  float64 `json:"range"` // high - low, points
+	Volume float64 `json:"volume"`
+}
+
+// parseRangeTF whitelists the intraday timeframe minutes.
+func parseRangeTF(s string) int {
+	switch s {
+	case "5", "10", "60":
+		n, _ := strconv.Atoi(s)
+		return n
+	default:
+		return 5
+	}
+}
+
+// fetchIntradayCandles pulls intraday O/H/L/C bars for a FORTS secid.
+// ISS interval is in minutes; rows come back oldest-first. ISS pages at 500
+// rows, so we follow `start` offsets until a short page (cap 2500 rows).
+// intervals 5/15/30 come back empty on the futures board, so tf=5 is served
+// by aggregating 1-minute candles (aggregateBars).
+func fetchIntradayCandles(secid string, tf int, from, till string) ([]rangeOHLC, error) {
+	interval := tf
+	if tf == 5 {
+		interval = 1
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	out := []rangeOHLC{}
+	for start := 0; start < 2500; start += 500 {
+		url := fmt.Sprintf("http://iss.moex.com/iss/engines/futures/markets/forts/boards/RFUD/securities/%s/candles.json?iss.meta=off&from=%s&till=%s&interval=%d&start=%d&candles.columns=begin,open,high,low,close,volume",
+			secid, from, till, interval, start)
+		resp, err := client.Get(url)
+		if err != nil {
+			return nil, err
+		}
+		var data struct {
+			Candles struct {
+				Data [][]interface{} `json:"data"`
+			} `json:"candles"`
+		}
+		derr := json.NewDecoder(resp.Body).Decode(&data)
+		resp.Body.Close()
+		if derr != nil {
+			return nil, derr
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("iss intraday status %d for %s", resp.StatusCode, secid)
+		}
+		n := 0
+		for _, row := range data.Candles.Data {
+			if len(row) < 5 {
+				continue
+			}
+			begin, _ := row[0].(string)
+			t, err := time.Parse("2006-01-02 15:04:05", begin)
+			if err != nil {
+				continue
+			}
+			c := rangeOHLC{
+				Date:  t,
+				Open:  parseRangeNumber(row[1]),
+				High:  parseRangeNumber(row[2]),
+				Low:   parseRangeNumber(row[3]),
+				Close: parseRangeNumber(row[4]),
+			}
+			if len(row) >= 6 {
+				if v := parseRangeNumber(row[5]); v > 0 {
+					c.Volume, c.VolumeKnown = v, true
+				}
+			}
+			if c.Close <= 0 || c.High <= 0 || c.Low <= 0 {
+				continue
+			}
+			if c.Open <= 0 {
+				c.Open = c.Close
+			}
+			out = append(out, c)
+			n++
+		}
+		if n < 500 {
+			break
+		}
+	}
+	if tf == 5 {
+		out = aggregateBars(out, 5)
+	}
+	return out, nil
+}
+
+// aggregateBars folds 1-minute candles into n-minute buckets (bucket start =
+// minute floored to n). Pure — covered by unit tests.
+func aggregateBars(candles []rangeOHLC, n int) []rangeOHLC {
+	out := []rangeOHLC{}
+	var cur *rangeOHLC
+	flush := func() {
+		if cur != nil {
+			out = append(out, *cur)
+			cur = nil
+		}
+	}
+	for _, c := range candles {
+		// Floor wall-clock minutes so bars align to :00/:05/:10…
+		// (time.Truncate would align to UTC midnight instead).
+		y, mo, dd := c.Date.Date()
+		hh, mm, _ := c.Date.Clock()
+		bucket := time.Date(y, mo, dd, hh, mm/n*n, 0, 0, c.Date.Location())
+		if cur == nil || !cur.Date.Equal(bucket) {
+			flush()
+			cp := c
+			cp.Date = bucket
+			cur = &cp
+			continue
+		}
+		if c.High > cur.High {
+			cur.High = c.High
+		}
+		if c.Low < cur.Low {
+			cur.Low = c.Low
+		}
+		cur.Close = c.Close
+		cur.Volume += c.Volume
+		cur.VolumeKnown = cur.VolumeKnown || c.VolumeKnown
+	}
+	flush()
+	return out
+}
+
+// buildIntradayBars converts raw bars into API rows with per-bar ranges.
+// Pure — covered by unit tests.
+func buildIntradayBars(symbol string, candles []rangeOHLC) []rangeBar {
+	out := make([]rangeBar, 0, len(candles))
+	for _, c := range candles {
+		out = append(out, rangeBar{
+			Time:   c.Date.Format("2006-01-02 15:04"),
+			Open:   rangeRound(symbol, c.Open),
+			High:   rangeRound(symbol, c.High),
+			Low:    rangeRound(symbol, c.Low),
+			Close:  rangeRound(symbol, c.Close),
+			Range:  rangeRound(symbol, c.High-c.Low),
+			Volume: c.Volume,
+		})
+	}
+	return out
+}
+
+// intradayAvgRange is the mean bar range over the window. Pure.
+func intradayAvgRange(bars []rangeBar) float64 {
+	if len(bars) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, b := range bars {
+		sum += b.Range
+	}
+	return sum / float64(len(bars))
+}
+
+type rangeIntraEntry struct {
+	at   time.Time
+	bars []rangeBar
+	sec  string
+}
+
+var (
+	rangeIntraMu    sync.Mutex
+	rangeIntraCache = map[string]rangeIntraEntry{}
+)
+
+// rangeIntradayHandler returns per-bar travelled ranges for today (+previous
+// session for context), capped to the freshest bars.
+// URL: /api/v1/range/intraday?symbol=Si&tf=5|10|60
+func rangeIntradayHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	symbol := normalizeRangeSymbol(r.URL.Query().Get("symbol"))
+	if symbol == "" {
+		symbol = "Si"
+	}
+	tf := parseRangeTF(r.URL.Query().Get("tf"))
+	key := fmt.Sprintf("%s|%d", symbol, tf)
+
+	rangeIntraMu.Lock()
+	if e, ok := rangeIntraCache[key]; ok && time.Since(e.at) < time.Minute {
+		bars, sec := e.bars, e.sec
+		rangeIntraMu.Unlock()
+		json.NewEncoder(w).Encode(rangeIntradayPayload(symbol, sec, tf, bars))
+		return
+	}
+	rangeIntraMu.Unlock()
+
+	secid := resolveRangeCode(symbol)
+	if secid == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": fmt.Sprintf("нет фьючерсной серии для %s", symbol)})
+		return
+	}
+	// Two trading days cover today plus context; till is tomorrow so the
+	// still-forming evening bar is included.
+	from := time.Now().AddDate(0, 0, -3).Format("2006-01-02")
+	till := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	candles, err := fetchIntradayCandles(secid, tf, from, till)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+		return
+	}
+	bars := buildIntradayBars(symbol, candles)
+	// FORTS day is long (07:00–23:50 MSK): keep the freshest ~400 bars so
+	// the chart stays readable (≈2 sessions on 5m, ≈a week on 60m).
+	const maxBars = 400
+	if len(bars) > maxBars {
+		bars = bars[len(bars)-maxBars:]
+	}
+	rangeIntraMu.Lock()
+	rangeIntraCache[key] = rangeIntraEntry{at: time.Now(), bars: bars, sec: secid}
+	rangeIntraMu.Unlock()
+	json.NewEncoder(w).Encode(rangeIntradayPayload(symbol, secid, tf, bars))
+}
+
+// rangeIntradayPayload shapes the intraday response incl. the mean bar range
+// (the reference line on the chart) and the max bar.
+func rangeIntradayPayload(symbol, secid string, tf int, bars []rangeBar) map[string]interface{} {
+	avg := intradayAvgRange(bars)
+	maxR := 0.0
+	for _, b := range bars {
+		if b.Range > maxR {
+			maxR = b.Range
+		}
+	}
+	if symbol == "ED" {
+		avg = math.Round(avg*10000) / 10000
+		maxR = math.Round(maxR*10000) / 10000
+	} else {
+		avg = math.Round(avg)
+		maxR = math.Round(maxR)
+	}
+	if bars == nil {
+		bars = []rangeBar{}
+	}
+	return map[string]interface{}{
+		"symbol": symbol, "secid": secid, "tf": tf,
+		"avg_range": avg, "max_range": maxR, "count": len(bars), "bars": bars,
+	}
+}

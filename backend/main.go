@@ -3653,6 +3653,7 @@ func main() {
 	http.HandleFunc("/api/v1/range/today", rangeTodayHandler)
 	http.HandleFunc("/api/v1/range/history", rangeHistoryHandler)
 	http.HandleFunc("/api/v1/range/weeks", rangeWeeksHandler)
+	http.HandleFunc("/api/v1/range/intraday", rangeIntradayHandler)
 	http.HandleFunc("/api/v2/ml/train", mlTrainHandler)
 	http.HandleFunc("/api/v2/ml/predict", mlPredictHandler)
 	http.HandleFunc("/api/v2/ml/scan", mlScanHandler)

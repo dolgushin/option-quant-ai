@@ -940,17 +940,24 @@
                 </div>
             </div>
             <div class="text-[11px] text-slate-500 font-mono">Сколько пунктов проходит фьючерс каждый день с открытия рынка и какую долю дневного ATR(14) это составляет. Недельный блок — сумма дневных диапазонов и размах недели.</div>
+            <div class="flex items-center gap-1 font-mono text-[11px]">
+                <span class="text-slate-500 mr-1">Таймфрейм графика и таблицы:</span>
+                <button id="rg-tf-day" onclick="setRgTF('day')" class="px-3 py-1.5 bg-emerald-600 text-white font-bold rounded-lg transition">День</button>
+                <button id="rg-tf-5" onclick="setRgTF('5')" class="px-3 py-1.5 bg-slate-900 text-slate-300 border border-slate-700 rounded-lg transition">5 мин</button>
+                <button id="rg-tf-10" onclick="setRgTF('10')" class="px-3 py-1.5 bg-slate-900 text-slate-300 border border-slate-700 rounded-lg transition">10 мин</button>
+                <button id="rg-tf-60" onclick="setRgTF('60')" class="px-3 py-1.5 bg-slate-900 text-slate-300 border border-slate-700 rounded-lg transition">1 час</button>
+            </div>
             <div id="rg-today" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
             <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
-                <div class="text-[11px] text-slate-400 font-mono mb-2">Дневной диапазон vs ATR(14), пунктов</div>
+                <div id="rg-chart-title" class="text-[11px] text-slate-400 font-mono mb-2">Дневной диапазон vs ATR(14), пунктов</div>
                 <div class="relative" style="height:220px"><canvas id="rg-chart"></canvas></div>
             </div>
-            <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+            <div id="rg-weeks-wrap" class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
                 <div class="text-[11px] text-slate-400 font-mono mb-2">По неделям (пн–пт)</div>
                 <div id="rg-weeks" class="overflow-x-auto"></div>
             </div>
             <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
-                <div class="text-[11px] text-slate-400 font-mono mb-2">По дням</div>
+                <div id="rg-table-title" class="text-[11px] text-slate-400 font-mono mb-2">По дням</div>
                 <div id="rg-table" class="overflow-x-auto"></div>
             </div>
         </div>
@@ -1484,6 +1491,30 @@
 
         // ---- Futures daily ranges (Si / ED): travelled points + ATR share ----
         let rgChart = null;
+        let rgTF = 'day'; // day | 5 | 10 | 60
+        const rgTFOn = 'px-3 py-1.5 bg-emerald-600 text-white font-bold rounded-lg transition';
+        const rgTFOff = 'px-3 py-1.5 bg-slate-900 text-slate-300 border border-slate-700 rounded-lg transition';
+
+        function setRgTF(tf) {
+            rgTF = tf;
+            ['day', '5', '10', '60'].forEach(k => {
+                const b = document.getElementById('rg-tf-' + k);
+                if (b) b.className = (k === tf) ? rgTFOn : rgTFOff;
+            });
+            const daysEl = document.getElementById('rg-days');
+            if (daysEl) daysEl.style.display = tf === 'day' ? '' : 'none';
+            const weeksWrap = document.getElementById('rg-weeks-wrap');
+            if (weeksWrap) weeksWrap.style.display = tf === 'day' ? '' : 'none';
+            const ct = document.getElementById('rg-chart-title');
+            if (ct) ct.textContent = tf === 'day' ? 'Дневной диапазон vs ATR(14), пунктов' : 'Диапазон бара ' + rgTFLabel(tf) + ', пунктов (линия — средний)';
+            const tt = document.getElementById('rg-table-title');
+            if (tt) tt.textContent = tf === 'day' ? 'По дням' : 'Бары ' + rgTFLabel(tf);
+            loadRanges();
+        }
+
+        function rgTFLabel(tf) {
+            return tf === '60' ? '1 час' : tf + ' мин';
+        }
 
         function rgFmt(sym, v) {
             if (v === null || v === undefined) return '—';
@@ -1506,17 +1537,19 @@
             const todayBox = document.getElementById('rg-today');
             if (todayBox) todayBox.innerHTML = '<div class="col-span-full text-center text-slate-500 py-4 font-mono text-[11px]">Загружаю диапазоны…</div>';
             try {
-                const [tRes, hRes, wRes] = await Promise.all([
-                    fetch('/api/v1/range/today?symbols=' + encodeURIComponent(symbol)),
-                    fetch('/api/v1/range/history?symbol=' + encodeURIComponent(symbol) + '&days=' + days),
-                    fetch('/api/v1/range/weeks?symbol=' + encodeURIComponent(symbol) + '&weeks=8'),
-                ]);
-                const t = await tRes.json();
-                const h = await hRes.json();
-                const w = await wRes.json();
-                renderRangesToday(t, symbol);
-                renderRangesHistory(h, symbol);
-                renderRangesWeeks(w, symbol);
+                const tRes = await fetch('/api/v1/range/today?symbols=' + encodeURIComponent(symbol));
+                renderRangesToday(await tRes.json(), symbol);
+                if (rgTF === 'day') {
+                    const [hRes, wRes] = await Promise.all([
+                        fetch('/api/v1/range/history?symbol=' + encodeURIComponent(symbol) + '&days=' + days),
+                        fetch('/api/v1/range/weeks?symbol=' + encodeURIComponent(symbol) + '&weeks=8'),
+                    ]);
+                    renderRangesHistory(await hRes.json(), symbol);
+                    renderRangesWeeks(await wRes.json(), symbol);
+                } else {
+                    const iRes = await fetch('/api/v1/range/intraday?symbol=' + encodeURIComponent(symbol) + '&tf=' + rgTF);
+                    renderRangesIntraday(await iRes.json(), symbol);
+                }
             } catch (e) {
                 console.error('Ranges failed', e);
                 if (todayBox) todayBox.innerHTML = '<div class="col-span-full text-center text-rose-400 py-4 font-mono text-[11px]">Не удалось загрузить диапазоны: MOEX недоступна. Попробуйте позже.</div>';
@@ -1621,6 +1654,65 @@
                 </tr>`;
             });
             box.innerHTML = html + '</tbody></table>';
+        }
+
+        function renderRangesIntraday(d, symbol) {
+            const box = document.getElementById('rg-table');
+            const canvas = document.getElementById('rg-chart');
+            if (d.error) {
+                if (box) box.innerHTML = '<div class="text-rose-400 text-center py-4 font-mono text-[11px]">MOEX недоступна: ' + d.error + '</div>';
+                if (rgChart) { rgChart.destroy(); rgChart = null; }
+                return;
+            }
+            const bars = d.bars || [];
+            const avg = d.avg_range || 0;
+            if (!bars.length) {
+                if (box) box.innerHTML = '<div class="text-slate-500 text-center py-4 font-mono text-[11px]">Нет баров (торги закрыты?)</div>';
+                if (rgChart) { rgChart.destroy(); rgChart = null; }
+                return;
+            }
+            if (box) {
+                const shown = bars.slice(-150).reverse();
+                let html = `<div class="font-mono text-[11px] text-slate-400 mb-2">баров: ${bars.length} · средний диапазон: <span class="text-slate-100 font-bold">${rgFmt(symbol, avg)}</span> · максимальный: <span class="text-rose-300 font-bold">${rgFmt(symbol, d.max_range)}</span></div>
+                <table class="w-full text-left text-[11px] font-mono text-slate-300">
+                    <thead class="text-slate-500 border-b border-slate-700 uppercase">
+                        <tr><th class="py-1 pr-2">Время</th><th class="py-1 pr-2 text-right">Откр.</th><th class="py-1 pr-2 text-right">Макс</th><th class="py-1 pr-2 text-right">Мин</th><th class="py-1 pr-2 text-right">Закр.</th><th class="py-1 pr-2 text-right">Диапазон</th><th class="py-1 text-right">Объём</th></tr>
+                    </thead><tbody>`;
+                shown.forEach(b => {
+                    const hot = avg > 0 && b.range >= 2 * avg ? 'text-rose-400' : avg > 0 && b.range >= avg ? 'text-amber-300' : 'text-slate-100';
+                    html += `<tr class="border-b border-slate-800">
+                        <td class="py-1 pr-2 text-slate-200">${b.time}</td>
+                        <td class="py-1 pr-2 text-right">${rgFmt(symbol, b.open)}</td>
+                        <td class="py-1 pr-2 text-right text-emerald-300">${rgFmt(symbol, b.high)}</td>
+                        <td class="py-1 pr-2 text-right text-rose-300">${rgFmt(symbol, b.low)}</td>
+                        <td class="py-1 pr-2 text-right">${rgFmt(symbol, b.close)}</td>
+                        <td class="py-1 pr-2 text-right font-bold ${hot}">${rgFmt(symbol, b.range)}</td>
+                        <td class="py-1 text-right text-slate-400">${b.volume ? Math.round(b.volume).toLocaleString('ru-RU') : '—'}</td>
+                    </tr>`;
+                });
+                box.innerHTML = html + '</tbody></table>';
+            }
+            if (canvas && typeof Chart !== 'undefined') {
+                if (rgChart) rgChart.destroy();
+                rgChart = new Chart(canvas.getContext('2d'), {
+                    type: 'bar',
+                    data: {
+                        labels: bars.map(b => b.time.slice(5)),
+                        datasets: [
+                            { label: 'Диапазон', data: bars.map(b => b.range), backgroundColor: bars.map(b => avg > 0 && b.range >= 2 * avg ? 'rgba(251,113,133,.75)' : avg > 0 && b.range >= avg ? 'rgba(251,191,36,.75)' : 'rgba(52,211,153,.65)') },
+                            { label: 'Средний', data: bars.map(() => avg), type: 'line', borderColor: '#e2e8f0', borderWidth: 2, pointRadius: 0, fill: false },
+                        ],
+                    },
+                    options: {
+                        animation: false,
+                        scales: {
+                            x: { ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 12 }, grid: { color: '#1e293b' } },
+                            y: { ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 7 }, grid: { color: '#1e293b' } },
+                        },
+                        plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 9 }, boxWidth: 12 } } },
+                    },
+                });
+            }
         }
 
         // ---- Forecast module ----

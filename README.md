@@ -142,7 +142,7 @@ backend/
   option_mark.go          гибридные метки опционов (mid живых стаканов, иначе BS-theo по IV серии)
   spread_depth.go         стаканы ног через Alor (глубина для закрытия)
   stats_module.go       агрегаторы статистики (KPI, equity, разрезы)
-  futures_range.go      дневные диапазоны фьючерсов Si/ED/RI: пункты с открытия, ATR(14), недели (/api/v1/range/{today,history,weeks})
+  futures_range.go      дневные диапазоны фьючерсов Si/ED/RI: пункты с открытия, ATR(14), недели, интрадей 5/10/60 мин (/api/v1/range/{today,history,weeks,intraday})
   forecast_module.go    Монте-Карло, t-статистика, режимные рекомендации
   expiry.go             серии/роллы по реальным экспирациям опционов
   backtest.go, iv_history.go, heatmap.go, stress.go, pnl_attribution.go, sizing.go
@@ -167,7 +167,7 @@ backend/
 | Опционы | `/api/v1/options/{skew,iv-rank,trend,recommendations,rolling-advice,gamma-step,exit-advice,vertical-spread}` |
 | Стратегии | `/api/v1/strategy/{build,ironcondor,parity,rotation}`, `/api/v1/backtest` |
 | Аналитика v2 | `/api/v2/stats/{overview,breakdown}`, `/api/v2/forecast`, `/api/v2/core/{settings,analyze,verdicts}`, `/api/v2/ml/{train,predict,scan,status}` |
-| Диапазоны | `/api/v1/range/{today,history,weeks}` — пункты с открытия рынка, ATR(14), недели (вкладка «📏 Диапазоны») |
+| Диапазоны | `/api/v1/range/{today,history,weeks,intraday}` — пункты с открытия рынка, ATR(14), недели, бары 5/10/60 мин (вкладка «📏 Диапазоны») |
 | Крипто-радар | `/api/v1/crypto-radar?symbol=BTC` (Deribit IV + Binance/Bybit спот, вкладка «₿ Крипто-радар») |
 | Прочее | `/api/v1/trades`, `/api/v1/position/profile`, `/api/v1/copilot/ask`, `/api/v1/settings/{token,telegram}`, `/api/v1/debug/alor-get`, `/health` |
 

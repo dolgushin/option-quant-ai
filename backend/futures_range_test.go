@@ -132,3 +132,72 @@ func TestRangeWeekMonday(t *testing.T) {
 		t.Fatalf("sunday folds to %s", got)
 	}
 }
+
+func TestParseRangeTF(t *testing.T) {
+	for in, want := range map[string]int{"5": 5, "10": 10, "60": 60, "": 5, "15": 5, "abc": 5} {
+		if got := parseRangeTF(in); got != want {
+			t.Fatalf("parseRangeTF(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+func TestBuildIntradayBars(t *testing.T) {
+	candles := []rangeOHLC{
+		{Date: time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC), Open: 85865, High: 85890, Low: 85840, Close: 85870, Volume: 1200},
+		{Date: time.Date(2026, 9, 21, 10, 5, 0, 0, time.UTC), Open: 85870, High: 85900, Low: 85860, Close: 85895, Volume: 900},
+	}
+	bars := buildIntradayBars("Si", candles)
+	if len(bars) != 2 {
+		t.Fatalf("want 2 bars, got %d", len(bars))
+	}
+	if bars[0].Time != "2026-09-21 10:00" {
+		t.Fatalf("time = %q", bars[0].Time)
+	}
+	if bars[0].Range != 50 || bars[1].Range != 40 {
+		t.Fatalf("ranges = %v, %v", bars[0].Range, bars[1].Range)
+	}
+	if avg := intradayAvgRange(bars); avg != 45 {
+		t.Fatalf("avg = %v, want 45", avg)
+	}
+	ed := buildIntradayBars("ED", []rangeOHLC{
+		{Date: time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC), Open: 1.1478, High: 1.1485, Low: 1.1475, Close: 1.1480},
+	})
+	if math.Abs(ed[0].Range-0.001) > 1e-9 {
+		t.Fatalf("ED range = %v, want 0.001", ed[0].Range)
+	}
+	if intradayAvgRange(nil) != 0 {
+		t.Fatalf("avg of empty must be 0")
+	}
+}
+
+func TestAggregateBars(t *testing.T) {
+	mk := func(hh, mm int, o, h, l, c, v float64) rangeOHLC {
+		return rangeOHLC{
+			Date: time.Date(2026, 9, 21, hh, mm, 0, 0, time.UTC),
+			Open: o, High: h, Low: l, Close: c, Volume: v, VolumeKnown: true,
+		}
+	}
+	in := []rangeOHLC{
+		mk(10, 0, 100, 105, 99, 103, 10),
+		mk(10, 1, 103, 107, 102, 106, 20),
+		mk(10, 4, 106, 108, 104, 105, 30),
+		mk(10, 5, 105, 110, 105, 109, 40),
+	}
+	bars := aggregateBars(in, 5)
+	if len(bars) != 2 {
+		t.Fatalf("want 2 buckets, got %d", len(bars))
+	}
+	b0 := bars[0]
+	if b0.Date.Format("15:04") != "10:00" {
+		t.Fatalf("bucket0 start = %s", b0.Date.Format("15:04"))
+	}
+	if b0.Open != 100 || b0.High != 108 || b0.Low != 99 || b0.Close != 105 {
+		t.Fatalf("bucket0 OHLC = %+v", b0)
+	}
+	if b0.Volume != 60 {
+		t.Fatalf("bucket0 volume = %v", b0.Volume)
+	}
+	if bars[1].Open != 105 || bars[1].Close != 109 {
+		t.Fatalf("bucket1 = %+v", bars[1])
+	}
+}
