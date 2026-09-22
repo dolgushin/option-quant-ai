@@ -60,6 +60,7 @@
             <button id="tab-btn-dashboard" onclick="switchTab('dashboard')" class="px-4 py-2 text-xs font-bold rounded-lg bg-emerald-600 text-white transition">📊 Дашборд</button>
             <button id="tab-btn-spreads" onclick="switchTab('spreads')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🎯 Вертикальные спреды</button>
             <button id="tab-btn-straddles" onclick="switchTab('straddles')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">♻ Стрэддлы</button>
+            <button id="tab-btn-pgrid" onclick="switchTab('pgrid')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🛡 Защитная сетка</button>
             <button id="tab-btn-stats" onclick="switchTab('stats')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">📈 Статистика</button>
             <button id="tab-btn-ranges" onclick="switchTab('ranges')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">📏 Диапазоны</button>
             <button id="tab-btn-fc" onclick="switchTab('forecast')" class="px-4 py-2 text-xs font-bold rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">🔮 Прогноз</button>
@@ -859,7 +860,7 @@
                             <option value="synthetic">Синтетика (2C+F)</option>
                         </select></label>
                     <label class="text-slate-400">Фьюч secid
-                        <input id="str-fut" type="text" placeholder="авто" class="w-24 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
+                        <input id="str-fut" type="text" placeholder="авто" title="secid фьючерсного контракта (напр. SiZ6) — не опциона; пусто = авто" class="w-24 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
                     <label class="text-slate-400">Хедж
                         <select id="str-hedge" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white">
                             <option value="hybrid">Гибрид</option><option value="delta_band">Полоса Δ</option>
@@ -883,6 +884,54 @@
                 <div class="text-[10px] text-slate-500 font-mono mt-2">Покрытие фьючерсом снижает реальное ГО брокера (SPAN-зачёт). Движок хеджа и авто-вход — следующим шагом; пока хедж ручной.</div>
             </div>
             <div id="straddle-list" class="space-y-2"></div>
+        </div>
+
+        <!-- Protective grid: long wing + one-sided futures ladder -->
+        <div id="pgrid-view" class="hidden space-y-4 md:space-y-6">
+            <div class="flex justify-between items-center flex-wrap gap-2">
+                <h2 class="text-lg font-semibold text-slate-200">🛡 Защитная сетка (бумага)</h2>
+                <button onclick="loadPgridSignal(); loadPgrids();" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded-lg transition">↻ Обновить</button>
+            </div>
+            <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">Сигнал исчерпания дневного диапазона</div>
+                <div id="pgrid-signal" class="font-mono text-[11px] text-slate-400">Нажмите «Обновить»…</div>
+            </div>
+            <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">План и открытие — защита на шаг от спота + односторонняя сетка</div>
+                <div class="flex flex-wrap items-end gap-2 font-mono text-[11px]">
+                    <label class="text-slate-400">Инстр.
+                        <select id="pg-symbol" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option>Si</option><option>RI</option></select></label>
+                    <label class="text-slate-400">Направление
+                        <select id="pg-dir" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white">
+                            <option value="LONG">LONG-сетка + PUT</option>
+                            <option value="SHORT">SHORT-сетка + CALL</option>
+                        </select></label>
+                    <label class="text-slate-400">Экспирация
+                        <input id="pg-expiry" type="text" placeholder="авто 14–45 DTE" class="w-28 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
+                    <label class="text-slate-400">Опционов
+                        <input id="pg-qty" type="number" value="10" min="1" class="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="text-slate-400">Шаг сетки
+                        <input id="pg-step" type="number" value="25" min="1" class="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="text-slate-400">Тейк юнита
+                        <input id="pg-tp" type="number" placeholder="= шагу" min="0" class="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="text-slate-400">Лот/уровень
+                        <input id="pg-qpl" type="number" value="1" min="1" class="w-14 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="text-slate-400">Макс. фьюч
+                        <input id="pg-max" type="number" value="5" min="1" class="w-14 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="text-slate-400">Комиссия/заливка ₽
+                        <input id="pg-fee" type="number" value="4" min="0" class="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="text-slate-400">Стоп ₽
+                        <input id="pg-stop" type="number" placeholder="—" min="0" class="w-20 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="text-slate-400">Тейк ₽
+                        <input id="pg-profit" type="number" placeholder="—" min="0" class="w-20 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="text-slate-400">Time-stop DTE
+                        <input id="pg-tstop" type="number" value="7" min="1" class="w-14 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <button onclick="planPgrid()" class="px-4 py-1.5 bg-sky-700 hover:bg-sky-600 text-white font-bold rounded-lg transition">План</button>
+                    <button onclick="openPgrid()" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg transition">Открыть (бумага)</button>
+                </div>
+                <div id="pgrid-plan" class="font-mono text-[11px] text-slate-400 mt-2"></div>
+            </div>
+            <div id="pgrid-list" class="space-y-2"></div>
         </div>
 
         <!-- Statistics Module -->
@@ -1250,14 +1299,15 @@
         const tabActive = 'px-4 py-2 text-xs font-bold rounded-lg bg-emerald-600 text-white transition';
 
         function switchTab(tab) {
-            const views = { dashboard: 'dashboard-view', spreads: 'spreads-view', straddles: 'straddles-view', stats: 'stats-view', ranges: 'ranges-view', forecast: 'forecast-view', core: 'core-view', mcpnl: 'mcpnl-view', ml: 'ml-view', radar: 'radar-view' };
-            const btns = { dashboard: 'tab-btn-dashboard', spreads: 'tab-btn-spreads', straddles: 'tab-btn-straddles', stats: 'tab-btn-stats', ranges: 'tab-btn-ranges', forecast: 'tab-btn-fc', core: 'tab-btn-core', mcpnl: 'tab-btn-mcpnl', ml: 'tab-btn-ml', radar: 'tab-btn-radar' };
+            const views = { dashboard: 'dashboard-view', spreads: 'spreads-view', straddles: 'straddles-view', pgrid: 'pgrid-view', stats: 'stats-view', ranges: 'ranges-view', forecast: 'forecast-view', core: 'core-view', mcpnl: 'mcpnl-view', ml: 'ml-view', radar: 'radar-view' };
+            const btns = { dashboard: 'tab-btn-dashboard', spreads: 'tab-btn-spreads', straddles: 'tab-btn-straddles', pgrid: 'tab-btn-pgrid', stats: 'tab-btn-stats', ranges: 'tab-btn-ranges', forecast: 'tab-btn-fc', core: 'tab-btn-core', mcpnl: 'tab-btn-mcpnl', ml: 'tab-btn-ml', radar: 'tab-btn-radar' };
             Object.values(views).forEach(id => document.getElementById(id).classList.add('hidden'));
             Object.values(btns).forEach(id => document.getElementById(id).className = tabIdle);
             document.getElementById(views[tab]).classList.remove('hidden');
             document.getElementById(btns[tab]).className = tabActive;
             if (tab === 'spreads') updateSpreads();
             if (tab === 'straddles') { loadStraddleMeta(); loadStraddles(); }
+            if (tab === 'pgrid') { loadPgridSignal(); loadPgrids(); }
             if (tab === 'stats') loadStats();
             if (tab === 'ranges') loadRanges();
             if (tab === 'forecast') loadForecast();
@@ -2250,6 +2300,151 @@
                 alert(`✅ Стрэддл открыт: кредит ${d.plan.net_credit} ₽, стоп ${d.plan.stop_level} ₽`);
                 loadStraddles();
             } catch (e) { alert('❌ ' + e.message); }
+        }
+
+        function pgridFormValues() {
+            return {
+                symbol: document.getElementById('pg-symbol').value,
+                direction: document.getElementById('pg-dir').value,
+                expiry: document.getElementById('pg-expiry').value.trim(),
+                protect_qty: parseInt(document.getElementById('pg-qty').value) || 10,
+                grid_step: parseFloat(document.getElementById('pg-step').value) || 25,
+                take_profit: parseFloat(document.getElementById('pg-tp').value) || 0,
+                qty_per_level: parseInt(document.getElementById('pg-qpl').value) || 1,
+                max_inventory: parseInt(document.getElementById('pg-max').value) || 5,
+                fee_per_fill: parseFloat(document.getElementById('pg-fee').value) || 0,
+                max_loss_rub: parseFloat(document.getElementById('pg-stop').value) || 0,
+                profit_target_rub: parseFloat(document.getElementById('pg-profit').value) || 0,
+                time_stop_dte: parseInt(document.getElementById('pg-tstop').value) || 7,
+            };
+        }
+
+        async function loadPgridSignal() {
+            const el = document.getElementById('pgrid-signal');
+            el.innerHTML = 'Загрузка сигнала…';
+            try {
+                const sym = document.getElementById('pg-symbol').value;
+                const res = await fetch(`/api/v1/protect-grid/signal?symbol=${encodeURIComponent(sym)}`);
+                const d = await res.json();
+                if (d.error) { el.innerHTML = `<span class="text-amber-300">⚠ ${d.error}</span>`; return; }
+                const s = d.signal || {};
+                const t = d.today || {};
+                const dirTxt = s.direction === 'LONG' ? 'LONG-сетка + PUT (откат вверх)' : s.direction === 'SHORT' ? 'SHORT-сетка + CALL (откат вниз)' : 'вне рынка';
+                const tierCls = s.ready ? 'text-emerald-400' : 'text-slate-400';
+                el.innerHTML = `День: ${t.open} → ${t.last} (Δ ${t.change >= 0 ? '+' : ''}${t.change}), диапазон ${t.range} = ${t.range_pct_atr}% ATR(${t.atr14}) · `
+                    + `<b class="${tierCls}">${dirTxt}${s.tier ? ' · ' + s.tier : ''}</b>`
+                    + (s.reasons || []).map(r => `<div class="text-slate-500">• ${r}</div>`).join('')
+                    + (s.ready && s.direction ? ` <button onclick="document.getElementById('pg-dir').value='${s.direction}'" class="ml-2 px-2 py-0.5 text-[10px] bg-indigo-700 hover:bg-indigo-600 text-white rounded transition">применить направление</button>` : '');
+            } catch (e) { el.innerHTML = `<span class="text-rose-400">❌ ${e.message}</span>`; }
+        }
+
+        async function planPgrid() {
+            const el = document.getElementById('pgrid-plan');
+            el.innerHTML = 'Считаю план…';
+            try {
+                const res = await fetch('/api/v1/protect-grid/plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pgridFormValues()) });
+                const d = await res.json();
+                if (!d.success) { el.innerHTML = `<span class="text-rose-400">❌ ${d.error || 'не построен'}</span>`; return; }
+                const p = d.plan;
+                const wing = p.protect_is_call ? 'CALL' : 'PUT';
+                let html = `<div class="text-slate-200">Защита: <b>${wing} ${p.protect_strike}</b> ×${p.protect_qty} по ${p.premium_each} (всего ${p.premium_total.toLocaleString('ru-RU')} ₽, тета ${p.theta_day} ₽/день, Δ ${p.delta_each}) · `
+                    + `Безубыток: <b>${Number.isFinite(p.breakeven_fills_per_day) ? p.breakeven_fills_per_day : '∞'} заливок/день</b> · Покрытие ${(p.coverage_ratio * 100).toFixed(0)}% · Худшая вода сетки ≈ ${p.max_grid_loss_rub.toLocaleString('ru-RU')} ₽</div>`;
+                (p.warnings || []).forEach(wrn => { html += `<div class="text-amber-300">⚠ ${wrn}</div>`; });
+                html += `<table class="w-full text-left mt-1 text-slate-300"><thead class="text-slate-500 border-b border-slate-700 uppercase">`
+                    + `<tr><th class="py-1 pr-2">Сценарий ленты</th><th class="py-1 pr-2 text-right">Сетка ₽</th><th class="py-1 pr-2 text-right">Заливки</th><th class="py-1 pr-2 text-right">Инв.</th><th class="py-1 pr-2">Вывод</th></tr></thead><tbody>`;
+                (p.scenarios || []).forEach(s => {
+                    const cls = s.grid_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                    html += `<tr class="border-b border-slate-800"><td class="py-1 pr-2">${s.name}</td>`
+                        + `<td class="py-1 pr-2 text-right ${cls}">${s.grid_pnl.toLocaleString('ru-RU')}</td>`
+                        + `<td class="py-1 pr-2 text-right">${s.fills}</td><td class="py-1 pr-2 text-right">${s.inventory}</td>`
+                        + `<td class="py-1 text-slate-400">${s.verdict || ''}</td></tr>`;
+                });
+                el.innerHTML = html + '</tbody></table>';
+            } catch (e) { el.innerHTML = `<span class="text-rose-400">❌ ${e.message}</span>`; }
+        }
+
+        async function openPgrid() {
+            try {
+                const res = await fetch('/api/v1/protect-grid/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pgridFormValues()) });
+                const d = await res.json();
+                if (!d.success) { alert('❌ ' + (d.error || 'не открыта')); return; }
+                alert(`✅ Сетка открыта: защита ${d.plan.protect_strike} ×${d.plan.protect_qty}, премия ${d.plan.premium_total} ₽`);
+                loadPgrids();
+            } catch (e) { alert('❌ ' + e.message); }
+        }
+
+        async function loadPgrids() {
+            const el = document.getElementById('pgrid-list');
+            el.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Загрузка...</div>';
+            try {
+                const res = await fetch('/api/v1/protect-grid');
+                const d = await res.json();
+                if (!d.grids || !d.grids.length) {
+                    el.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Открытых сеток нет. Сначала «План», потом «Открыть (бумага)».</div>';
+                    return;
+                }
+                let html = `<table class="w-full text-left text-[11px] font-mono text-slate-300">
+                    <thead class="text-slate-500 border-b border-slate-700 uppercase">
+                    <tr><th class="py-1 pr-2">Сетка</th><th class="py-1 pr-2 text-right">Вход</th><th class="py-1 pr-2 text-right">Защита</th><th class="py-1 pr-2 text-right">Шаг/тейк</th><th class="py-1 pr-2 text-right">Инв.</th><th class="py-1 pr-2 text-right">P&L ₽</th><th class="py-1 pr-2 text-right">Тета ₽/д</th><th class="py-1 pr-2 text-right">Заливки</th><th class="py-1"></th></tr>
+                    </thead><tbody>`;
+                d.grids.forEach(g => {
+                    const pnlCls = (g.pnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                    html += `<tr class="border-b border-slate-800">
+                        <td class="py-1 pr-2 text-slate-100 font-bold">${g.direction === 'LONG' ? '🟢 LONG+PUT' : '🔴 SHORT+CALL'}<div class="text-[10px] text-slate-500 font-normal">${g.symbol} · ${g.id} · эксп. ${g.expiry}</div></td>
+                        <td class="py-1 pr-2 text-right">${g.entry_spot}</td>
+                        <td class="py-1 pr-2 text-right">${g.protect_strike} ×${g.protect_qty}</td>
+                        <td class="py-1 pr-2 text-right">${g.grid_step}/${g.take_profit}</td>
+                        <td class="py-1 pr-2 text-right">${g.inventory || 0}/${g.max_inventory}</td>
+                        <td class="py-1 pr-2 text-right font-bold ${pnlCls}">${(g.pnl || 0) >= 0 ? '+' : ''}${(g.pnl || 0).toLocaleString('ru-RU')}</td>
+                        <td class="py-1 pr-2 text-right">${g.theta_day || 0}</td>
+                        <td class="py-1 pr-2 text-right">${g.fills || 0}</td>
+                        <td class="py-1 text-right whitespace-nowrap"><button onclick="togglePgridProfile('${g.id}')" class="px-2 py-1 text-[10px] bg-indigo-700 hover:bg-indigo-600 text-white rounded transition">📊 Профиль</button>
+                        <button onclick="closePgrid('${g.id}')" class="px-2 py-1 text-[10px] bg-rose-700 hover:bg-rose-600 text-white rounded transition">✕ Закрыть</button></td></tr>
+                    <tr id="pgd-${g.id}" class="hidden"><td colspan="9" class="p-0 border-b border-slate-800 bg-slate-900/40"><div id="pgd-box-${g.id}" class="p-3"></div></td></tr>`;
+                });
+                el.innerHTML = html + '</tbody></table>';
+            } catch (e) { el.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${e.message}</div>`; }
+        }
+
+        async function closePgrid(id) {
+            if (!confirm('Закрыть защитную сетку ' + id + '?')) return;
+            try {
+                const res = await fetch('/api/v1/protect-grid/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+                const d = await res.json();
+                if (!d.success) { alert('❌ ' + (d.error || 'не закрыта')); return; }
+                loadPgrids();
+            } catch (e) { alert('❌ ' + e.message); }
+        }
+
+        async function togglePgridProfile(id) {
+            const row = document.getElementById(`pgd-${id}`);
+            if (!row) return;
+            row.classList.toggle('hidden');
+            if (!row.classList.contains('hidden')) renderPgridProfile(id);
+        }
+
+        async function renderPgridProfile(id) {
+            const box = document.getElementById(`pgd-box-${id}`);
+            box.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Загрузка профиля...</div>';
+            try {
+                const res = await fetch(`/api/v1/protect-grid/analytics?id=${encodeURIComponent(id)}`);
+                const d = await res.json();
+                if (d.error) { box.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${d.error}</div>`; return; }
+                let html = `<div class="font-mono text-[11px] text-slate-200">P&L <b>${d.pnl}</b> ₽ (реализовано сеткой ${d.realized} ₽) · `
+                    + `Инвентарь ${d.inventory} (цель ${d.target}) · Готовых тейков ${d.closable_tp} · Δ ${d.net_delta} · Тета ${d.theta_day} ₽/день · `
+                    + `Безубыток ${d.breakeven_fills_per_day} заливок/день · DTE ${d.dte}${d.spot_suspect ? ' · <span class="text-amber-300">спот подозрительный</span>' : ''}</div>`;
+                html += `<div class="grid grid-cols-1 xl:grid-cols-2 gap-3 mt-2">`;
+                html += `<div><div class="text-[10px] text-slate-500 font-mono uppercase mb-1">Крыло к экспирации (защита минус вход)</div>`
+                    + `<table class="w-full text-left font-mono text-[11px] text-slate-300"><thead class="text-slate-500 border-b border-slate-700"><tr><th class="pr-2">Спот</th><th class="text-right">Крыло ₽</th></tr></thead><tbody>`
+                    + (d.wing_payoff_expiry || []).map(r => `<tr class="border-b border-slate-800"><td class="pr-2">${r.spot}</td><td class="text-right">${r.wing_pnl}</td></tr>`).join('') + '</tbody></table></div>';
+                html += `<div><div class="text-[10px] text-slate-500 font-mono uppercase mb-1">Сценарии ленты (сетка)</div>`
+                    + `<table class="w-full text-left font-mono text-[11px] text-slate-300"><thead class="text-slate-500 border-b border-slate-700"><tr><th class="pr-2">Лента</th><th class="text-right">Сетка ₽</th><th class="text-right">Заливки</th></tr></thead><tbody>`
+                    + (d.scenarios || []).map(s => `<tr class="border-b border-slate-800"><td class="pr-2">${s.name}</td><td class="text-right">${s.grid_pnl}</td><td class="text-right">${s.fills}</td></tr>`).join('') + '</tbody></table></div>';
+                html += `</div><div class="text-[10px] text-slate-500 font-mono uppercase mt-2 mb-1">Журнал заливок</div>`
+                    + `<div class="font-mono text-[11px] text-slate-400 max-h-40 overflow-y-auto">`
+                    + ((d.grid && d.grid.fill_log || []).slice().reverse().map(f => `<div>${f.at} · ${f.kind} ${f.side} ${f.qty} @ ${f.price}${f.note ? ' · ' + f.note : ''}</div>`).join('') || 'пока пусто') + '</div>';
+                box.innerHTML = html;
+            } catch (e) { box.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${e.message}</div>`; }
         }
 
         async function toggleStraddleProfile(id) {
