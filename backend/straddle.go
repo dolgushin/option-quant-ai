@@ -1688,6 +1688,21 @@ func executeStraddleHedge(s *straddleRecord, pos *quant.Position, ev straddleEva
 	// target by construction and would gate everything shut).
 	dev := pos.Delta - hedgeTargetDelta(s)
 	futSec := straddleFuturesSecID(s, pos)
+	if futSec != "" && alorMarket != nil {
+		// A stored secid must still be a futures contract: records opened
+		// before validation (or with a pasted option) self-heal to the
+		// front contract instead of trading garbage or bricking the hedge.
+		if syms, err := alorMarket.FetchOptionChain(pos.Symbol); err == nil {
+			for _, sm := range syms {
+				if sm == futSec {
+					log.Printf("straddle hedge: stored %s is an option, re-resolving", futSec)
+					futSec = ""
+					s.FuturesSecID = ""
+					break
+				}
+			}
+		}
+	}
 	if futSec == "" {
 		// Naked records carry no cover secid: resolve the front contract
 		// now so the first hedge doesn't need a hand-typed secid (which is
@@ -1704,17 +1719,6 @@ func executeStraddleHedge(s *straddleRecord, pos *quant.Position, ev straddleEva
 			s.FuturesSecID = code
 		} else {
 			return fmt.Errorf("нет фьючерса для хеджа")
-		}
-	} else if alorMarket != nil {
-		// A stored secid must still be a futures contract: records opened
-		// before validation (or with a pasted option) refuse loudly instead
-		// of trading garbage.
-		if syms, err := alorMarket.FetchOptionChain(pos.Symbol); err == nil {
-			for _, sm := range syms {
-				if sm == futSec {
-					return fmt.Errorf("%s — это опцион, а не фьючерс: закрой стрэддл и открой заново с пустым полем «Фьюч secid»", futSec)
-				}
-			}
 		}
 	}
 	fill, err := futuresFillPrice(futSec, ev.Side)
