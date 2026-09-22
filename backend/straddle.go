@@ -473,6 +473,18 @@ func alorStraddlePricer(callSecID, putSecID, futuresSecID string) (float64, floa
 // "hedge":{"rule":"hybrid",...},"time_stop_dte":14}
 // construction: classic (C+P) | covered (C+P+F) | synthetic (2C+F).
 // with_futures is kept for backward compat (true → covered).
+// futuresPriceSane reports whether a priced "futures" leg can plausibly be
+// a futures contract: its price must sit near the spot. An option premium
+// (e.g. 3232 against spot 85500) recorded as FUTURES poisons the curve
+// spot, the delta and every hedge after it. Unknown spot (<=0) can't judge
+// — allow, the chain-membership check still applies. Pure — unit-tested.
+func futuresPriceSane(futPx, spot float64) bool {
+	if spot <= 0 {
+		return true
+	}
+	return futPx >= spot*0.5 && futPx <= spot*1.5
+}
+
 func straddleOpenHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {
@@ -527,6 +539,20 @@ func straddleOpenHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Futures secid must be a futures contract, never an option. The open
+	// form accepts a typed secid — a pasted option (Si83000BJ6) priced and
+	// recorded as FUTURES poisoned the curve spot, the delta and the hedges.
+	if needsFutures && req.FuturesSecID != "" && alorMarket != nil {
+		if syms, err := alorMarket.FetchOptionChain(req.Symbol); err == nil {
+			for _, s := range syms {
+				if s == req.FuturesSecID {
+					json.NewEncoder(w).Encode(map[string]interface{}{"success": false,
+						"error": fmt.Sprintf("%s — это опцион, а не фьючерс: очисти поле «Фьюч secid» (авто) или укажи контракт, напр. SiZ6", req.FuturesSecID)})
+					return
+				}
+			}
+		}
+	}
 	// Option legs auto-resolve: exact MOEX pair wins; anything else is
 	// refused (guessing call/put opens wrong trades) with guidance.
 	if req.Strike > 0 && (req.CallSecID == "" || (construction != straddleSynthetic && req.PutSecID == "")) {
@@ -557,6 +583,18 @@ func straddleOpenHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
 		return
+	}
+	// Price sanity on the futures legs: an option premium at a few percent
+	// of spot is never a futures contract — refuse instead of recording
+	// garbage that breaks analytics and hedges downstream.
+	if needsFutures {
+		for _, l := range plan.Legs {
+			if l.IsFuture && !futuresPriceSane(l.Price, spot) {
+				json.NewEncoder(w).Encode(map[string]interface{}{"success": false,
+					"error": fmt.Sprintf("цена «фьючерса» %s (%.0f) не похожа на фьючерс при споте %.0f — проверь secid", l.SecID, l.Price, spot)})
+				return
+			}
+		}
 	}
 
 	p := quant.Position{

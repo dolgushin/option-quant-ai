@@ -555,3 +555,39 @@ func TestStraddleMetaSpotRefusesEstimate(t *testing.T) {
 		t.Fatalf("live spot = %v, want 85608", got)
 	}
 }
+
+// TestFuturesPriceSane pins the open-time guard: an option premium against
+// the spot is refused as a "futures" leg, real futures prices pass, unknown
+// spot allows (the chain-membership check still applies).
+func TestFuturesPriceSane(t *testing.T) {
+	if !futuresPriceSane(85608, 85600) {
+		t.Fatal("live futures price refused")
+	}
+	if futuresPriceSane(3232.5, 85500) {
+		t.Fatal("option premium accepted as futures")
+	}
+	if !futuresPriceSane(100, 0) {
+		t.Fatal("unknown spot must allow")
+	}
+}
+
+// TestBuildSyntheticQuantities pins the construction: qty units of
+// SELL 2× call + BUY 1 futures (qty 4 → 8 calls + 4 futures).
+func TestBuildSyntheticQuantities(t *testing.T) {
+	pricer := func(call, put, fut string) (float64, float64, float64, error) {
+		return 1560, 0, 85600, nil
+	}
+	plan, err := buildSyntheticStraddle("Si", "2026-10-15", 22, 85600, 85500, 4, "Si85500BJ6", "SiZ6", pricer)
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if len(plan.Legs) != 2 {
+		t.Fatalf("legs = %d, want 2", len(plan.Legs))
+	}
+	if plan.Legs[0].Qty != 8 || plan.Legs[0].Side != "SELL" || plan.Legs[0].IsFuture {
+		t.Fatalf("call leg wrong: %+v", plan.Legs[0])
+	}
+	if plan.Legs[1].Qty != 4 || plan.Legs[1].Side != "BUY" || !plan.Legs[1].IsFuture {
+		t.Fatalf("futures leg wrong: %+v", plan.Legs[1])
+	}
+}
