@@ -1879,11 +1879,11 @@ func positionsHandler(w http.ResponseWriter, r *http.Request) {
 		quant.SavePosition(positions[i])
 	}
 
-	// Spread positions are managed on the Spreads tab — keep the central
-	// dashboard list clean.
+	// Spread / protective-grid positions are managed on their own tabs —
+	// keep the central dashboard list clean.
 	visible := make([]quant.Position, 0, len(positions))
 	for _, p := range positions {
-		if !isSpreadPositionID(p.ID) {
+		if !isSpreadPositionID(p.ID) && !isProtectGridPositionID(p.ID) {
 			visible = append(visible, p)
 		}
 	}
@@ -2297,11 +2297,11 @@ func tradesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	allTrades := quant.GetTrades()
-	// Spread trades live in the Spreads tab journal — hide them from the
-	// central dashboard list (stats still count the whole account).
+	// Spread / protective-grid trades live in their tab journals — hide them
+	// from the central dashboard list (stats still count the whole account).
 	trades := make([]quant.Trade, 0, len(allTrades))
 	for _, t := range allTrades {
-		if !isSpreadTrade(t.Strategy) {
+		if !isSpreadTrade(t.Strategy) && !isProtectGridTrade(t.Strategy) {
 			trades = append(trades, t)
 		}
 	}
@@ -3548,7 +3548,9 @@ func main() {
 	initTelegram()
 	initSpreads(dataDir)
 	initStraddles(dataDir)
+	initProtectGrids(dataDir)
 	startStraddleManager()
+	startProtectGridManager()
 	initCore(dataDir)
 
 	// Background Telegram notifier (stop channel unused for lifetime app).
@@ -3650,6 +3652,13 @@ func main() {
 	http.HandleFunc("/api/v1/straddles", straddleListHandler)
 	http.HandleFunc("/api/v1/straddles/open", straddleOpenHandler)
 	http.HandleFunc("/api/v1/straddles/close", straddleCloseHandler)
+	http.HandleFunc("/api/v1/protect-grid/signal", protectGridSignalHandler)
+	http.HandleFunc("/api/v1/protect-grid/plan", protectGridPlanHandler)
+	http.HandleFunc("/api/v1/protect-grid/open", protectGridOpenHandler)
+	http.HandleFunc("/api/v1/protect-grid/close", protectGridCloseHandler)
+	http.HandleFunc("/api/v1/protect-grid/analytics", protectGridAnalyticsHandler)
+	http.HandleFunc("/api/v1/protect-grid/manager", protectGridManagerHandler)
+	http.HandleFunc("/api/v1/protect-grid", protectGridListHandler)
 	http.HandleFunc("/api/v1/range/today", rangeTodayHandler)
 	http.HandleFunc("/api/v1/range/history", rangeHistoryHandler)
 	http.HandleFunc("/api/v1/range/weeks", rangeWeeksHandler)

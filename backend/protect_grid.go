@@ -1,0 +1,1159 @@
+package main
+
+// Protective-grid module (third trading module): a long protective option
+// (PUT for a long futures grid, CALL for a short grid) + a one-sided futures
+// scalping grid that harvests intraday oscillation to pay for theta.
+//
+// Idea (user strategy): after Si exhausts its daily range downwards, the odds
+// of a bounce rise — buy 1-step-OTM puts (cheap tail cover) and run a LONG
+// only futures grid (buy dips every `step` points, take each unit at +`tp`).
+// If Si ran up instead, mirror: buy 1-step-OTM calls + SHORT grid.
+//
+// Portfolio character: long downside/upside tail + long chop (grid + long
+// option are both long-gamma style). It earns when the market oscillates
+// around/after exhaustion and bleeds theta when it sits still or trends
+// through the protection. See KNOWLEDGE.md §9 for the regime table.
+//
+// Conventions (same as straddles): paper-first, no estimate prices, weekend/
+// night halt, futures legs marked at their own contract, opposite futures
+// legs net FIFO via quant.NetFuturesLegs with realized P&L preserved and
+// journaled once via quant.SettleTrade. Core math is pure and hermetic.
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"math"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"option-quant-ai/quant"
+)
+
+// Grid directions.
+const (
+	gridLong  = "LONG"  // buy dips, take profit up; protection = PUT
+	gridShort = "SHORT" // sell rallies, take profit down; protection = CALL
+)
+
+// Signal tiers for range-exhaustion entries (share the daily-range tracker).
+const (
+	gridTierHalf      = "HALF"      // ~50% of the daily move — early/scout entry
+	gridTierReady     = "READY"     // ~65-85% — standard entry
+	gridTierExhausted = "EXHAUSTED" // ~90%+ — late but highest bounce odds
+)
+
+// gridSignal is a pure range-exhaustion read: which protective grid (if any)
+// the tape invites right now.
+type gridSignal struct {
+	Direction string   `json:"direction"` // LONG | SHORT | ""
+	Tier      string   `json:"tier"`      // HALF | READY | EXHAUSTED | ""
+	RangePct  float64  `json:"range_pct_atr"`
+	DriftPct  float64  `json:"drift_pct_atr"`
+	Ready     bool     `json:"ready"`
+	Reasons   []string `json:"reasons"`
+}
+
+// protectGridSignal maps today's (open/high/low/last) + ATR(14) to a grid
+// direction + tier. Down day → LONG grid + PUT (bounce bet with a floor);
+// up day → SHORT grid + CALL. Pure — unit-tested.
+//
+// Thresholds are on two gauges: rangePct = dayRange/ATR (how much of a
+// normal day already travelled) and driftPct = |last-open|/ATR (how far the
+// close sits from the open). Either gauge can trigger — a tight day with a
+// late impulse still counts via drift, a wide chop day via range.
+func protectGridSignal(open, high, low, last, atr float64) gridSignal {
+	sig := gridSignal{}
+	if atr <= 0 || high < low || last <= 0 || open <= 0 {
+		sig.Reasons = []string{"нет ATR или битые котировки дня"}
+		return sig
+	}
+	dayRange := high - low
+	change := last - open
+	sig.RangePct = math.Round(dayRange / atr * 1000 / 10)
+	sig.DriftPct = math.Round(math.Abs(change) / atr * 1000 / 10)
+	if change == 0 {
+		sig.Reasons = []string{"день без направления — сетке нечего отрабатывать"}
+		return sig
+	}
+	if change < 0 {
+		sig.Direction = gridLong
+	} else {
+		sig.Direction = gridShort
+	}
+	cover := "PUT"
+	if sig.Direction == gridShort {
+		cover = "CALL"
+	}
+	gauge := math.Max(sig.RangePct, sig.DriftPct)
+	switch {
+	case gauge >= 90:
+		sig.Tier, sig.Ready = gridTierExhausted, true
+		sig.Reasons = []string{
+			fmt.Sprintf("движение исчерпано (%.0f%% ATR) — шансы отката максимальны, защита %s", gauge, cover),
+		}
+	case gauge >= 65:
+		sig.Tier, sig.Ready = gridTierReady, true
+		sig.Reasons = []string{
+			fmt.Sprintf("пройдено %.0f%% дневной нормы — стандартный вход, защита %s", gauge, cover),
+		}
+	case gauge >= 45:
+		sig.Tier, sig.Ready = gridTierHalf, false
+		sig.Reasons = []string{
+			fmt.Sprintf("пройдена половина дневного хода (%.0f%% ATR) — ранний/разведочный вход половинным размером", gauge),
+		}
+	default:
+		sig.Reasons = []string{
+			fmt.Sprintf("пройдено лишь %.0f%% дневной нормы — ждать ≥45%% (половина) или ≥65%% (стандарт)", gauge),
+		}
+		sig.Direction, sig.Tier = "", ""
+	}
+	return sig
+}
+
+// gridBreakevenFillsPerDay answers "how many grid round-trips a day pay for
+// theta": ceil(thetaDay / (step*mult - fee)). Pure — unit-tested.
+func gridBreakevenFillsPerDay(thetaDay, stepPts, mult, feePerFill float64) float64 {
+	edge := stepPts*mult - feePerFill
+	if edge <= 0 || thetaDay <= 0 {
+		return math.Inf(1)
+	}
+	return math.Ceil(thetaDay / edge)
+}
+
+// gridLadderTarget is the stateless inventory target of a one-sided grid:
+// how many futures the ladder wants at this spot. LONG: one more long every
+// `step` points below entry (bounce ladder); SHORT mirrored. Clamped to
+// [0, maxInv]. Pure — unit-tested.
+func gridLadderTarget(direction string, entry, spot, step float64, maxInv int) int {
+	if step <= 0 || maxInv <= 0 || entry <= 0 || spot <= 0 {
+		return 0
+	}
+	var depth float64
+	if direction == gridLong {
+		depth = (entry - spot) / step
+	} else if direction == gridShort {
+		depth = (spot - entry) / step
+	} else {
+		return 0
+	}
+	target := int(math.Floor(depth)) + 1
+	if target < 0 {
+		target = 0
+	}
+	if target == 0 && depth >= 0 {
+		// At/above entry for LONG (below for SHORT) the ladder still holds
+		// the first unit — the grid starts working immediately, not only
+		// after the first dip.
+		target = 1
+	}
+	if target > maxInv {
+		target = maxInv
+	}
+	return target
+}
+
+// gridOpenInventory counts the net one-sided futures inventory on a position
+// (BUY minus SELL for LONG grids, mirrored for SHORT). Pure.
+func gridOpenInventory(legs []quant.PositionLeg, direction string) int {
+	net := 0
+	for _, l := range legs {
+		if l.Kind != "FUTURES" || l.Quantity <= 0 {
+			continue
+		}
+		if direction == gridLong {
+			if l.Side == "BUY" {
+				net += l.Quantity
+			} else {
+				net -= l.Quantity
+			}
+		} else {
+			if l.Side == "SELL" {
+				net += l.Quantity
+			} else {
+				net -= l.Quantity
+			}
+		}
+	}
+	if net < 0 {
+		net = 0
+	}
+	return net
+}
+
+// gridTakeProfitLegs finds open ladder legs whose per-unit take profit is
+// touched at spot: BUY legs with entry+tp <= spot (LONG), SELL legs with
+// entry-tp >= spot (SHORT). Returns the total closable qty. Pure.
+func gridTakeProfitLegs(legs []quant.PositionLeg, direction string, spot, tpPts float64) int {
+	if tpPts <= 0 || spot <= 0 {
+		return 0
+	}
+	qty := 0
+	for _, l := range legs {
+		if l.Kind != "FUTURES" || l.Quantity <= 0 || l.EntryPrice <= 0 {
+			continue
+		}
+		if direction == gridLong && l.Side == "BUY" && spot >= l.EntryPrice+tpPts {
+			qty += l.Quantity
+		}
+		if direction == gridShort && l.Side == "SELL" && spot <= l.EntryPrice-tpPts {
+			qty += l.Quantity
+		}
+	}
+	return qty
+}
+
+// gridLot is one unit of simulated inventory for the offline simulator.
+type gridLot struct {
+	entry float64
+	qty   int
+}
+
+// simulateGrid runs the ladder + per-unit-TP policy over a price path and
+// returns realized P&L (rubles), closing inventory + its unrealized value,
+// fills and the max adverse excursion in points. Simulator only — the live
+// manager replays the same policy one pass at a time. Pure — unit-tested.
+func simulateGrid(direction string, prices []float64, entry, step, tpPts, mult, fee float64, qtyPerLevel, maxInv int) (realized, unrealized float64, fills, inventory, maxAdverse int) {
+	if len(prices) == 0 || step <= 0 || mult <= 0 || qtyPerLevel <= 0 || maxInv <= 0 {
+		return 0, 0, 0, 0, 0
+	}
+	lots := []gridLot{}
+	adverse := 0.0
+	round := func(v float64) float64 { return math.Round(v*100) / 100 }
+	for _, px := range prices {
+		if px <= 0 {
+			continue
+		}
+		// 1) Take profits first (each unit has its own target).
+		kept := lots[:0]
+		for _, lt := range lots {
+			hit := direction == gridLong && px >= lt.entry+tpPts
+			if direction == gridShort && px <= lt.entry-tpPts {
+				hit = true
+			}
+			if hit {
+				var pnl float64
+				if direction == gridLong {
+					pnl = (px - lt.entry) * mult * float64(lt.qty)
+				} else {
+					pnl = (lt.entry - px) * mult * float64(lt.qty)
+				}
+				realized += pnl - fee*float64(lt.qty)
+				fills++
+				inventory -= lt.qty
+			} else {
+				kept = append(kept, lt)
+			}
+		}
+		lots = kept
+		// 2) Ladder top-up toward the target.
+		target := gridLadderTarget(direction, entry, px, step, maxInv)
+		for inventory < target {
+			lots = append(lots, gridLot{entry: px, qty: qtyPerLevel})
+			inventory += qtyPerLevel
+			realized -= fee * float64(qtyPerLevel) // entry fee
+			fills++
+			if len(lots) > 4*maxInv+10 {
+				break
+			}
+		}
+		// 3) Track the worst open-water mark against the entry side.
+		open := 0.0
+		for _, lt := range lots {
+			if direction == gridLong {
+				open += (px - lt.entry) * mult * float64(lt.qty)
+			} else {
+				open += (lt.entry - px) * mult * float64(lt.qty)
+			}
+		}
+		if open < adverse {
+			adverse = open
+		}
+	}
+	last := prices[len(prices)-1]
+	for _, lt := range lots {
+		if direction == gridLong {
+			unrealized += (last - lt.entry) * mult * float64(lt.qty)
+		} else {
+			unrealized += (lt.entry - last) * mult * float64(lt.qty)
+		}
+	}
+	realized = round(realized)
+	unrealized = round(unrealized)
+	maxAdverse = int(math.Round(-adverse))
+	if maxAdverse < 0 {
+		maxAdverse = 0
+	}
+	return realized, unrealized, fills, inventory, maxAdverse
+}
+
+// synthPath builds deterministic scenario paths around `start`: flat, chop
+// (sine of amplitude `amp`), trend up/down. Pure — for plan scenarios.
+func synthPath(kind string, start float64, n int, amp float64) []float64 {
+	if n <= 0 {
+		n = 120
+	}
+	out := make([]float64, 0, n)
+	switch kind {
+	case "flat":
+		for i := 0; i < n; i++ {
+			out = append(out, start)
+		}
+	case "chop":
+		for i := 0; i < n; i++ {
+			out = append(out, start+amp*math.Sin(float64(i)*0.6))
+		}
+	case "trend_up":
+		for i := 0; i < n; i++ {
+			out = append(out, start+amp*float64(i)/float64(n))
+		}
+	case "trend_down":
+		for i := 0; i < n; i++ {
+			out = append(out, start-amp*float64(i)/float64(n))
+		}
+	default:
+		for i := 0; i < n; i++ {
+			out = append(out, start)
+		}
+	}
+	return out
+}
+
+// ---- Records & store (JSON file, mirrors straddles) ----
+
+type gridFill struct {
+	At    string  `json:"at"`
+	Side  string  `json:"side"`
+	Qty   int     `json:"qty"`
+	Price float64 `json:"price"`
+	Kind  string  `json:"kind"` // "LADDER" | "TAKE" | "OPEN" | "CLOSE"
+	Note  string  `json:"note,omitempty"`
+}
+
+// protectGridRecord is a live paper protective grid.
+type protectGridRecord struct {
+	ID            string     `json:"id"`
+	PositionID    string     `json:"position_id"`
+	Symbol        string     `json:"symbol"`
+	Direction     string     `json:"direction"` // LONG | SHORT
+	Expiry        string     `json:"expiry"`
+	EntrySpot     float64    `json:"entry_spot"`
+	ProtectSecID  string     `json:"protect_secid"`
+	ProtectStrike float64    `json:"protect_strike"`
+	ProtectIsCall bool       `json:"protect_is_call"`
+	ProtectQty    int        `json:"protect_qty"`
+	ProtectEntry  float64    `json:"protect_entry"`
+	GridStep      float64    `json:"grid_step"`
+	TakeProfit    float64    `json:"take_profit"`
+	QtyPerLevel   int        `json:"qty_per_level"`
+	MaxInventory  int        `json:"max_inventory"`
+	FeePerFill    float64    `json:"fee_per_fill"`
+	FuturesSecID  string     `json:"futures_secid"`
+	MaxLossRub    float64    `json:"max_loss_rub"`
+	ProfitTarget  float64    `json:"profit_target_rub"`
+	TimeStopDTE   int        `json:"time_stop_dte"`
+	RangePctAt    float64    `json:"range_pct_at_entry"`
+	Status        string     `json:"status"` // OPEN / CLOSED
+	OpenedAt      string     `json:"opened_at"`
+	Fills         int        `json:"fills"`
+	RealizedGrid  float64    `json:"realized_grid"`
+	FillLog       []gridFill `json:"fill_log,omitempty"`
+}
+
+var (
+	pgridMu    sync.Mutex
+	pgridStore []protectGridRecord
+	pgridFile  string
+)
+
+func initProtectGrids(dataDir string) {
+	pgridMu.Lock()
+	defer pgridMu.Unlock()
+	pgridFile = filepath.Join(dataDir, "protect_grids.json")
+	b, err := os.ReadFile(pgridFile)
+	if err == nil {
+		_ = json.Unmarshal(b, &pgridStore)
+	}
+}
+
+func persistProtectGrids() {
+	if pgridFile == "" {
+		return
+	}
+	b, _ := json.MarshalIndent(pgridStore, "", "  ")
+	_ = os.WriteFile(pgridFile, b, 0600)
+}
+
+func saveProtectGridRecord(rec protectGridRecord) {
+	pgridMu.Lock()
+	defer pgridMu.Unlock()
+	for i := range pgridStore {
+		if pgridStore[i].ID == rec.ID {
+			pgridStore[i] = rec
+			persistProtectGrids()
+			return
+		}
+	}
+	pgridStore = append(pgridStore, rec)
+	persistProtectGrids()
+}
+
+func pgridByID(id string) (protectGridRecord, bool) {
+	pgridMu.Lock()
+	defer pgridMu.Unlock()
+	for _, g := range pgridStore {
+		if g.ID == id {
+			return g, true
+		}
+	}
+	return protectGridRecord{}, false
+}
+
+func openProtectGrids() []protectGridRecord {
+	pgridMu.Lock()
+	defer pgridMu.Unlock()
+	out := []protectGridRecord{}
+	for _, g := range pgridStore {
+		if g.Status == "OPEN" {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// isProtectGridPositionID reports whether a position belongs to a protective
+// grid (hidden from the central dashboard lists, lives on its own tab).
+func isProtectGridPositionID(id string) bool {
+	pgridMu.Lock()
+	defer pgridMu.Unlock()
+	for _, g := range pgridStore {
+		if g.PositionID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// isProtectGridTrade reports protective-grid journal entries.
+func isProtectGridTrade(strategy string) bool {
+	return strings.Contains(strategy, "Protective Grid")
+}
+
+// resolveProtectStrike picks the 1-step-OTM strike for the wing: the strike
+// just below spot for PUT protection (LONG grid), just above for CALL
+// (SHORT grid). Pure.
+func resolveProtectStrike(strikes []float64, spot float64, direction string) float64 {
+	if len(strikes) == 0 || spot <= 0 {
+		return 0
+	}
+	sorted := append([]float64{}, strikes...)
+	sort.Float64s(sorted)
+	if direction == gridLong {
+		best := 0.0
+		for _, s := range sorted {
+			if s < spot {
+				best = s
+			} else {
+				break
+			}
+		}
+		return best
+	}
+	for _, s := range sorted {
+		if s > spot {
+			return s
+		}
+	}
+	return 0
+}
+
+// protectGridPlan is the pre-trade economics shown by the plan endpoint.
+type protectGridPlan struct {
+	Symbol         string         `json:"symbol"`
+	Direction      string         `json:"direction"`
+	Expiry         string         `json:"expiry"`
+	DaysToExp      int            `json:"days_to_exp"`
+	EntrySpot      float64        `json:"entry_spot"`
+	ProtectStrike  float64        `json:"protect_strike"`
+	ProtectIsCall  bool           `json:"protect_is_call"`
+	ProtectQty     int            `json:"protect_qty"`
+	ProtectSecID   string         `json:"protect_secid"`
+	PremiumEach    float64        `json:"premium_each"`
+	PremiumTotal   float64        `json:"premium_total"`
+	ThetaDay       float64        `json:"theta_day"`
+	DeltaEach      float64        `json:"delta_each"`
+	GridStep       float64        `json:"grid_step"`
+	TakeProfit     float64        `json:"take_profit"`
+	QtyPerLevel    int            `json:"qty_per_level"`
+	MaxInventory   int            `json:"max_inventory"`
+	BreakevenFills float64        `json:"breakeven_fills_per_day"`
+	Coverage       float64        `json:"coverage_ratio"`
+	MaxGridLoss    float64        `json:"max_grid_loss_rub"`
+	Scenarios      []gridScenario `json:"scenarios"`
+	Signal         gridSignal     `json:"signal"`
+	Warnings       []string       `json:"warnings"`
+}
+
+type gridScenario struct {
+	Name       string  `json:"name"`
+	GridPnL    float64 `json:"grid_pnl"`
+	Inventory  int     `json:"inventory"`
+	Unreal     float64 `json:"unrealized"`
+	Fills      int     `json:"fills"`
+	MaxAdverse int     `json:"max_adverse_rub"`
+	Verdict    string  `json:"verdict"`
+}
+
+// buildProtectGridPlan prices the wing + grid economics. Option pricing uses
+// the hybrid optionMark (live narrow books at mid, dead books at BS fair) so
+// a 500-wide dead spread never prints a fantasy premium. Pure apart from the
+// mark/discovery feeds.
+func buildProtectGridPlan(symbol, direction, expiry string, spot float64, protectQty int, step, tpPts float64, qtyPerLevel, maxInv int, feePerFill float64) (*protectGridPlan, error) {
+	if direction != gridLong && direction != gridShort {
+		return nil, fmt.Errorf("направление: LONG или SHORT")
+	}
+	if spot <= 0 || isEstimatePrice(spot) {
+		return nil, fmt.Errorf("нет живого спота — оценка запрещена")
+	}
+	strikes, findOpt, err := optionChainFor(symbol, expiry)
+	if err != nil || len(strikes) == 0 {
+		return nil, fmt.Errorf("нет цепочки страйков на %s", expiry)
+	}
+	strike := resolveProtectStrike(strikes, spot, direction)
+	if strike <= 0 {
+		return nil, fmt.Errorf("нет страйка на шаг от спота %.0f", spot)
+	}
+	isCall := direction == gridShort
+	opt := findOpt(strike, isCall)
+	if opt == nil {
+		return nil, fmt.Errorf("нет опциона на страйке %g", strike)
+	}
+	dte := dteInDays(expiry, time.Now())
+	if dte <= 0 {
+		return nil, fmt.Errorf("серия истекла")
+	}
+	t := float64(dte) / 365.0
+	mult := contractMultiplier(symbol)
+	px := optionMark(opt.SecID, isCall, strike, spot, t, symbol, expiry)
+	if px <= 0 {
+		return nil, fmt.Errorf("нет цены защиты (стакан пуст)")
+	}
+	if protectQty < 1 {
+		protectQty = 1
+	}
+	if qtyPerLevel < 1 {
+		qtyPerLevel = 1
+	}
+	if maxInv < 1 {
+		maxInv = 5
+	}
+	if step <= 0 {
+		if symbol == "Si" {
+			step = 25
+		} else {
+			step = 100
+		}
+	}
+	if tpPts <= 0 {
+		tpPts = step
+	}
+	iv := quant.ImpliedVolatility(isCall, px, spot, strike, t, 0.16)
+	if iv <= 0.02 {
+		iv = 0.30
+	}
+	g := quant.CalculateBlackScholes(isCall, spot, strike, t, 0.16, iv)
+	premiumTotal := math.Round(px*mult*float64(protectQty)*100) / 100
+	thetaDay := math.Round(g.Theta*mult*float64(protectQty)*100) / 100 // negative for long
+	thetaAbs := -thetaDay
+	if thetaAbs < 0 {
+		thetaAbs = 0
+	}
+	plan := &protectGridPlan{
+		Symbol: symbol, Direction: direction, Expiry: expiry, DaysToExp: dte,
+		EntrySpot: spot, ProtectStrike: strike, ProtectIsCall: isCall,
+		ProtectQty: protectQty, ProtectSecID: opt.SecID,
+		PremiumEach: math.Round(px*100) / 100, PremiumTotal: premiumTotal,
+		ThetaDay: thetaDay, DeltaEach: g.Delta,
+		GridStep: step, TakeProfit: tpPts, QtyPerLevel: qtyPerLevel, MaxInventory: maxInv,
+		BreakevenFills: gridBreakevenFillsPerDay(thetaAbs, step, mult, feePerFill),
+	}
+	cov := math.Abs(g.Delta) * float64(protectQty) / float64(maxInv)
+	plan.Coverage = math.Round(cov*100) / 100
+	// Worst ladder water: full inventory bought, spot keeps running against
+	// the grid by stopSpan points with no take profits.
+	stopSpan := step * float64(maxInv)
+	plan.MaxGridLoss = math.Round(stopSpan*mult*float64(maxInv)*100) / 100
+	// Scenarios: 4 tape characters × grid P&L (option leg excluded — its
+	// expiry payoff rides in analytics; here the question is "does the grid
+	// pay theta").
+	amp := step * 6
+	if atr := planATRHint(symbol); atr > 0 {
+		amp = atr / 4
+	}
+	scenDefs := []struct{ key, name string }{
+		{"chop", "пила ±¼ ATR (базовый сценарий)"},
+		{"flat", "флэт (смерть сетки)"},
+		{"trend_up", "тренд вверх"},
+		{"trend_down", "тренд вниз"},
+	}
+	for _, sd := range scenDefs {
+		path := synthPath(sd.key, spot, 160, amp)
+		real, unreal, fills, inv, adv := simulateGrid(direction, path, spot, step, tpPts, mult, feePerFill, qtyPerLevel, maxInv)
+		verdict := "сетка окупает тету"
+		if real < thetaAbs {
+			verdict = "сетка НЕ окупает дневную тету"
+		}
+		if sd.key == "flat" && fills == 0 {
+			verdict = "нет заливок — тета вхолостую"
+		}
+		plan.Scenarios = append(plan.Scenarios, gridScenario{
+			Name: sd.name, GridPnL: real, Inventory: inv, Unreal: unreal, Fills: fills, MaxAdverse: adv, Verdict: verdict,
+		})
+	}
+	if cov < 0.5 {
+		plan.Warnings = append(plan.Warnings, fmt.Sprintf("слабое покрытие: опционы закрывают лишь %.0f%% макс. инвентаря — при продолжении тренда сетка потечёт", cov*100))
+	}
+	if dte < 14 {
+		plan.Warnings = append(plan.Warnings, "DTE < 14: тета-ускорение и гамма-взрыв у экспирации — только докатка, не новый вход")
+	}
+	if dte > 45 {
+		plan.Warnings = append(plan.Warnings, "DTE > 45: премия дорогая, тета медленная — защита переплачена")
+	}
+	return plan, nil
+}
+
+// planATRHint returns a fast ATR hint for scenario amplitude (cached range
+// history, no network in tests via override).
+var planATRHintOverride = 0.0
+
+func planATRHint(symbol string) float64 {
+	if planATRHintOverride > 0 {
+		return planATRHintOverride
+	}
+	return 0
+}
+
+// ---- HTTP API ----
+
+// GET /api/v1/protect-grid/signal?symbol=Si — live exhaustion read from the
+// range tracker (no trade).
+func protectGridSignalHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "Si"
+	}
+	today, err := fetchRangeToday(symbol)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+		return
+	}
+	if today.Stale || today.ATR14 <= 0 {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "торги закрыты или нет ATR — сигнал недоступен"})
+		return
+	}
+	sig := protectGridSignal(today.Open, today.High, today.Low, today.Last, today.ATR14)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"symbol": symbol, "today": today, "signal": sig,
+	})
+}
+
+// POST /api/v1/protect-grid/plan — pre-trade economics.
+func protectGridPlanHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Symbol       string  `json:"symbol"`
+		Direction    string  `json:"direction"`
+		Expiry       string  `json:"expiry"`
+		ProtectQty   int     `json:"protect_qty"`
+		GridStep     float64 `json:"grid_step"`
+		TakeProfit   float64 `json:"take_profit"`
+		QtyPerLevel  int     `json:"qty_per_level"`
+		MaxInventory int     `json:"max_inventory"`
+		FeePerFill   float64 `json:"fee_per_fill"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if req.Symbol == "" {
+		req.Symbol = "Si"
+	}
+	if req.Direction == "" {
+		req.Direction = gridLong
+	}
+	req.Direction = strings.ToUpper(req.Direction)
+	if req.ProtectQty < 1 {
+		req.ProtectQty = 10
+	}
+	if req.FeePerFill <= 0 {
+		req.FeePerFill = 4
+	}
+	if req.Expiry == "" {
+		today := time.Now().Format("2006-01-02")
+		best := ""
+		bestDTE := 1 << 30
+		for _, s := range optionSeriesForSymbol(req.Symbol) {
+			if s.LastDelDate < today {
+				continue
+			}
+			d := dteInDays(s.LastDelDate, time.Now())
+			if d >= 14 && d < bestDTE {
+				bestDTE, best = d, s.LastDelDate
+			}
+		}
+		if best == "" {
+			for _, s := range optionSeriesForSymbol(req.Symbol) {
+				if s.LastDelDate >= today {
+					best = s.LastDelDate
+					break
+				}
+			}
+		}
+		req.Expiry = best
+	}
+	spot, _ := getSpotPrice(req.Symbol)
+	plan, err := buildProtectGridPlan(req.Symbol, req.Direction, req.Expiry, spot, req.ProtectQty, req.GridStep, req.TakeProfit, req.QtyPerLevel, req.MaxInventory, req.FeePerFill)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+		return
+	}
+	// Attach the live exhaustion read so the plan says WHEN, not just WHAT.
+	if t, terr := fetchRangeToday(req.Symbol); terr == nil && !t.Stale && t.ATR14 > 0 {
+		plan.Signal = protectGridSignal(t.Open, t.High, t.Low, t.Last, t.ATR14)
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "plan": plan})
+}
+
+// POST /api/v1/protect-grid/open — buy the wing + start the ladder.
+func protectGridOpenHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Symbol       string  `json:"symbol"`
+		Direction    string  `json:"direction"`
+		Expiry       string  `json:"expiry"`
+		ProtectQty   int     `json:"protect_qty"`
+		GridStep     float64 `json:"grid_step"`
+		TakeProfit   float64 `json:"take_profit"`
+		QtyPerLevel  int     `json:"qty_per_level"`
+		MaxInventory int     `json:"max_inventory"`
+		FeePerFill   float64 `json:"fee_per_fill"`
+		MaxLossRub   float64 `json:"max_loss_rub"`
+		ProfitTarget float64 `json:"profit_target_rub"`
+		TimeStopDTE  int     `json:"time_stop_dte"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if req.Symbol == "" {
+		req.Symbol = "Si"
+	}
+	req.Direction = strings.ToUpper(req.Direction)
+	if req.Direction == "" {
+		req.Direction = gridLong
+	}
+	if req.ProtectQty < 1 {
+		req.ProtectQty = 10
+	}
+	if req.QtyPerLevel < 1 {
+		req.QtyPerLevel = 1
+	}
+	if req.MaxInventory < 1 {
+		req.MaxInventory = 5
+	}
+	if req.FeePerFill <= 0 {
+		req.FeePerFill = 4
+	}
+	if req.TimeStopDTE <= 0 {
+		req.TimeStopDTE = 7
+	}
+	spot, _ := getSpotPrice(req.Symbol)
+	if spot <= 0 || isEstimatePrice(spot) {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "нет живого спота — вход по оценке запрещён"})
+		return
+	}
+	if req.Expiry == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "укажи экспирацию (см. /api/v1/protect-grid/plan)"})
+		return
+	}
+	plan, err := buildProtectGridPlan(req.Symbol, req.Direction, req.Expiry, spot, req.ProtectQty, req.GridStep, req.TakeProfit, req.QtyPerLevel, req.MaxInventory, req.FeePerFill)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+		return
+	}
+	// Executable wing fill only: BUY at the ask touch.
+	wingFill, err := futuresFillPrice(plan.ProtectSecID, "BUY")
+	if err != nil {
+		// futuresFillPrice reads futures books; options need the ask side.
+		// Fall back to the hybrid mark only when it came from a live book.
+		if q, ok := cachedOptionQuoteEx(plan.ProtectSecID); ok && q.Offer > 0 && q.Bid > 0 && q.Offer >= q.Bid {
+			wingFill = q.Offer
+		} else {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "нет живого аска защиты: " + err.Error()})
+			return
+		}
+	}
+	// Futures contract for the ladder: front contract.
+	futSec := ""
+	if alorMarket != nil {
+		if syms, serr := alorMarket.FetchOptionChain(req.Symbol); serr == nil {
+			futSec = resolveFuturesAlor(syms, req.Symbol, time.Now())
+		}
+	}
+	if futSec == "" {
+		futSec = selectedSeriesFor(req.Symbol)
+		if isSyntheticSeriesCode(futSec) {
+			futSec = resolveRealFuturesCode(req.Symbol, futSec)
+		}
+	}
+	if futSec == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "нет фьючерса для сетки"})
+		return
+	}
+	mult := contractMultiplier(req.Symbol)
+	p := quant.Position{
+		ID:       fmt.Sprintf("pos-%d", time.Now().UnixNano()/1e6),
+		Strategy: "Protective Grid",
+		Symbol:   req.Symbol,
+		Expiry:   req.Expiry,
+		OpenedAt: time.Now(),
+		Margin:   math.Round(wingFill*mult*float64(req.ProtectQty)*100) / 100,
+	}
+	p.Legs = append(p.Legs, quant.PositionLeg{
+		SecID: plan.ProtectSecID, Symbol: req.Symbol, Kind: "OPTION",
+		Side: "BUY", Quantity: req.ProtectQty, Strike: plan.ProtectStrike,
+		IsCall: plan.ProtectIsCall, EntryPrice: wingFill, CurrentPrice: wingFill,
+	})
+	repricePosition(&p)
+	quant.SavePosition(p)
+
+	rec := protectGridRecord{
+		ID: recID("pgrid"), PositionID: p.ID,
+		Symbol: req.Symbol, Direction: req.Direction, Expiry: req.Expiry,
+		EntrySpot: spot, ProtectSecID: plan.ProtectSecID, ProtectStrike: plan.ProtectStrike,
+		ProtectIsCall: plan.ProtectIsCall, ProtectQty: req.ProtectQty, ProtectEntry: wingFill,
+		GridStep: plan.GridStep, TakeProfit: plan.TakeProfit, QtyPerLevel: req.QtyPerLevel,
+		MaxInventory: req.MaxInventory, FeePerFill: req.FeePerFill, FuturesSecID: futSec,
+		MaxLossRub: req.MaxLossRub, ProfitTarget: req.ProfitTarget, TimeStopDTE: req.TimeStopDTE,
+		Status: "OPEN", OpenedAt: time.Now().Format(time.RFC3339),
+		FillLog: []gridFill{{At: time.Now().Format("02.01 15:04"), Side: "BUY", Qty: req.ProtectQty, Price: wingFill, Kind: "OPEN", Note: fmt.Sprintf("защита %s %.0f", map[bool]string{true: "CALL", false: "PUT"}[plan.ProtectIsCall], plan.ProtectStrike)}},
+	}
+	saveProtectGridRecord(rec)
+	logTelegramErr("pgrid-open", sendTelegramMessage(
+		fmt.Sprintf("🛡 Защитная сетка %s %s открыта: %s %.0f ×%d по %.0f, сетка %s шаг %.0f/тейк %.0f, макс. %d фьюч",
+			telegramEscape(req.Symbol), telegramEscape(rec.ID),
+			map[bool]string{true: "CALL", false: "PUT"}[plan.ProtectIsCall],
+			plan.ProtectStrike, req.ProtectQty, wingFill,
+			req.Direction, plan.GridStep, plan.TakeProfit, req.MaxInventory)))
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "grid": rec, "plan": plan})
+}
+
+// GET /api/v1/protect-grid — open grids with live P&L.
+func protectGridListHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	out := []map[string]interface{}{}
+	for _, g := range openProtectGrids() {
+		item := map[string]interface{}{
+			"id": g.ID, "symbol": g.Symbol, "direction": g.Direction, "expiry": g.Expiry,
+			"entry_spot": g.EntrySpot, "protect_strike": g.ProtectStrike, "protect_qty": g.ProtectQty,
+			"grid_step": g.GridStep, "take_profit": g.TakeProfit, "max_inventory": g.MaxInventory,
+			"status": g.Status, "opened_at": g.OpenedAt, "fills": g.Fills,
+			"dte": dteInDays(g.Expiry, time.Now()),
+		}
+		if pos, found := quant.GetPositionByID(g.PositionID); found {
+			repricePosition(pos)
+			quant.SavePosition(*pos)
+			item["pnl"] = math.Round(pos.PnL*100) / 100
+			item["realized"] = math.Round(pos.RealizedPnL*100) / 100
+			item["inventory"] = gridOpenInventory(pos.Legs, g.Direction)
+			item["net_delta"] = math.Round(pos.Delta*100) / 100
+			item["theta_day"] = math.Round(pos.Theta*100) / 100
+		} else {
+			item["note"] = "позиция не найдена"
+		}
+		out = append(out, item)
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"grids": out})
+}
+
+// GET /api/v1/protect-grid/analytics?id=pgrid-... — state, scenario matrix,
+// breakeven and fill journal.
+func protectGridAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	id := r.URL.Query().Get("id")
+	g, found := pgridByID(id)
+	if !found {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "grid not found"})
+		return
+	}
+	pos, ok := quant.GetPositionByID(g.PositionID)
+	if !ok {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "position not found"})
+		return
+	}
+	repricePosition(pos)
+	quant.SavePosition(*pos)
+	mult := contractMultiplier(pos.Symbol)
+	spot, spotSuspect := analyticsSpot(pos.Legs, pos.Symbol)
+	if spot <= 0 {
+		spot, _ = getSpotPrice(pos.Symbol)
+		spotSuspect = true
+	}
+	dte := dteInDays(g.Expiry, time.Now())
+	inv := gridOpenInventory(pos.Legs, g.Direction)
+	target := gridLadderTarget(g.Direction, g.EntrySpot, spot, g.GridStep, g.MaxInventory)
+	closable := gridTakeProfitLegs(pos.Legs, g.Direction, spot, g.TakeProfit)
+	// Option expiry payoff at ±2 steps (per-share → rubles via mult).
+	payoff := []map[string]interface{}{}
+	for _, bump := range []float64{-2, -1, -0.5, 0, 0.5, 1, 2} {
+		px := spot + bump*g.GridStep*float64(g.MaxInventory)
+		var v float64
+		if g.ProtectIsCall {
+			v = math.Max(px-g.ProtectStrike, 0) - g.ProtectEntry
+		} else {
+			v = math.Max(g.ProtectStrike-px, 0) - g.ProtectEntry
+		}
+		payoff = append(payoff, map[string]interface{}{
+			"spot": math.Round(px), "wing_pnl": math.Round(v*mult*float64(g.ProtectQty)*100) / 100,
+		})
+	}
+	scenarios := []gridScenario{}
+	amp := g.GridStep * 6
+	for _, sd := range []struct{ key, name string }{
+		{"chop", "пила"}, {"flat", "флэт"}, {"trend_up", "тренд вверх"}, {"trend_down", "тренд вниз"},
+	} {
+		path := synthPath(sd.key, spot, 160, amp)
+		real, unreal, fills, invS, adv := simulateGrid(g.Direction, path, g.EntrySpot, g.GridStep, g.TakeProfit, mult, g.FeePerFill, g.QtyPerLevel, g.MaxInventory)
+		scenarios = append(scenarios, gridScenario{Name: sd.name, GridPnL: real, Inventory: invS, Unreal: unreal, Fills: fills, MaxAdverse: adv})
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"grid":                    g,
+		"pnl":                     math.Round(pos.PnL*100) / 100,
+		"realized":                math.Round(pos.RealizedPnL*100) / 100,
+		"inventory":               inv,
+		"target":                  target,
+		"closable_tp":             closable,
+		"net_delta":               math.Round(pos.Delta*100) / 100,
+		"theta_day":               math.Round(pos.Theta*100) / 100,
+		"breakeven_fills_per_day": gridBreakevenFillsPerDay(math.Abs(pos.Theta), g.GridStep, mult, g.FeePerFill),
+		"wing_payoff_expiry":      payoff,
+		"scenarios":               scenarios,
+		"dte":                     dte,
+		"spot_suspect":            spotSuspect,
+		"fill_log":                g.FillLog,
+	})
+}
+
+// POST /api/v1/protect-grid/close {"id":"pgrid-..."} — manual close.
+func protectGridCloseHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	g, found := pgridByID(req.ID)
+	if !found || g.Status != "OPEN" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "grid not found or not open"})
+		return
+	}
+	pos, ok := quant.GetPositionByID(g.PositionID)
+	if !ok {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "position not found"})
+		return
+	}
+	closeProtectGrid(&g, pos, "закрыта вручную", true)
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+func closeProtectGrid(g *protectGridRecord, pos *quant.Position, reason string, notify bool) {
+	repricePosition(pos)
+	removed, found := quant.RemovePosition(pos.ID)
+	if !found {
+		return
+	}
+	tr := quant.SettleTrade(removed)
+	enrichTradeContext(&tr, g.Symbol, g.Expiry, g.EntrySpot)
+	quant.AddTrade(tr)
+	g.Status = "CLOSED"
+	saveProtectGridRecord(*g)
+	if notify {
+		logTelegramErr("pgrid-close", sendTelegramMessage(
+			fmt.Sprintf("🛡 Сетка %s %s закрыта: %s\nP&L %s ₽ (сетка реализовано %s ₽, заливок %d)",
+				telegramEscape(g.Symbol), telegramEscape(g.ID), telegramEscape(reason),
+				formatRub(removed.PnL+removed.RealizedPnL, 0), formatRub(g.RealizedGrid, 0), g.Fills)))
+	}
+}
+
+// ---- Manager (60s loop, paper fills at executable touches) ----
+
+var (
+	pgridManagerMu sync.Mutex
+	pgridManagerOn bool
+)
+
+func startProtectGridManager() {
+	pgridManagerMu.Lock()
+	if pgridManagerOn {
+		pgridManagerMu.Unlock()
+		return
+	}
+	pgridManagerOn = true
+	pgridManagerMu.Unlock()
+	go func() {
+		for {
+			time.Sleep(60 * time.Second)
+			if marketHalt() {
+				continue
+			}
+			runProtectGridPass()
+		}
+	}()
+}
+
+// pgridEval is one loop decision. Pure apart from inputs.
+type pgridEval struct {
+	Action string // CLOSE_STOP | CLOSE_TIME | CLOSE_TP | NONE
+	Reason string
+}
+
+func evaluateProtectGrid(g *protectGridRecord, pnl float64, dte int) pgridEval {
+	if g.MaxLossRub > 0 && pnl <= -g.MaxLossRub {
+		return pgridEval{"CLOSE_STOP", fmt.Sprintf("стоп %.0f ₽: P&L %s ₽", g.MaxLossRub, formatRub(pnl, 0))}
+	}
+	limit := g.TimeStopDTE
+	if limit <= 0 {
+		limit = 7
+	}
+	if dte <= limit {
+		return pgridEval{"CLOSE_TIME", fmt.Sprintf("time-stop: DTE %d ≤ %d", dte, limit)}
+	}
+	if g.ProfitTarget > 0 && pnl >= g.ProfitTarget {
+		return pgridEval{"CLOSE_TP", fmt.Sprintf("тейк %.0f ₽: P&L %s ₽", g.ProfitTarget, formatRub(pnl, 0))}
+	}
+	return pgridEval{"NONE", ""}
+}
+
+func runProtectGridPass() {
+	now := time.Now()
+	for _, g := range openProtectGrids() {
+		pos, ok := quant.GetPositionByID(g.PositionID)
+		if !ok {
+			continue
+		}
+		repricePosition(pos)
+		quant.SavePosition(*pos)
+		spot, _ := getSpotPrice(pos.Symbol)
+		if spot <= 0 || isEstimatePrice(spot) {
+			continue // freeze on ghosts — no ladder moves on fake spots
+		}
+		dte := dteInDays(g.Expiry, now)
+		total := pos.PnL + pos.RealizedPnL
+		if ev := evaluateProtectGrid(&g, total, dte); ev.Action != "NONE" {
+			closeProtectGrid(&g, pos, ev.Reason, true)
+			continue
+		}
+		mult := contractMultiplier(pos.Symbol)
+		// 1) Take profits: close touched ladder legs via FIFO netting.
+		if qty := gridTakeProfitLegs(pos.Legs, g.Direction, spot, g.TakeProfit); qty > 0 {
+			side := "SELL"
+			if g.Direction == gridShort {
+				side = "BUY"
+			}
+			if err := pgridExecuteLadder(&g, pos, side, qty, spot, mult, "TAKE", "тейк-профит юнита"); err != nil {
+				log.Printf("pgrid %s take failed: %v", g.ID, err)
+			} else {
+				// Reload after execution for the ladder step below.
+				if p2, ok2 := quant.GetPositionByID(g.PositionID); ok2 {
+					pos = p2
+				}
+				if g2, ok2 := pgridByID(g.ID); ok2 {
+					g = g2
+				}
+			}
+		}
+		// 2) Ladder top-up toward the stateless target (cap 3 lots/pass so a
+		// gap never opens the whole book at once).
+		inv := gridOpenInventory(pos.Legs, g.Direction)
+		target := gridLadderTarget(g.Direction, g.EntrySpot, spot, g.GridStep, g.MaxInventory)
+		if target > inv {
+			add := target - inv
+			if add > 3 {
+				add = 3
+			}
+			side := "BUY"
+			if g.Direction == gridShort {
+				side = "SELL"
+			}
+			if err := pgridExecuteLadder(&g, pos, side, add*g.QtyPerLevel, spot, mult, "LADDER", fmt.Sprintf("лестница к цели %d", target)); err != nil {
+				log.Printf("pgrid %s ladder failed: %v", g.ID, err)
+			}
+		}
+	}
+}
+
+// pgridExecuteLadder nets/appends paper futures legs at the executable touch,
+// updates counters + journal. Shared by the loop (take + ladder).
+func pgridExecuteLadder(g *protectGridRecord, pos *quant.Position, side string, qty int, spot, mult float64, kind, note string) error {
+	if qty <= 0 {
+		return nil
+	}
+	if g.FuturesSecID == "" {
+		return fmt.Errorf("нет фьючерса для сетки")
+	}
+	fill, err := futuresFillPrice(g.FuturesSecID, side)
+	if err != nil {
+		return err
+	}
+	legs, realized, residual := quant.NetFuturesLegs(pos.Legs, g.FuturesSecID, side, qty, fill, mult)
+	pos.Legs = legs
+	pos.RealizedPnL += realized
+	g.RealizedGrid += realized
+	if residual > 0 {
+		pos.Legs = append(pos.Legs, quant.PositionLeg{
+			SecID: g.FuturesSecID, Symbol: pos.Symbol, Kind: "FUTURES",
+			Side: side, Quantity: residual, EntryPrice: fill, CurrentPrice: fill,
+		})
+		pos.Margin += fill * mult * 0.15 * float64(residual)
+	}
+	repricePosition(pos)
+	quant.SavePosition(*pos)
+	g.Fills++
+	g.FillLog = append(g.FillLog, gridFill{
+		At: time.Now().Format("02.01 15:04"), Side: side, Qty: qty,
+		Price: fill, Kind: kind, Note: note,
+	})
+	if len(g.FillLog) > 100 {
+		g.FillLog = g.FillLog[len(g.FillLog)-100:]
+	}
+	saveProtectGridRecord(*g)
+	return nil
+}
+
+// GET /api/v1/protect-grid/manager — status stub (log lives in fill journals).
+func protectGridManagerHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"enabled": true, "interval_sec": 60, "open": len(openProtectGrids()),
+	})
+}
