@@ -913,8 +913,8 @@
                         <input id="pg-qty" type="number" value="10" min="1" class="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
                     <label class="text-slate-400">Шаг сетки
                         <input id="pg-step" type="number" value="25" min="1" class="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
-                    <label class="text-slate-400">Тейк юнита
-                        <input id="pg-tp" type="number" placeholder="= шагу" min="0" class="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
+                    <label class="text-slate-400" title="Круг зарабатывает тейк минус 2 комиссии. Тейк ниже 2 комиссий блокирует вход — ставь = шагу">Тейк юнита (!)
+                        <input id="pg-tp" type="number" placeholder="= шагу, > 2×комис." min="0" class="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
                     <label class="text-slate-400">Лот/уровень
                         <input id="pg-qpl" type="number" value="1" min="1" class="w-14 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
                     <label class="text-slate-400">Макс. фьюч
@@ -2461,7 +2461,7 @@
                 if (d.error) { box.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${d.error}</div>`; return; }
                 let html = `<div class="font-mono text-[11px] text-slate-200">P&L <b>${d.pnl}</b> ₽ (реализовано сеткой ${d.realized} ₽) · `
                     + `Инвентарь ${d.inventory} (цель ${d.target}) · Готовых тейков ${d.closable_tp} · Δ ${d.net_delta} · Тета ${d.theta_day} ₽/день · `
-                    + `Безубыток ${d.breakeven_roundtrips_per_day} кругов/день · DTE ${d.dte}${d.spot_suspect ? ' · <span class="text-amber-300">спот подозрительный</span>' : ''}</div>`;
+                    + `Безубыток ${Number.isFinite(d.breakeven_roundtrips_per_day) ? d.breakeven_roundtrips_per_day : '∞ (тета не окупается)'} кругов/день · DTE ${d.dte}${d.spot_suspect ? ' · <span class="text-amber-300">спот подозрительный</span>' : ''}</div>`;
                 html += `<div class="grid grid-cols-1 xl:grid-cols-2 gap-3 mt-2">`;
                 html += `<div><div class="text-[10px] text-slate-500 font-mono uppercase mb-1">Крыло к экспирации (защита минус вход)</div>`
                     + `<table class="w-full text-left font-mono text-[11px] text-slate-300"><thead class="text-slate-500 border-b border-slate-700"><tr><th class="pr-2">Спот</th><th class="text-right">Крыло ₽</th></tr></thead><tbody>`

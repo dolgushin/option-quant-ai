@@ -117,14 +117,26 @@ func protectGridSignal(open, high, low, last, atr float64) gridSignal {
 }
 
 // gridBreakevenRoundTripsPerDay answers "how many grid round-trips a day pay
-// for theta": ceil(thetaDay / (step*mult - 2*fee)). One round trip pays the
-// entry AND the exit fee (the simulator charges both). Pure — unit-tested.
-func gridBreakevenRoundTripsPerDay(thetaDay, stepPts, mult, feePerFill float64) float64 {
-	edge := stepPts*mult - 2*feePerFill
+// for theta": ceil(thetaDay / (tp*mult - 2*fee)). One round trip earns the
+// per-unit TAKE PROFIT (not the ladder step) and pays the entry AND the exit
+// fee (the simulator charges both). A take profit below two fees means every
+// circle loses money — Inf. Pure — unit-tested.
+func gridBreakevenRoundTripsPerDay(thetaDay, tpPts, mult, feePerFill float64) float64 {
+	edge := tpPts*mult - 2*feePerFill
 	if edge <= 0 || thetaDay <= 0 {
 		return math.Inf(1)
 	}
 	return math.Ceil(thetaDay / edge)
+}
+
+// finiteOrNil maps an unpayable breakeven (+Inf) to JSON null:
+// encoding/json cannot marshal Inf and fails the whole response with an
+// empty body. Pure — unit-tested.
+func finiteOrNil(v float64) *float64 {
+	if math.IsInf(v, 0) || math.IsNaN(v) {
+		return nil
+	}
+	return &v
 }
 
 // gridLadderTarget is the stateless inventory target of a one-sided grid:
@@ -492,7 +504,7 @@ type protectGridPlan struct {
 	TakeProfit          float64        `json:"take_profit"`
 	QtyPerLevel         int            `json:"qty_per_level"`
 	MaxInventory        int            `json:"max_inventory"`
-	BreakevenRoundTrips float64        `json:"breakeven_roundtrips_per_day"`
+	BreakevenRoundTrips *float64       `json:"breakeven_roundtrips_per_day"`
 	Coverage            float64        `json:"coverage_ratio"`
 	MaxGridLoss         float64        `json:"max_grid_loss_rub"`
 	Scenarios           []gridScenario `json:"scenarios"`
@@ -581,7 +593,7 @@ func buildProtectGridPlan(symbol, direction, expiry string, spot float64, protec
 		PremiumEach: math.Round(px*100) / 100, PremiumTotal: premiumTotal,
 		ThetaDay: thetaDay, DeltaEach: g.Delta,
 		GridStep: step, TakeProfit: tpPts, QtyPerLevel: qtyPerLevel, MaxInventory: maxInv,
-		BreakevenRoundTrips: gridBreakevenRoundTripsPerDay(thetaAbs, step, mult, feePerFill),
+		BreakevenRoundTrips: finiteOrNil(gridBreakevenRoundTripsPerDay(thetaAbs, tpPts, mult, feePerFill)),
 	}
 	cov := math.Abs(g.Delta) * float64(protectQty) / float64(maxInv)
 	plan.Coverage = math.Round(cov*100) / 100
@@ -618,6 +630,9 @@ func buildProtectGridPlan(symbol, direction, expiry string, spot float64, protec
 	}
 	if cov < 0.5 {
 		plan.Warnings = append(plan.Warnings, fmt.Sprintf("слабое покрытие: опционы закрывают лишь %.0f%% макс. инвентаря — при продолжении тренда сетка потечёт", cov*100))
+	}
+	if tpPts*mult <= 2*feePerFill {
+		plan.Warnings = append(plan.Warnings, fmt.Sprintf("тейк %.0f не покрывает 2 комиссии (%.0f ₽): КАЖДЫЙ круг сетки в минус — увеличь тейк минимум до %.0f", tpPts, 2*feePerFill, 2*feePerFill/mult+1))
 	}
 	if dte < 14 {
 		plan.Warnings = append(plan.Warnings, "DTE < 14: тета-ускорение и гамма-взрыв у экспирации — только докатка, не новый вход")
@@ -796,6 +811,14 @@ func protectGridOpenHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
 		return
 	}
+	// A take profit below two fees loses on every circle by construction —
+	// refuse instead of opening a guaranteed bleeder (same strictness as
+	// the no-estimate rule).
+	if plan.TakeProfit*contractMultiplier(req.Symbol) <= 2*req.FeePerFill {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false,
+			"error": fmt.Sprintf("тейк %.0f не покрывает 2 комиссии (%.0f ₽): каждый круг в минус — поставь тейк ≥ %.0f", plan.TakeProfit, 2*req.FeePerFill, 2*req.FeePerFill/contractMultiplier(req.Symbol)+1)})
+		return
+	}
 	// Executable wing fill only: BUY at the ask touch.
 	wingFill, err := futuresFillPrice(plan.ProtectSecID, "BUY")
 	if err != nil {
@@ -950,7 +973,7 @@ func protectGridAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		"closable_tp":                  closable,
 		"net_delta":                    math.Round(pos.Delta*100) / 100,
 		"theta_day":                    math.Round(pos.Theta*100) / 100,
-		"breakeven_roundtrips_per_day": gridBreakevenRoundTripsPerDay(math.Abs(pos.Theta), g.GridStep, mult, g.FeePerFill),
+		"breakeven_roundtrips_per_day": finiteOrNil(gridBreakevenRoundTripsPerDay(math.Abs(pos.Theta), g.TakeProfit, mult, g.FeePerFill)),
 		"wing_payoff_expiry":           payoff,
 		"scenarios":                    scenarios,
 		"dte":                          dte,
