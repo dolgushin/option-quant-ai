@@ -19,6 +19,8 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+          # Module lives in backend/, not repo root.
+          cache-dependency-path: backend/go.sum
 
       - name: Build Go binary for Linux
         run: |
