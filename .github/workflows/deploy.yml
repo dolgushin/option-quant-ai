@@ -43,4 +43,7 @@ jobs:
           # смешанное дерево (файлы разных коммитов), плюс сыпались
           # Permission denied. Репозиторий на VPS уже есть.
           # Перезапустим Docker Compose с полным пересбором
-          ssh -p $PORT -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no $USER@$HOST "cd /opt/option-quant-ai && git fetch origin && git reset --hard origin/main && git log --oneline -1 && (docker compose down --remove-orphans || true) && docker compose up --build --force-recreate -d"
+          # down не трогает контейнеры, запущенные мимо compose (ручной docker
+          # run): такой висяк занимает имя option-quant-app и роняет up с
+          # Conflict. Поэтому явно сносим тёзку перед подъёмом.
+          ssh -p $PORT -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no $USER@$HOST "cd /opt/option-quant-ai && git fetch origin && git reset --hard origin/main && git log --oneline -1 && (docker compose down --remove-orphans || true) && (docker rm -f option-quant-app || true) && docker compose up --build --force-recreate -d"
