@@ -890,7 +890,7 @@
         <div id="pgrid-view" class="hidden space-y-4 md:space-y-6">
             <div class="flex justify-between items-center flex-wrap gap-2">
                 <h2 class="text-lg font-semibold text-slate-200">🛡 Защитная сетка (бумага)</h2>
-                <button onclick="loadPgridSignal(); loadPgrids();" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded-lg transition">↻ Обновить</button>
+                <button onclick="loadPgridMeta(); loadPgridSignal(); loadPgrids();" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded-lg transition">↻ Обновить</button>
             </div>
             <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
                 <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">Сигнал исчерпания дневного диапазона</div>
@@ -900,14 +900,15 @@
                 <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">План и открытие — защита на шаг от спота + односторонняя сетка</div>
                 <div class="flex flex-wrap items-end gap-2 font-mono text-[11px]">
                     <label class="text-slate-400">Инстр.
-                        <select id="pg-symbol" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option>Si</option><option>RI</option></select></label>
+                        <select id="pg-symbol" onchange="loadPgridMeta()" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option>Si</option><option>RI</option></select></label>
+                    <span id="pg-spot-hint" class="text-slate-500 self-center"></span>
                     <label class="text-slate-400">Направление
                         <select id="pg-dir" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white">
                             <option value="LONG">LONG-сетка + PUT</option>
                             <option value="SHORT">SHORT-сетка + CALL</option>
                         </select></label>
                     <label class="text-slate-400">Экспирация
-                        <input id="pg-expiry" type="text" placeholder="авто 14–45 DTE" class="w-28 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"></label>
+                        <select id="pg-expiry" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option value="">авто 14–45 DTE</option></select></label>
                     <label class="text-slate-400">Опционов
                         <input id="pg-qty" type="number" value="10" min="1" class="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-right text-white"></label>
                     <label class="text-slate-400">Шаг сетки
@@ -1307,7 +1308,7 @@
             document.getElementById(btns[tab]).className = tabActive;
             if (tab === 'spreads') updateSpreads();
             if (tab === 'straddles') { loadStraddleMeta(); loadStraddles(); }
-            if (tab === 'pgrid') { loadPgridSignal(); loadPgrids(); }
+            if (tab === 'pgrid') { loadPgridMeta(); loadPgridSignal(); loadPgrids(); }
             if (tab === 'stats') loadStats();
             if (tab === 'ranges') loadRanges();
             if (tab === 'forecast') loadForecast();
@@ -2317,6 +2318,21 @@
                 profit_target_rub: parseFloat(document.getElementById('pg-profit').value) || 0,
                 time_stop_dte: parseInt(document.getElementById('pg-tstop').value) || 7,
             };
+        }
+
+        async function loadPgridMeta() {
+            const sym = document.getElementById('pg-symbol').value;
+            const keepEx = document.getElementById('pg-expiry').value;
+            try {
+                const res = await fetch(`/api/v1/straddles/meta?symbol=${encodeURIComponent(sym)}`);
+                const d = await res.json();
+                const ex = document.getElementById('pg-expiry');
+                ex.innerHTML = '<option value="">авто 14–45 DTE</option>' + (d.expiries || []).map(e =>
+                    `<option value="${e.date}">${e.date} ${e.tenor} (${e.dte}д)</option>`).join('');
+                if (keepEx && [...ex.options].some(o => o.value === keepEx)) ex.value = keepEx;
+                const hint = document.getElementById('pg-spot-hint');
+                if (hint) hint.innerText = d.spot ? `спот ${Math.round(d.spot).toLocaleString('ru-RU')}` : 'спот —';
+            } catch (e) { /* пусто = авто-режим бэкенда */ }
         }
 
         async function loadPgridSignal() {
