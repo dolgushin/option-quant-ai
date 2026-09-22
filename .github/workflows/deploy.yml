@@ -39,12 +39,8 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -p $PORT -H $HOST >> ~/.ssh/known_hosts
 
-          # Создаем директории на VPS если не существуют
-          ssh -p $PORT -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no $USER@$HOST "mkdir -p /opt/option-quant-ai"
-
-          # Копируем всю директорию backend и docker-compose.yml рекурсивно через scp
-          scp -r -P $PORT -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no backend $USER@$HOST:/opt/option-quant-ai/
-          scp -P $PORT -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no docker-compose.yml $USER@$HOST:/opt/option-quant-ai/docker-compose.yml
-
+          # Доставка через git вместо scp: частичный scp при обрыве оставлял
+          # смешанное дерево (файлы разных коммитов), плюс сыпались
+          # Permission denied. Репозиторий на VPS уже есть.
           # Перезапустим Docker Compose с полным пересбором
-          ssh -p $PORT -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no $USER@$HOST "cd /opt/option-quant-ai && docker compose down --remove-orphans || true && docker compose up --build --force-recreate -d"
+          ssh -p $PORT -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no $USER@$HOST "cd /opt/option-quant-ai && git fetch origin && git reset --hard origin/main && git log --oneline -1 && (docker compose down --remove-orphans || true) && docker compose up --build --force-recreate -d"
