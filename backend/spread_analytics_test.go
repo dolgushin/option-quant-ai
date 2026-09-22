@@ -76,6 +76,26 @@ func TestAnalyticsSpot(t *testing.T) {
 	}
 }
 
+// TestAnalyticsSpotMisclassified pins the Si83000BV6 lesson: a "futures"
+// mark nowhere near a live spot is a misclassified option premium, not a
+// series gap — the live spot wins (still flagged).
+func TestAnalyticsSpotMisclassified(t *testing.T) {
+	spotMu.Lock()
+	spotOverrides["TST"] = 85903.0
+	spotMu.Unlock()
+	defer func() {
+		spotMu.Lock()
+		delete(spotOverrides, "TST")
+		spotMu.Unlock()
+	}()
+	fakeFut := []quant.PositionLeg{
+		{SecID: "Si83000BV6", Kind: "FUTURES", Side: "BUY", Quantity: 1, CurrentPrice: 397},
+	}
+	if spot, suspect := analyticsSpot(fakeFut, "TST"); spot != 85903 || !suspect {
+		t.Fatalf("misclassified = (%v, %v), want (85903, true)", spot, suspect)
+	}
+}
+
 // TestAnalyticsThetaScalesWithMult pins money units: theta curves carry the
 // multiplier (rubles/day like p.Theta), while delta curves stay in contract
 // units for the hedge engine.

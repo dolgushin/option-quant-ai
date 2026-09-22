@@ -102,6 +102,12 @@ func analyticsSpot(legs []quant.PositionLeg, symbol string) (float64, bool) {
 	}
 	spot, _ := getSpotPrice(symbol)
 	if fut > 0 {
+		if spot > 0 && !isEstimatePrice(spot) && (fut < spot*0.5 || fut > spot*1.5) {
+			// A "futures" mark nowhere near the live spot is a misclassified
+			// leg (option premium recorded as FUTURES), not a series gap —
+			// trust the spot, stay suspect.
+			return spot, true
+		}
 		if spot > 0 && math.Abs(spot-fut)/fut > 0.02 {
 			return fut, true
 		}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"option-quant-ai/alor"
+	"option-quant-ai/quant"
 )
 
 func TestDecideStraddleHedgeBands(t *testing.T) {
@@ -642,5 +643,26 @@ func TestNewestOpenStraddleStrike(t *testing.T) {
 	}
 	if got := newestOpenStraddleStrike("BR"); got != 0 {
 		t.Fatalf("unknown symbol = %v, want 0", got)
+	}
+}
+
+// TestStraddleFuturesSecID pins hedge-contract resolution: the recorded
+// cover wins, else the earliest futures leg, else empty (the hedger then
+// auto-resolves instead of trading blind).
+func TestStraddleFuturesSecID(t *testing.T) {
+	rec := &straddleRecord{FuturesSecID: "SiZ6"}
+	pos := &quant.Position{Legs: []quant.PositionLeg{
+		{SecID: "SiH6", Kind: "FUTURES"},
+	}}
+	if got := straddleFuturesSecID(rec, pos); got != "SiZ6" {
+		t.Fatalf("recorded = %v, want SiZ6", got)
+	}
+	rec.FuturesSecID = ""
+	if got := straddleFuturesSecID(rec, pos); got != "SiH6" {
+		t.Fatalf("leg fallback = %v, want SiH6", got)
+	}
+	pos.Legs = []quant.PositionLeg{{SecID: "Si86000BJ6", Kind: "OPTION"}}
+	if got := straddleFuturesSecID(rec, pos); got != "" {
+		t.Fatalf("no futures = %v, want empty", got)
 	}
 }

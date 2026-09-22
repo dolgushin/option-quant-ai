@@ -539,10 +539,10 @@ func straddleOpenHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Futures secid must be a futures contract, never an option. The open
-	// form accepts a typed secid — a pasted option (Si83000BJ6) priced and
-	// recorded as FUTURES poisoned the curve spot, the delta and the hedges.
-	if needsFutures && req.FuturesSecID != "" && alorMarket != nil {
+	// Futures secid must be a futures contract, never an option — for ANY
+	// construction. A naked classic stores the typed secid untouched and the
+	// first hedge then buys it blind (the Si83000BV6 case).
+	if req.FuturesSecID != "" && alorMarket != nil {
 		if syms, err := alorMarket.FetchOptionChain(req.Symbol); err == nil {
 			for _, s := range syms {
 				if s == req.FuturesSecID {
@@ -1689,11 +1689,40 @@ func executeStraddleHedge(s *straddleRecord, pos *quant.Position, ev straddleEva
 	dev := pos.Delta - hedgeTargetDelta(s)
 	futSec := straddleFuturesSecID(s, pos)
 	if futSec == "" {
-		return fmt.Errorf("нет фьючерса для хеджа")
+		// Naked records carry no cover secid: resolve the front contract
+		// now so the first hedge doesn't need a hand-typed secid (which is
+		// how option secids ended up in futures legs).
+		if alorMarket == nil {
+			return fmt.Errorf("нет фьючерса для хеджа (Alor не настроен)")
+		}
+		syms, err := alorMarket.FetchOptionChain(pos.Symbol)
+		if err != nil {
+			return fmt.Errorf("нет фьючерса для хеджа: %v", err)
+		}
+		if code := resolveFuturesAlor(syms, pos.Symbol, time.Now()); code != "" {
+			futSec = code
+			s.FuturesSecID = code
+		} else {
+			return fmt.Errorf("нет фьючерса для хеджа")
+		}
+	} else if alorMarket != nil {
+		// A stored secid must still be a futures contract: records opened
+		// before validation (or with a pasted option) refuse loudly instead
+		// of trading garbage.
+		if syms, err := alorMarket.FetchOptionChain(pos.Symbol); err == nil {
+			for _, sm := range syms {
+				if sm == futSec {
+					return fmt.Errorf("%s — это опцион, а не фьючерс: закрой стрэддл и открой заново с пустым полем «Фьюч secid»", futSec)
+				}
+			}
+		}
 	}
 	fill, err := futuresFillPrice(futSec, ev.Side)
 	if err != nil {
 		return fmt.Errorf("хедж невозможен: %v", err)
+	}
+	if spot > 0 && !futuresPriceSane(fill, spot) {
+		return fmt.Errorf("хедж невозможен: цена %s (%.0f) не похожа на фьючерс при споте %.0f", futSec, fill, spot)
 	}
 	mult := contractMultiplier(pos.Symbol)
 	legs, realized, residual := quant.NetFuturesLegs(pos.Legs, futSec, ev.Side, ev.Qty, fill, mult)
