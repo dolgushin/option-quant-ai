@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 
@@ -250,5 +251,34 @@ func TestCurveExpiryStats(t *testing.T) {
 	empty := curveExpiryStats(nil, nil)
 	if len(empty.Breakevens) != 0 {
 		t.Fatalf("empty breakevens = %v, want none", empty.Breakevens)
+	}
+}
+
+// TestAnalyticsDeadSpotMarshal is the regression test for the empty-profile
+// body: with no live spot the analytics must still serialize (finite zeros
+// + suspect flag), never break json.Marshal with a NaN.
+func TestAnalyticsDeadSpotMarshal(t *testing.T) {
+	legs := []analyticsLeg{
+		{SecID: "Si85500BJ6", Side: "SELL", Kind: "OPTION", Strike: 85500, IsCall: true, Quantity: 8, Entry: 1453, Current: 1241},
+		{SecID: "SiZ6", Side: "BUY", Kind: "FUTURES", Quantity: 3, Entry: 85000, Current: 0},
+	}
+	a := buildSpreadAnalytics("Si", "2026-10-15", 0, 22, 1, legs)
+	for _, l := range a.Legs {
+		for _, v := range []float64{l.PnL, l.Delta, l.Gamma, l.Vega, l.Theta, l.Rho} {
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				t.Fatalf("leg %s: non-finite %v in %+v", l.SecID, v, l)
+			}
+		}
+	}
+	for k, v := range a.Totals {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			t.Fatalf("totals[%s] = %v, want finite", k, v)
+		}
+	}
+	if _, err := json.Marshal(a); err != nil {
+		t.Fatalf("marshal dead-spot analytics: %v", err)
+	}
+	if _, err := json.Marshal(curveExpiryStats(a.Curves.Spots, a.Curves.PnlExpiry)); err != nil {
+		t.Fatalf("marshal dead-spot expiry stats: %v", err)
 	}
 }

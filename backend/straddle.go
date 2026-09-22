@@ -1295,7 +1295,10 @@ func straddleAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 	a := buildSpreadAnalytics(pos.Symbol, s.Expiry, spot, dte, mult, legs)
 	xs, cumul := thetaAccrualCurve(a.Legs, spot, dte, mult, 14)
 	hv := buildHedgeView(&s, a.Curves.Spots, a.Curves.DeltaNow, spot, time.Now())
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	// Marshal-first: a NaN anywhere in the payload must surface as a
+	// readable error, never as an empty body (the client fails with a
+	// cryptic "JSON.parse: unexpected end of data" on empty 200s).
+	payload := map[string]interface{}{
 		"analytics":     a,
 		"theta_accrual": map[string]interface{}{"days": xs, "cumul": cumul},
 		"hedge":         hv,
@@ -1307,7 +1310,14 @@ func straddleAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		"realized":      math.Round(pos.RealizedPnL*100) / 100,
 		"spot_suspect":  spotSuspect,
 		"hedge_log":     s.HedgeLog,
-	})
+	}
+	buf, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("straddle analytics: marshal failed for %s: %v", id, err)
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "не удалось посчитать профиль"})
+		return
+	}
+	w.Write(buf)
 }
 
 // GET /api/v1/straddles — open straddles with live position P&L.

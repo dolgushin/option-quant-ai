@@ -118,3 +118,20 @@ func TestCND(t *testing.T) {
 		}
 	}
 }
+
+// TestCalculateBlackScholesDeadSpot pins finite output on a dead feed:
+// S<=0 must yield zeros, never NaN (gamma is 0/0 there). A NaN poisons the
+// whole analytics payload — json.Marshal fails and the client gets an
+// empty body.
+func TestCalculateBlackScholesDeadSpot(t *testing.T) {
+	for _, s := range []float64{0, -100} {
+		for _, isCall := range []bool{true, false} {
+			g := CalculateBlackScholes(isCall, s, 85500, 22.0/365.0, 0.16, 0.30)
+			for _, v := range []float64{g.Price, g.Delta, g.Gamma, g.Theta, g.Vega, g.Rho} {
+				if math.IsNaN(v) || math.IsInf(v, 0) {
+					t.Fatalf("S=%v isCall=%v: non-finite greek %v in %+v", s, isCall, v, g)
+				}
+			}
+		}
+	}
+}

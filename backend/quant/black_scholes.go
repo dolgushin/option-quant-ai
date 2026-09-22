@@ -26,7 +26,10 @@ func NPrime(x float64) float64 {
 
 // CalculateBlackScholes рассчитывает стоимость и Греки для Call или Put
 func CalculateBlackScholes(isCall bool, S, K, T, r, sigma float64) OptionGreeks {
-	if T <= 0 || sigma <= 0 {
+	if T <= 0 || sigma <= 0 || S <= 0 {
+		// Non-positive spot (dead feed) must yield finite zeros — not NaN
+		// via gamma's 0/0. A NaN anywhere in an analytics payload makes
+		// json.Marshal fail and the client sees an empty body.
 		return OptionGreeks{}
 	}
 

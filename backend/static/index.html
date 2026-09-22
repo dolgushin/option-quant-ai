@@ -2264,6 +2264,7 @@
             box.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Загрузка профиля...</div>';
             try {
                 const res = await fetch(`/api/v1/straddles/analytics?id=${id}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const d = await res.json();
                 if (d.error) { box.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${d.error}</div>`; return; }
                 const a = d.analytics;
