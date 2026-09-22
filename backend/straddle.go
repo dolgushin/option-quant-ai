@@ -1124,6 +1124,23 @@ func lastKnownSpot(symbol string) float64 {
 	return 0
 }
 
+// newestOpenStraddleStrike returns the strike of the most recently opened
+// OPEN straddle for the symbol, or 0. Last-resort display anchor: positions
+// are opened ATM, so a recent strike approximates the central strike when
+// no spot (live or cached) exists at all. Pure apart from the store.
+func newestOpenStraddleStrike(symbol string) float64 {
+	best, at := 0.0, ""
+	for _, s := range openStraddles() {
+		if s.Symbol != symbol || s.Strike <= 0 || s.Status != "OPEN" {
+			continue
+		}
+		if s.OpenedAt >= at {
+			at, best = s.OpenedAt, s.Strike
+		}
+	}
+	return best
+}
+
 // straddleMetaSpot resolves the ATM anchor for the open form: the live
 // front-futures quote first, getSpotPrice fallback, hardcoded estimates
 // refused. Returns 0 when there is nothing live — the caller then serves
@@ -1190,6 +1207,11 @@ func straddleMetaHandler(w http.ResponseWriter, r *http.Request) {
 		// Feeds down: window around the last live spot (honestly labeled
 		// stale) instead of dumping the whole chain on the user.
 		spot, staleAnchor = last, true
+	} else if st := newestOpenStraddleStrike(symbol); st > 0 {
+		// No cached spot either (feeds never seen since deploy): anchor on
+		// the newest open position's strike — opened ATM, so it marks the
+		// center the user already trades.
+		spot, staleAnchor = st, true
 	}
 	if spot > 0 && len(strikes) > 0 {
 		atm = nearestStrikeFromStrikes(strikes, spot)

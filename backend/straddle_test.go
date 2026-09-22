@@ -616,3 +616,31 @@ func TestLastSpotCache(t *testing.T) {
 		t.Fatalf("unknown symbol = %v, want 0", got)
 	}
 }
+
+// TestNewestOpenStraddleStrike pins the last-resort display anchor: the
+// newest OPEN position's strike (closed records and other symbols ignored).
+func TestNewestOpenStraddleStrike(t *testing.T) {
+	straddleMu.Lock()
+	old := straddleStore
+	straddleStore = []straddleRecord{
+		{ID: "str-1", Symbol: "Si", Strike: 86000, Status: "OPEN", OpenedAt: "2026-09-20T10:00:00Z"},
+		{ID: "str-2", Symbol: "Si", Strike: 85500, Status: "OPEN", OpenedAt: "2026-09-22T14:00:00Z"},
+		{ID: "str-3", Symbol: "Si", Strike: 80000, Status: "CLOSED", OpenedAt: "2026-09-22T15:00:00Z"},
+		{ID: "str-4", Symbol: "RI", Strike: 99999, Status: "OPEN", OpenedAt: "2026-09-22T16:00:00Z"},
+	}
+	straddleMu.Unlock()
+	defer func() {
+		straddleMu.Lock()
+		straddleStore = old
+		straddleMu.Unlock()
+	}()
+	if got := newestOpenStraddleStrike("Si"); got != 85500 {
+		t.Fatalf("anchor = %v, want 85500 (newest open)", got)
+	}
+	if got := newestOpenStraddleStrike("RI"); got != 99999 {
+		t.Fatalf("RI anchor = %v, want 99999", got)
+	}
+	if got := newestOpenStraddleStrike("BR"); got != 0 {
+		t.Fatalf("unknown symbol = %v, want 0", got)
+	}
+}
