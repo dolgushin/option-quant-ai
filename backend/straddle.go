@@ -541,7 +541,13 @@ func straddleOpenHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// Futures secid must be a futures contract, never an option — for ANY
 	// construction. A naked classic stores the typed secid untouched and the
-	// first hedge then buys it blind (the Si83000BV6 case).
+	// first hedge then buys it blind (the Si83000BV6 case). Pattern check is
+	// deterministic; the chain listing below is a second net.
+	if req.FuturesSecID != "" && !isFuturesSecID(req.Symbol, req.FuturesSecID) {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false,
+			"error": fmt.Sprintf("%s не похож на фьючерс (нужен формат SiZ6): очисти поле «Фьюч secid» (авто) или исправь", req.FuturesSecID)})
+		return
+	}
 	if req.FuturesSecID != "" && alorMarket != nil {
 		if syms, err := alorMarket.FetchOptionChain(req.Symbol); err == nil {
 			for _, s := range syms {
@@ -673,6 +679,16 @@ func parseFuturesCode(secid string) (root string, year int, month time.Month, ok
 // resolveFuturesAlor picks the front futures contract for the symbol from
 // live Alor instrument search (^ROOT<month><digit>). Pure date math on top
 // of the search list; no expiry guessing beyond standard month codes.
+// isFuturesSecID reports whether a secid looks like a MOEX futures contract
+// (root + month code + year digit, e.g. SiZ6) as opposed to an option
+// (strike + series, e.g. Si83000BV6). Deterministic — unlike the option-chain
+// membership check, it can't miss a series the chain endpoint didn't list
+// (the Si83000BV6 case). Pure — unit-tested.
+func isFuturesSecID(root, secid string) bool {
+	re := regexp.MustCompile(`^` + regexp.QuoteMeta(root) + `([FGHJKMNQUVXZ])(\d)$`)
+	return re.MatchString(secid)
+}
+
 func resolveFuturesAlor(symbols []string, root string, now time.Time) string {
 	best := ""
 	var bestY int
@@ -1688,20 +1704,13 @@ func executeStraddleHedge(s *straddleRecord, pos *quant.Position, ev straddleEva
 	// target by construction and would gate everything shut).
 	dev := pos.Delta - hedgeTargetDelta(s)
 	futSec := straddleFuturesSecID(s, pos)
-	if futSec != "" && alorMarket != nil {
-		// A stored secid must still be a futures contract: records opened
-		// before validation (or with a pasted option) self-heal to the
-		// front contract instead of trading garbage or bricking the hedge.
-		if syms, err := alorMarket.FetchOptionChain(pos.Symbol); err == nil {
-			for _, sm := range syms {
-				if sm == futSec {
-					log.Printf("straddle hedge: stored %s is an option, re-resolving", futSec)
-					futSec = ""
-					s.FuturesSecID = ""
-					break
-				}
-			}
-		}
+	if futSec != "" && !isFuturesSecID(pos.Symbol, futSec) {
+		// A stored secid that isn't a futures contract (pasted option):
+		// records opened before validation self-heal to the front contract
+		// instead of trading garbage or bricking the hedge.
+		log.Printf("straddle hedge: stored %s is not a futures contract, re-resolving", futSec)
+		futSec = ""
+		s.FuturesSecID = ""
 	}
 	if futSec == "" {
 		// Naked records carry no cover secid: resolve the front contract

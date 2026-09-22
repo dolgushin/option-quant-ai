@@ -666,3 +666,23 @@ func TestStraddleFuturesSecID(t *testing.T) {
 		t.Fatalf("no futures = %v, want empty", got)
 	}
 }
+
+// TestIsFuturesSecID pins the format gate: SiZ6 passes, option secids
+// (Si83000BV6) and junk don't — for both trade roots.
+func TestIsFuturesSecID(t *testing.T) {
+	for _, ok := range []string{"SiZ6", "SiH6", "RIZ6", "RIM6"} {
+		root := ok[:2]
+		if !isFuturesSecID(root, ok) {
+			t.Fatalf("%s must read as futures", ok)
+		}
+	}
+	for _, tc := range [][2]string{
+		{"Si", "Si83000BV6"}, {"Si", "Si85500BJ6"}, {"RI", "RI200000BX6"},
+		{"Si", ""}, {"Si", "SiZ"}, {"Si", "SiZ66"}, {"Si", "SIZ6"},
+		{"Si", "Si-12.26"}, {"BR", "SiZ6"},
+	} {
+		if isFuturesSecID(tc[0], tc[1]) {
+			t.Fatalf("%s/%s must NOT read as futures", tc[0], tc[1])
+		}
+	}
+}
