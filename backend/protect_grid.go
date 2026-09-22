@@ -340,12 +340,13 @@ func synthPath(kind string, start float64, n int, amp float64) []float64 {
 // ---- Records & store (JSON file, mirrors straddles) ----
 
 type gridFill struct {
-	At    string  `json:"at"`
-	Side  string  `json:"side"`
-	Qty   int     `json:"qty"`
-	Price float64 `json:"price"`
-	Kind  string  `json:"kind"` // "LADDER" | "TAKE" | "OPEN" | "CLOSE"
-	Note  string  `json:"note,omitempty"`
+	At        string  `json:"at"`
+	Side      string  `json:"side"`
+	Qty       int     `json:"qty"`
+	Price     float64 `json:"price"`
+	Kind      string  `json:"kind"`                 // "LADDER" | "TAKE" | "OPEN" | "CLOSE"
+	ClosedPnl float64 `json:"closed_pnl,omitempty"` // netted futures P&L closed by this fill (TAKE), rubles ex-fees
+	Note      string  `json:"note,omitempty"`
 }
 
 // protectGridRecord is a live paper protective grid.
@@ -373,6 +374,8 @@ type protectGridRecord struct {
 	RangePctAt    float64    `json:"range_pct_at_entry"`
 	Status        string     `json:"status"` // OPEN / CLOSED
 	OpenedAt      string     `json:"opened_at"`
+	ClosedAt      string     `json:"closed_at,omitempty"`
+	FinalPnl      float64    `json:"final_pnl,omitempty"` // closed-grid total (live P&L + netted realized), rubles
 	Fills         int        `json:"fills"`
 	RealizedGrid  float64    `json:"realized_grid"`
 	FillLog       []gridFill `json:"fill_log,omitempty"`
@@ -436,6 +439,14 @@ func openProtectGrids() []protectGridRecord {
 			out = append(out, g)
 		}
 	}
+	return out
+}
+
+func allProtectGrids() []protectGridRecord {
+	pgridMu.Lock()
+	defer pgridMu.Unlock()
+	out := make([]protectGridRecord, len(pgridStore))
+	copy(out, pgridStore)
 	return out
 }
 
@@ -914,6 +925,130 @@ func protectGridListHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"grids": out})
 }
 
+// gridStatRow is one grid's summary for the stats table.
+type gridStatRow struct {
+	ID           string  `json:"id"`
+	Symbol       string  `json:"symbol"`
+	Direction    string  `json:"direction"`
+	Status       string  `json:"status"`
+	Expiry       string  `json:"expiry"`
+	OpenedAt     string  `json:"opened_at"`
+	ClosedAt     string  `json:"closed_at,omitempty"`
+	Pnl          float64 `json:"pnl"`
+	PnlKnown     bool    `json:"pnl_known"` // false for pre-stats closed records (no final stored)
+	RealizedGrid float64 `json:"realized_grid"`
+	Fills        int     `json:"fills"`
+	Takes        int     `json:"takes"`    // closed circles (TAKE fills)
+	TakePnl      float64 `json:"take_pnl"` // Σ closed P&L of takes, ex-fees
+	Fees         float64 `json:"fees"`
+}
+
+// protectGridStats aggregates the whole grid-trading history.
+type protectGridStats struct {
+	Total        int           `json:"total"`
+	Open         int           `json:"open"`
+	Closed       int           `json:"closed"`
+	Wins         int           `json:"wins"`
+	WinRate      float64       `json:"win_rate"`
+	TotalPnl     float64       `json:"total_pnl"`
+	RealizedGrid float64       `json:"realized_grid"`
+	Takes        int           `json:"takes"`
+	AvgTake      float64       `json:"avg_take"`
+	Fills        int           `json:"fills"`
+	Fees         float64       `json:"fees"`
+	ThetaDayOpen float64       `json:"theta_day_open"`
+	Rows         []gridStatRow `json:"rows"`
+}
+
+// aggregateProtectGridStats folds grid records into trading stats. Live P&L +
+// theta arrive via the lookup (keyed by PositionID) so the function stays
+// pure — unit-tested. Closed records without a stored final (written before
+// stats existed) ride along with PnlKnown=false and stay out of the money
+// aggregates.
+func aggregateProtectGridStats(records []protectGridRecord, live map[string]struct{ Pnl, Theta float64 }) protectGridStats {
+	st := protectGridStats{}
+	for _, g := range records {
+		row := gridStatRow{
+			ID: g.ID, Symbol: g.Symbol, Direction: g.Direction, Status: g.Status,
+			Expiry: g.Expiry, OpenedAt: g.OpenedAt, ClosedAt: g.ClosedAt,
+			RealizedGrid: math.Round(g.RealizedGrid*100) / 100, Fills: g.Fills,
+		}
+		for _, f := range g.FillLog {
+			if f.Kind == "TAKE" {
+				row.Takes++
+				row.TakePnl += f.ClosedPnl
+			}
+		}
+		row.TakePnl = math.Round(row.TakePnl*100) / 100
+		row.Fees = math.Round(float64(g.Fills)*g.FeePerFill*100) / 100
+		if g.Status == "OPEN" {
+			st.Open++
+			if l, ok := live[g.PositionID]; ok {
+				row.Pnl, row.PnlKnown = math.Round(l.Pnl*100)/100, true
+				st.ThetaDayOpen += l.Theta
+			}
+		} else {
+			st.Closed++
+			if g.ClosedAt != "" {
+				row.Pnl, row.PnlKnown = g.FinalPnl, true
+			}
+		}
+		if row.PnlKnown {
+			st.TotalPnl += row.Pnl
+		}
+		st.Total++
+		st.RealizedGrid += row.RealizedGrid
+		st.Takes += row.Takes
+		st.Fills += row.Fills
+		st.Fees += row.Fees
+		st.Rows = append(st.Rows, row)
+	}
+	// Win rate counts CLOSED grids with a known final only.
+	known, wins := 0, 0
+	for _, r := range st.Rows {
+		if r.Status == "OPEN" || !r.PnlKnown {
+			continue
+		}
+		known++
+		if r.Pnl > 0 {
+			wins++
+		}
+	}
+	st.Wins = wins
+	if known > 0 {
+		st.WinRate = math.Round(float64(wins) / float64(known) * 1000 / 10)
+	}
+	st.TotalPnl = math.Round(st.TotalPnl*100) / 100
+	st.RealizedGrid = math.Round(st.RealizedGrid*100) / 100
+	st.Fees = math.Round(st.Fees*100) / 100
+	st.ThetaDayOpen = math.Round(st.ThetaDayOpen*100) / 100
+	if st.Takes > 0 {
+		takeSum := 0.0
+		for _, r := range st.Rows {
+			takeSum += r.TakePnl
+		}
+		st.AvgTake = math.Round(takeSum/float64(st.Takes)*100) / 100
+	}
+	if st.Rows == nil {
+		st.Rows = []gridStatRow{}
+	}
+	return st
+}
+
+// GET /api/v1/protect-grid/stats — aggregate grid-trading statistics.
+func protectGridStatsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	live := map[string]struct{ Pnl, Theta float64 }{}
+	for _, g := range openProtectGrids() {
+		if pos, found := quant.GetPositionByID(g.PositionID); found {
+			repricePosition(pos)
+			quant.SavePosition(*pos)
+			live[g.PositionID] = struct{ Pnl, Theta float64 }{pos.PnL + pos.RealizedPnL, pos.Theta}
+		}
+	}
+	json.NewEncoder(w).Encode(aggregateProtectGridStats(allProtectGrids(), live))
+}
+
 // GET /api/v1/protect-grid/analytics?id=pgrid-... — state, scenario matrix,
 // breakeven and fill journal.
 func protectGridAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
@@ -1020,6 +1155,8 @@ func closeProtectGrid(g *protectGridRecord, pos *quant.Position, reason string, 
 	enrichTradeContext(&tr, g.Symbol, g.Expiry, g.EntrySpot)
 	quant.AddTrade(tr)
 	g.Status = "CLOSED"
+	g.ClosedAt = time.Now().Format(time.RFC3339)
+	g.FinalPnl = math.Round((removed.PnL+removed.RealizedPnL)*100) / 100
 	saveProtectGridRecord(*g)
 	if notify {
 		logTelegramErr("pgrid-close", sendTelegramMessage(
@@ -1165,7 +1302,7 @@ func pgridExecuteLadder(g *protectGridRecord, pos *quant.Position, side string, 
 	g.Fills++
 	g.FillLog = append(g.FillLog, gridFill{
 		At: time.Now().Format("02.01 15:04"), Side: side, Qty: qty,
-		Price: fill, Kind: kind, Note: note,
+		Price: fill, Kind: kind, ClosedPnl: math.Round(realized*100) / 100, Note: note,
 	})
 	if len(g.FillLog) > 100 {
 		g.FillLog = g.FillLog[len(g.FillLog)-100:]

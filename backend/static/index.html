@@ -890,11 +890,15 @@
         <div id="pgrid-view" class="hidden space-y-4 md:space-y-6">
             <div class="flex justify-between items-center flex-wrap gap-2">
                 <h2 class="text-lg font-semibold text-slate-200">🛡 Защитная сетка (бумага)</h2>
-                <button onclick="loadPgridMeta(); loadPgridSignal(); loadPgrids();" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded-lg transition">↻ Обновить</button>
+                <button onclick="loadPgridMeta(); loadPgridSignal(); loadPgridStats(); loadPgrids();" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded-lg transition">↻ Обновить</button>
             </div>
             <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
                 <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">Сигнал исчерпания дневного диапазона</div>
                 <div id="pgrid-signal" class="font-mono text-[11px] text-slate-400">Нажмите «Обновить»…</div>
+            </div>
+            <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">Статистика торговли сеткой</div>
+                <div id="pgrid-stats" class="font-mono text-[11px] text-slate-400">Нажмите «Обновить»…</div>
             </div>
             <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
                 <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">План и открытие — защита на шаг от спота + односторонняя сетка</div>
@@ -1308,7 +1312,7 @@
             document.getElementById(btns[tab]).className = tabActive;
             if (tab === 'spreads') updateSpreads();
             if (tab === 'straddles') { loadStraddleMeta(); loadStraddles(); }
-            if (tab === 'pgrid') { loadPgridMeta(); loadPgridSignal(); loadPgrids(); }
+            if (tab === 'pgrid') { loadPgridMeta(); loadPgridSignal(); loadPgridStats(); loadPgrids(); }
             if (tab === 'stats') loadStats();
             if (tab === 'ranges') loadRanges();
             if (tab === 'forecast') loadForecast();
@@ -2364,6 +2368,38 @@
                     + `<b class="${tierCls}">${dirTxt}${s.tier ? ' · ' + s.tier : ''}</b>`
                     + (s.reasons || []).map(r => `<div class="text-slate-500">• ${r}</div>`).join('')
                     + (s.ready && s.direction ? ` <button onclick="document.getElementById('pg-dir').value='${s.direction}'" class="ml-2 px-2 py-0.5 text-[10px] bg-indigo-700 hover:bg-indigo-600 text-white rounded transition">применить направление</button>` : '');
+            } catch (e) { el.innerHTML = `<span class="text-rose-400">❌ ${e.message}</span>`; }
+        }
+
+        async function loadPgridStats() {
+            const el = document.getElementById('pgrid-stats');
+            el.innerHTML = 'Загрузка статистики…';
+            try {
+                const res = await fetch('/api/v1/protect-grid/stats');
+                const d = await res.json();
+                if (!d.total) { el.innerHTML = 'Сеток пока не было — откройте первую через форму ниже.'; return; }
+                const pnlCls = (d.total_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                let html = `<div class="flex flex-wrap gap-x-5 gap-y-1 text-slate-200">`
+                    + `<span>Сеток: <b>${d.total}</b> (открыто ${d.open} / закрыто ${d.closed})</span>`
+                    + `<span>Винрейт закрытых: <b>${d.win_rate}%</b> (${d.wins})</span>`
+                    + `<span>Итого P&L: <b class="${pnlCls}">${(d.total_pnl || 0) >= 0 ? '+' : ''}${(d.total_pnl || 0).toLocaleString('ru-RU')} ₽</b></span>`
+                    + `<span>Сеткой реализовано: <b>${(d.realized_grid || 0).toLocaleString('ru-RU')} ₽</b></span>`
+                    + `<span>Кругов закрыто: <b>${d.takes}</b> (средний ${(d.avg_take || 0).toLocaleString('ru-RU')} ₽ без комиссий)</span>`
+                    + `<span>Заливок: <b>${d.fills}</b> · комиссий ≈ <b>${(d.fees || 0).toLocaleString('ru-RU')} ₽</b></span>`
+                    + `<span>Тета живых: <b>${(d.theta_day_open || 0).toLocaleString('ru-RU')} ₽/день</b></span></div>`;
+                html += `<table class="w-full text-left mt-2 text-slate-300"><thead class="text-slate-500 border-b border-slate-700 uppercase">`
+                    + `<tr><th class="py-1 pr-2">Сетка</th><th class="py-1 pr-2">Статус</th><th class="py-1 pr-2 text-right">P&L ₽</th><th class="py-1 pr-2 text-right">Сетка ₽</th><th class="py-1 pr-2 text-right">Круги</th><th class="py-1 pr-2 text-right">Заливки</th><th class="py-1 pr-2 text-right">Комис. ₽</th></tr></thead><tbody>`;
+                (d.rows || []).forEach(r => {
+                    const c = !r.pnl_known ? 'text-slate-500' : r.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                    html += `<tr class="border-b border-slate-800"><td class="py-1 pr-2">${r.direction === 'LONG' ? '🟢' : '🔴'} ${r.symbol} <span class="text-slate-500">${(r.opened_at || '').slice(0, 10)}</span></td>`
+                        + `<td class="py-1 pr-2 text-slate-400">${r.status === 'OPEN' ? 'открыта' : 'закрыта'}</td>`
+                        + `<td class="py-1 pr-2 text-right ${c}">${r.pnl_known ? ((r.pnl >= 0 ? '+' : '') + r.pnl.toLocaleString('ru-RU')) : '—'}</td>`
+                        + `<td class="py-1 pr-2 text-right">${r.realized_grid.toLocaleString('ru-RU')}</td>`
+                        + `<td class="py-1 pr-2 text-right">${r.takes} (${r.take_pnl.toLocaleString('ru-RU')})</td>`
+                        + `<td class="py-1 pr-2 text-right">${r.fills}</td>`
+                        + `<td class="py-1 pr-2 text-right">${r.fees.toLocaleString('ru-RU')}</td></tr>`;
+                });
+                el.innerHTML = html + '</tbody></table>';
             } catch (e) { el.innerHTML = `<span class="text-rose-400">❌ ${e.message}</span>`; }
         }
 

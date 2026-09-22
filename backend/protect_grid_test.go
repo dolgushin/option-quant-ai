@@ -146,6 +146,54 @@ func TestGridOpenInventory(t *testing.T) {
 	}
 }
 
+func TestAggregateProtectGridStats(t *testing.T) {
+	recs := []protectGridRecord{
+		{ID: "g1", Symbol: "Si", Direction: gridLong, Status: "CLOSED",
+			OpenedAt: "2026-09-20T10:00:00Z", ClosedAt: "2026-09-21T10:00:00Z",
+			FinalPnl: 1500, Fills: 6, RealizedGrid: 900, FeePerFill: 4,
+			FillLog: []gridFill{
+				{Kind: "TAKE", ClosedPnl: 21}, {Kind: "TAKE", ClosedPnl: 21}, {Kind: "LADDER"},
+			}},
+		{ID: "g2", Symbol: "Si", Direction: gridShort, Status: "CLOSED",
+			OpenedAt: "2026-09-21T10:00:00Z", ClosedAt: "2026-09-21T15:00:00Z",
+			FinalPnl: -500, Fills: 2, RealizedGrid: -100, FeePerFill: 4,
+			FillLog: []gridFill{{Kind: "LADDER"}}},
+		{ID: "g3", Symbol: "RI", Direction: gridLong, Status: "OPEN", PositionID: "pos-3",
+			OpenedAt: "2026-09-22T10:00:00Z", Fills: 1, RealizedGrid: -4, FeePerFill: 4,
+			FillLog: []gridFill{{Kind: "LADDER"}}},
+	}
+	live := map[string]struct{ Pnl, Theta float64 }{"pos-3": {200, -50}}
+	st := aggregateProtectGridStats(recs, live)
+	if st.Total != 3 || st.Open != 1 || st.Closed != 2 {
+		t.Fatalf("counts wrong: %+v", st)
+	}
+	if st.Wins != 1 || st.WinRate != 50 {
+		t.Fatalf("want 1 win of 2 closed = 50%%, got wins=%d rate=%v", st.Wins, st.WinRate)
+	}
+	if st.TotalPnl != 1500-500+200 {
+		t.Fatalf("want total 1200, got %v", st.TotalPnl)
+	}
+	if st.Takes != 2 || st.AvgTake != 21 {
+		t.Fatalf("want 2 takes avg 21, got %d / %v", st.Takes, st.AvgTake)
+	}
+	if st.Fills != 9 || st.Fees != 36 {
+		t.Fatalf("want 9 fills / 36 fees, got %d / %v", st.Fills, st.Fees)
+	}
+	if st.ThetaDayOpen != -50 {
+		t.Fatalf("want open theta -50, got %v", st.ThetaDayOpen)
+	}
+	if len(st.Rows) != 3 || !st.Rows[0].PnlKnown || st.Rows[0].Pnl != 1500 {
+		t.Fatalf("rows wrong: %+v", st.Rows)
+	}
+}
+
+func TestAggregateProtectGridStatsEmpty(t *testing.T) {
+	st := aggregateProtectGridStats(nil, nil)
+	if st.Total != 0 || st.Rows == nil || st.WinRate != 0 {
+		t.Fatalf("empty must be zero with non-nil rows: %+v", st)
+	}
+}
+
 func TestEvaluateProtectGridStops(t *testing.T) {
 	g := &protectGridRecord{MaxLossRub: 5000, ProfitTarget: 3000, TimeStopDTE: 7}
 	if ev := evaluateProtectGrid(g, -6000, 20); ev.Action != "CLOSE_STOP" {
