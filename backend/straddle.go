@@ -524,19 +524,22 @@ func straddleOpenHandler(w http.ResponseWriter, r *http.Request) {
 	// resolve the front contract or refuse with guidance.
 	if needsFutures && req.FuturesSecID == "" {
 		if alorMarket == nil {
-			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "укажи secid фьючерса (Alor не настроен)"})
-			return
-		}
-		syms, err := alorMarket.FetchOptionChain(req.Symbol)
-		if err != nil {
-			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "не нашёл фьючерсы в Alor: " + err.Error()})
-			return
-		}
-		if code := resolveFuturesAlor(syms, req.Symbol, time.Now()); code != "" {
-			req.FuturesSecID = code
+			// Alor not configured: use calendar fallback directly.
+			req.FuturesSecID = frontFuturesSecID(req.Symbol, time.Now())
 		} else {
-			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "не нашёл фьючерс — укажи secid вручную (напр. SiZ6)"})
-			return
+			syms, err := alorMarket.FetchOptionChain(req.Symbol)
+			if err != nil {
+				json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "не нашёл фьючерсы в Alor: " + err.Error()})
+				return
+			}
+			if code := resolveFuturesAlor(syms, req.Symbol, time.Now()); code != "" {
+				req.FuturesSecID = code
+			} else {
+				// Alor search returned no futures-like symbols: use
+				// calendar fallback (same logic as MOEX series badge).
+				req.FuturesSecID = frontFuturesSecID(req.Symbol, time.Now())
+				log.Printf("straddle open: Alor search empty, using calendar fallback %s", req.FuturesSecID)
+			}
 		}
 	}
 	// Futures secid must be a futures contract, never an option — for ANY
@@ -687,6 +690,37 @@ func parseFuturesCode(secid string) (root string, year int, month time.Month, ok
 func isFuturesSecID(root, secid string) bool {
 	re := regexp.MustCompile(`^` + regexp.QuoteMeta(root) + `([FGHJKMNQUVXZ])(\d)$`)
 	return re.MatchString(secid)
+}
+
+// frontFuturesSecID computes the front futures contract for the symbol
+// from the current date (pure calendar math — same logic as the MOEX
+// series badge). Used as a last-resort fallback when Alor search
+// returns no futures-like symbols. Pure — unit-tested.
+func frontFuturesSecID(root string, now time.Time) string {
+	// Standard MOEX month codes for futures expiries.
+	// The cycle is quarterly: H(3), M(6), U(9), Z(12).
+	var monthCodes = []byte{'H', 'M', 'U', 'Z'}
+	var monthVals = []time.Month{time.March, time.June, time.September, time.December}
+	
+	m := now.Month()
+	y := now.Year()
+	
+	// Find the first expiry month >= current month
+	idx := 0
+	for i, mv := range monthVals {
+		if mv >= m {
+			idx = i
+			break
+		}
+	}
+	// If all remaining months are past, roll to next year's first (H)
+	if idx == 0 && m > time.December {
+		y += 1
+	}
+	
+	// Year digit is last digit of year
+	yearDigit := y % 10
+	return fmt.Sprintf("%s%c%d", root, monthCodes[idx], yearDigit)
 }
 
 func resolveFuturesAlor(symbols []string, root string, now time.Time) string {
@@ -1717,17 +1751,24 @@ func executeStraddleHedge(s *straddleRecord, pos *quant.Position, ev straddleEva
 		// now so the first hedge doesn't need a hand-typed secid (which is
 		// how option secids ended up in futures legs).
 		if alorMarket == nil {
-			return fmt.Errorf("нет фьючерса для хеджа (Alor не настроен)")
-		}
-		syms, err := alorMarket.FetchOptionChain(pos.Symbol)
-		if err != nil {
-			return fmt.Errorf("нет фьючерса для хеджа: %v", err)
-		}
-		if code := resolveFuturesAlor(syms, pos.Symbol, time.Now()); code != "" {
-			futSec = code
-			s.FuturesSecID = code
+			// Alor not configured: use calendar fallback directly.
+			futSec = frontFuturesSecID(pos.Symbol, time.Now())
+			s.FuturesSecID = futSec
 		} else {
-			return fmt.Errorf("нет фьючерса для хеджа")
+			syms, err := alorMarket.FetchOptionChain(pos.Symbol)
+			if err != nil {
+				return fmt.Errorf("нет фьючерса для хеджа: %v", err)
+			}
+			if code := resolveFuturesAlor(syms, pos.Symbol, time.Now()); code != "" {
+				futSec = code
+				s.FuturesSecID = code
+			} else {
+				// Alor search returned no futures-like symbols: use
+				// calendar fallback (same logic as MOEX series badge).
+				futSec = frontFuturesSecID(pos.Symbol, time.Now())
+				s.FuturesSecID = futSec
+				log.Printf("straddle hedge: Alor search empty, using calendar fallback %s", futSec)
+			}
 		}
 	}
 	fill, err := futuresFillPrice(futSec, ev.Side)
