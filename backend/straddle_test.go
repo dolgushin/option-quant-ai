@@ -510,3 +510,26 @@ func TestStraddleStops(t *testing.T) {
 		t.Fatal("empty mark must read as ancient")
 	}
 }
+
+// TestStraddleMetaSpotRefusesEstimate pins the estimate policy for the open
+// form's ATM anchor: a hardcoded fallback (83200) yields no anchor (0 —
+// full strike grid, no divider), a live quote passes through.
+func TestStraddleMetaSpotRefusesEstimate(t *testing.T) {
+	spotMu.Lock()
+	spotOverrides["Si"] = 83200.0
+	spotMu.Unlock()
+	defer func() {
+		spotMu.Lock()
+		delete(spotOverrides, "Si")
+		spotMu.Unlock()
+	}()
+	if got := straddleMetaSpot("Si"); got != 0 {
+		t.Fatalf("estimate spot = %v, want 0 (no anchor)", got)
+	}
+	spotMu.Lock()
+	spotOverrides["Si"] = 85608.0
+	spotMu.Unlock()
+	if got := straddleMetaSpot("Si"); got != 85608 {
+		t.Fatalf("live spot = %v, want 85608", got)
+	}
+}

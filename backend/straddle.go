@@ -23,6 +23,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"net/http"
 	"os"
@@ -1021,6 +1022,26 @@ func straddleStrikesHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// straddleMetaSpot resolves the ATM anchor for the open form: the live
+// front-futures quote first, getSpotPrice fallback, hardcoded estimates
+// refused. Returns 0 when there is nothing live — the caller then serves
+// the full strike grid with no ATM divider and the form stays manual,
+// instead of planting a wrong anchor (e.g. 83200 → divider at 83000 while
+// live is ~85600). Pure apart from the feeds — unit-tested via overrides.
+func straddleMetaSpot(symbol string) float64 {
+	spot := alorFrontFuturesPrice(symbol)
+	if spot <= 0 || isEstimatePrice(spot) {
+		spot, _ = getSpotPrice(symbol)
+	}
+	if spot <= 0 || isEstimatePrice(spot) {
+		if isEstimatePrice(spot) {
+			log.Printf("straddle meta: refusing estimate spot %.0f for %s", spot, symbol)
+		}
+		return 0
+	}
+	return spot
+}
+
 // GET /api/v1/straddles/meta?symbol=Si — expiries with W/M/Q tenors, strike
 // grid with the ATM divider, live spot. Empty lists when the chain is
 // unreachable (the form keeps manual inputs as fallback).
@@ -1032,13 +1053,7 @@ func straddleMetaHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	today := now.Format("2006-01-02")
-	// Live spot prefers the front futures' own Alor quote: getSpotPrice may
-	// serve a stale estimate or a different series, which then plants a
-	// wrong ATM strike (e.g. 83000 instead of live 86000).
-	spot := alorFrontFuturesPrice(symbol)
-	if spot <= 0 {
-		spot, _ = getSpotPrice(symbol)
-	}
+	spot := straddleMetaSpot(symbol)
 
 	dates := []string{}
 	for _, s := range optionSeriesForSymbol(symbol) {

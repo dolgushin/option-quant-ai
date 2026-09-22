@@ -2162,6 +2162,11 @@
                 if (d.spot) {
                     const hint = document.getElementById('str-spot-hint');
                     if (hint) hint.innerText = `спот ${Math.round(d.spot).toLocaleString('ru-RU')}`;
+                } else {
+                    // No live spot (estimate refused): never leave a stale
+                    // value in the hint — the strike picker stays manual.
+                    const hint = document.getElementById('str-spot-hint');
+                    if (hint) hint.innerText = 'спот —';
                 }
                 previewStraddleLegs();
             } catch (e) { /* manual toggle stays as fallback */ }
