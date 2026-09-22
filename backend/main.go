@@ -488,6 +488,19 @@ func getSpotPrice(symbol string) (float64, error) {
 			return price, nil
 		}
 	}
+	// The saved selection can point at a dead series (e.g. SiU6 still
+	// selected after the September expiry) whose board is empty. Fall back
+	// to the nearest live contract instead of serving the hardcoded
+	// estimate — same rule the range tracker uses (resolveRangeCode).
+	if live := resolveNearestFuturesCode(symbol); live != "" && live != issCode {
+		if price, err := moexISSSpotPrice(live); err == nil && price > 0 {
+			log.Printf("spot %s: selected series %s is dead, quoting live %s", symbol, issCode, live)
+			spotQuoteMu.Lock()
+			spotQuoteCache[symbol] = spotQuote{Price: price, Cached: time.Now()}
+			spotQuoteMu.Unlock()
+			return price, nil
+		}
+	}
 
 	// 3) Fallback to a realistic estimate.
 	switch symbol {

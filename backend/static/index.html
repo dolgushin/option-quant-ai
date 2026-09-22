@@ -2377,7 +2377,7 @@
                 const p = d.plan;
                 const wing = p.protect_is_call ? 'CALL' : 'PUT';
                 let html = `<div class="text-slate-200">Защита: <b>${wing} ${p.protect_strike}</b> ×${p.protect_qty} по ${p.premium_each} (всего ${p.premium_total.toLocaleString('ru-RU')} ₽, тета ${p.theta_day} ₽/день, Δ ${p.delta_each}) · `
-                    + `Безубыток: <b>${Number.isFinite(p.breakeven_fills_per_day) ? p.breakeven_fills_per_day : '∞'} заливок/день</b> · Покрытие ${(p.coverage_ratio * 100).toFixed(0)}% · Худшая вода сетки ≈ ${p.max_grid_loss_rub.toLocaleString('ru-RU')} ₽</div>`;
+                    + `Безубыток: <b>${Number.isFinite(p.breakeven_roundtrips_per_day) ? p.breakeven_roundtrips_per_day : '∞'} кругов/день</b> (круг = вход+выход, 2 комиссии) · Покрытие ${(p.coverage_ratio * 100).toFixed(0)}% · Худшая вода сетки ≈ ${p.max_grid_loss_rub.toLocaleString('ru-RU')} ₽</div>`;
                 (p.warnings || []).forEach(wrn => { html += `<div class="text-amber-300">⚠ ${wrn}</div>`; });
                 html += `<table class="w-full text-left mt-1 text-slate-300"><thead class="text-slate-500 border-b border-slate-700 uppercase">`
                     + `<tr><th class="py-1 pr-2">Сценарий ленты</th><th class="py-1 pr-2 text-right">Сетка ₽</th><th class="py-1 pr-2 text-right">Заливки</th><th class="py-1 pr-2 text-right">Инв.</th><th class="py-1 pr-2">Вывод</th></tr></thead><tbody>`;
@@ -2461,7 +2461,7 @@
                 if (d.error) { box.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${d.error}</div>`; return; }
                 let html = `<div class="font-mono text-[11px] text-slate-200">P&L <b>${d.pnl}</b> ₽ (реализовано сеткой ${d.realized} ₽) · `
                     + `Инвентарь ${d.inventory} (цель ${d.target}) · Готовых тейков ${d.closable_tp} · Δ ${d.net_delta} · Тета ${d.theta_day} ₽/день · `
-                    + `Безубыток ${d.breakeven_fills_per_day} заливок/день · DTE ${d.dte}${d.spot_suspect ? ' · <span class="text-amber-300">спот подозрительный</span>' : ''}</div>`;
+                    + `Безубыток ${d.breakeven_roundtrips_per_day} кругов/день · DTE ${d.dte}${d.spot_suspect ? ' · <span class="text-amber-300">спот подозрительный</span>' : ''}</div>`;
                 html += `<div class="grid grid-cols-1 xl:grid-cols-2 gap-3 mt-2">`;
                 html += `<div><div class="text-[10px] text-slate-500 font-mono uppercase mb-1">Крыло к экспирации (защита минус вход)</div>`
                     + `<table class="w-full text-left font-mono text-[11px] text-slate-300"><thead class="text-slate-500 border-b border-slate-700"><tr><th class="pr-2">Спот</th><th class="text-right">Крыло ₽</th></tr></thead><tbody>`

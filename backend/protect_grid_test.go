@@ -66,11 +66,12 @@ func TestGridLadderTarget(t *testing.T) {
 }
 
 func TestGridBreakeven(t *testing.T) {
-	// theta 300 ₽/day, step 25×1 − fee 4 → edge 21 → 15 fills.
-	if got := gridBreakevenFillsPerDay(300, 25, 1, 4); got != 15 {
-		t.Fatalf("want 15 fills, got %v", got)
+	// theta 300 ₽/day, one round trip earns 25×1 and pays 2×4 fee →
+	// edge 17 → 18 round trips.
+	if got := gridBreakevenRoundTripsPerDay(300, 25, 1, 4); got != 18 {
+		t.Fatalf("want 18 round trips, got %v", got)
 	}
-	if got := gridBreakevenFillsPerDay(300, 10, 1, 12); !math.IsInf(got, 1) {
+	if got := gridBreakevenRoundTripsPerDay(300, 10, 1, 12); !math.IsInf(got, 1) {
 		t.Fatalf("negative edge must be Inf, got %v", got)
 	}
 }

@@ -116,10 +116,11 @@ func protectGridSignal(open, high, low, last, atr float64) gridSignal {
 	return sig
 }
 
-// gridBreakevenFillsPerDay answers "how many grid round-trips a day pay for
-// theta": ceil(thetaDay / (step*mult - fee)). Pure — unit-tested.
-func gridBreakevenFillsPerDay(thetaDay, stepPts, mult, feePerFill float64) float64 {
-	edge := stepPts*mult - feePerFill
+// gridBreakevenRoundTripsPerDay answers "how many grid round-trips a day pay
+// for theta": ceil(thetaDay / (step*mult - 2*fee)). One round trip pays the
+// entry AND the exit fee (the simulator charges both). Pure — unit-tested.
+func gridBreakevenRoundTripsPerDay(thetaDay, stepPts, mult, feePerFill float64) float64 {
+	edge := stepPts*mult - 2*feePerFill
 	if edge <= 0 || thetaDay <= 0 {
 		return math.Inf(1)
 	}
@@ -474,29 +475,29 @@ func resolveProtectStrike(strikes []float64, spot float64, direction string) flo
 
 // protectGridPlan is the pre-trade economics shown by the plan endpoint.
 type protectGridPlan struct {
-	Symbol         string         `json:"symbol"`
-	Direction      string         `json:"direction"`
-	Expiry         string         `json:"expiry"`
-	DaysToExp      int            `json:"days_to_exp"`
-	EntrySpot      float64        `json:"entry_spot"`
-	ProtectStrike  float64        `json:"protect_strike"`
-	ProtectIsCall  bool           `json:"protect_is_call"`
-	ProtectQty     int            `json:"protect_qty"`
-	ProtectSecID   string         `json:"protect_secid"`
-	PremiumEach    float64        `json:"premium_each"`
-	PremiumTotal   float64        `json:"premium_total"`
-	ThetaDay       float64        `json:"theta_day"`
-	DeltaEach      float64        `json:"delta_each"`
-	GridStep       float64        `json:"grid_step"`
-	TakeProfit     float64        `json:"take_profit"`
-	QtyPerLevel    int            `json:"qty_per_level"`
-	MaxInventory   int            `json:"max_inventory"`
-	BreakevenFills float64        `json:"breakeven_fills_per_day"`
-	Coverage       float64        `json:"coverage_ratio"`
-	MaxGridLoss    float64        `json:"max_grid_loss_rub"`
-	Scenarios      []gridScenario `json:"scenarios"`
-	Signal         gridSignal     `json:"signal"`
-	Warnings       []string       `json:"warnings"`
+	Symbol              string         `json:"symbol"`
+	Direction           string         `json:"direction"`
+	Expiry              string         `json:"expiry"`
+	DaysToExp           int            `json:"days_to_exp"`
+	EntrySpot           float64        `json:"entry_spot"`
+	ProtectStrike       float64        `json:"protect_strike"`
+	ProtectIsCall       bool           `json:"protect_is_call"`
+	ProtectQty          int            `json:"protect_qty"`
+	ProtectSecID        string         `json:"protect_secid"`
+	PremiumEach         float64        `json:"premium_each"`
+	PremiumTotal        float64        `json:"premium_total"`
+	ThetaDay            float64        `json:"theta_day"`
+	DeltaEach           float64        `json:"delta_each"`
+	GridStep            float64        `json:"grid_step"`
+	TakeProfit          float64        `json:"take_profit"`
+	QtyPerLevel         int            `json:"qty_per_level"`
+	MaxInventory        int            `json:"max_inventory"`
+	BreakevenRoundTrips float64        `json:"breakeven_roundtrips_per_day"`
+	Coverage            float64        `json:"coverage_ratio"`
+	MaxGridLoss         float64        `json:"max_grid_loss_rub"`
+	Scenarios           []gridScenario `json:"scenarios"`
+	Signal              gridSignal     `json:"signal"`
+	Warnings            []string       `json:"warnings"`
 }
 
 type gridScenario struct {
@@ -580,7 +581,7 @@ func buildProtectGridPlan(symbol, direction, expiry string, spot float64, protec
 		PremiumEach: math.Round(px*100) / 100, PremiumTotal: premiumTotal,
 		ThetaDay: thetaDay, DeltaEach: g.Delta,
 		GridStep: step, TakeProfit: tpPts, QtyPerLevel: qtyPerLevel, MaxInventory: maxInv,
-		BreakevenFills: gridBreakevenFillsPerDay(thetaAbs, step, mult, feePerFill),
+		BreakevenRoundTrips: gridBreakevenRoundTripsPerDay(thetaAbs, step, mult, feePerFill),
 	}
 	cov := math.Abs(g.Delta) * float64(protectQty) / float64(maxInv)
 	plan.Coverage = math.Round(cov*100) / 100
@@ -941,20 +942,20 @@ func protectGridAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		scenarios = append(scenarios, gridScenario{Name: sd.name, GridPnL: real, Inventory: invS, Unreal: unreal, Fills: fills, MaxAdverse: adv})
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"grid":                    g,
-		"pnl":                     math.Round(pos.PnL*100) / 100,
-		"realized":                math.Round(pos.RealizedPnL*100) / 100,
-		"inventory":               inv,
-		"target":                  target,
-		"closable_tp":             closable,
-		"net_delta":               math.Round(pos.Delta*100) / 100,
-		"theta_day":               math.Round(pos.Theta*100) / 100,
-		"breakeven_fills_per_day": gridBreakevenFillsPerDay(math.Abs(pos.Theta), g.GridStep, mult, g.FeePerFill),
-		"wing_payoff_expiry":      payoff,
-		"scenarios":               scenarios,
-		"dte":                     dte,
-		"spot_suspect":            spotSuspect,
-		"fill_log":                g.FillLog,
+		"grid":                         g,
+		"pnl":                          math.Round(pos.PnL*100) / 100,
+		"realized":                     math.Round(pos.RealizedPnL*100) / 100,
+		"inventory":                    inv,
+		"target":                       target,
+		"closable_tp":                  closable,
+		"net_delta":                    math.Round(pos.Delta*100) / 100,
+		"theta_day":                    math.Round(pos.Theta*100) / 100,
+		"breakeven_roundtrips_per_day": gridBreakevenRoundTripsPerDay(math.Abs(pos.Theta), g.GridStep, mult, g.FeePerFill),
+		"wing_payoff_expiry":           payoff,
+		"scenarios":                    scenarios,
+		"dte":                          dte,
+		"spot_suspect":                 spotSuspect,
+		"fill_log":                     g.FillLog,
 	})
 }
 
