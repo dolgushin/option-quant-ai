@@ -228,6 +228,28 @@ func TestBuildStrikeOptions(t *testing.T) {
 	}
 }
 
+// TestStrikeWindowSize pins the open-form picker width: ±5 strikes around
+// the live ATM (user requirement).
+func TestStrikeWindowSize(t *testing.T) {
+	if strikeWindowSize != 5 {
+		t.Fatalf("strikeWindowSize = %d, want 5", strikeWindowSize)
+	}
+	wide := []float64{}
+	for s := 80000.0; s <= 92000; s += 1000 {
+		wide = append(wide, s)
+	}
+	win := buildStrikeOptions(wide, 86000, strikeWindowSize)
+	strikes := 0
+	for _, r := range win {
+		if !r.Divider {
+			strikes++
+		}
+	}
+	if strikes != 11 {
+		t.Fatalf("windowed strikes = %d, want 11 (5+ATM+5)", strikes)
+	}
+}
+
 // TestSellPriceFromBook pins executable SELL pricing: mid when two-sided,
 // best bid when the book is one-sided (evening), refuse on empty bids.
 func TestSellPriceFromBook(t *testing.T) {

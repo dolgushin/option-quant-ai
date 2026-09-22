@@ -709,6 +709,11 @@ type strikeOption struct {
 // row glued right above the ATM strike, windowed to ±window strikes around
 // it (the full chain is noise — nobody scrolls 60 strikes). window <= 0 or
 // no ATM means the full sorted grid. Pure.
+// strikeWindowSize is the open-form strike picker width: ±5 strikes around
+// the live ATM (user requirement). The Alor fallback in loadStraddleMeta
+// mirrors it — keep both in sync.
+const strikeWindowSize = 5
+
 func buildStrikeOptions(strikes []float64, atm float64, window int) []strikeOption {
 	sorted := append([]float64{}, strikes...)
 	sort.Float64s(sorted)
@@ -1086,7 +1091,7 @@ func straddleMetaHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"symbol": symbol, "spot": math.Round(spot*100) / 100,
-		"expiries": expiries, "strikes": buildStrikeOptions(strikes, atm, 7),
+		"expiries": expiries, "strikes": buildStrikeOptions(strikes, atm, strikeWindowSize),
 		"atm_strike": atm, "chain_expiry": pick,
 	})
 }
