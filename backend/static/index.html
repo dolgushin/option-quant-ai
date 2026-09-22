@@ -2205,6 +2205,19 @@
                         });
                     } catch (e) { /* manual toggle stays */ }
                 }
+                // No anchor at all (no live spot, no cache): center the window
+                // on the current selection instead of dumping the whole chain.
+                if (!srows.some(s => s.atm) && keepSt) {
+                    const all = srows.filter(s => !s.divider && s.strike != null).map(s => Number(s.strike)).sort((a, b) => a - b);
+                    const cur = Number(keepSt);
+                    if (all.includes(cur)) {
+                        srows = [];
+                        all.filter(s => s < cur).slice(-5).forEach(s => srows.push({ strike: s, label: String(s) }));
+                        srows.push({ divider: true, label: '━━━ текущий ━━━' });
+                        srows.push({ strike: cur, label: String(cur), atm: true });
+                        all.filter(s => s > cur).slice(0, 5).forEach(s => srows.push({ strike: s, label: String(s) }));
+                    }
+                }
                 const st = document.getElementById('str-strike');
                 st.innerHTML = '<option value="">—</option>' + srows.map(s =>
                     s.divider ? `<option value="" disabled>${s.label}</option>`
@@ -2212,7 +2225,7 @@
                 restore('str-strike', keepSt);
                 if (d.spot) {
                     const hint = document.getElementById('str-spot-hint');
-                    if (hint) hint.innerText = `спот ${Math.round(d.spot).toLocaleString('ru-RU')}`;
+                    if (hint) hint.innerText = `спот ${d.spot_stale ? '~' : ''}${Math.round(d.spot).toLocaleString('ru-RU')}${d.spot_stale ? ' (стейл)' : ''}`;
                 } else {
                     // No live spot (estimate refused): never leave a stale
                     // value in the hint — the strike picker stays manual.

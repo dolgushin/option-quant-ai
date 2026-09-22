@@ -1065,6 +1065,65 @@ func straddleStrikesHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// lastSpotCache remembers the last live spot per symbol (memory + a tiny
+// JSON file next to the straddle store) so the open-form strike picker can
+// still window ±5 around a stale anchor when feeds are down. Display only —
+// pricing and builders never touch it.
+var (
+	lastSpotMu    sync.Mutex
+	lastSpotCache = map[string]float64{}
+)
+
+func lastSpotFile() string {
+	if straddleFile == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(straddleFile), "straddle_spot.json")
+}
+
+func rememberSpot(symbol string, spot float64) {
+	if spot <= 0 || straddleFile == "" {
+		return
+	}
+	lastSpotMu.Lock()
+	defer lastSpotMu.Unlock()
+	if lastSpotCache == nil {
+		lastSpotCache = map[string]float64{}
+	}
+	lastSpotCache[symbol] = spot
+	m := map[string]float64{}
+	if b, err := os.ReadFile(lastSpotFile()); err == nil {
+		_ = json.Unmarshal(b, &m)
+	}
+	m[symbol] = spot
+	if b, err := json.Marshal(m); err == nil {
+		_ = os.WriteFile(lastSpotFile(), b, 0600)
+	}
+}
+
+func lastKnownSpot(symbol string) float64 {
+	lastSpotMu.Lock()
+	defer lastSpotMu.Unlock()
+	if v, ok := lastSpotCache[symbol]; ok && v > 0 {
+		return v
+	}
+	if p := lastSpotFile(); p != "" {
+		if b, err := os.ReadFile(p); err == nil {
+			m := map[string]float64{}
+			if json.Unmarshal(b, &m) == nil {
+				if v := m[symbol]; v > 0 {
+					if lastSpotCache == nil {
+						lastSpotCache = map[string]float64{}
+					}
+					lastSpotCache[symbol] = v
+					return v
+				}
+			}
+		}
+	}
+	return 0
+}
+
 // straddleMetaSpot resolves the ATM anchor for the open form: the live
 // front-futures quote first, getSpotPrice fallback, hardcoded estimates
 // refused. Returns 0 when there is nothing live — the caller then serves
@@ -1124,12 +1183,29 @@ func straddleMetaHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	atm := 0.0
+	staleAnchor := false
+	if spot > 0 {
+		rememberSpot(symbol, spot)
+	} else if last := lastKnownSpot(symbol); last > 0 {
+		// Feeds down: window around the last live spot (honestly labeled
+		// stale) instead of dumping the whole chain on the user.
+		spot, staleAnchor = last, true
+	}
 	if spot > 0 && len(strikes) > 0 {
 		atm = nearestStrikeFromStrikes(strikes, spot)
 	}
+	rows := buildStrikeOptions(strikes, atm, strikeWindowSize)
+	if staleAnchor {
+		for i := range rows {
+			if rows[i].Divider {
+				rows[i].Label = "━━━ последний известный ━━━"
+			}
+		}
+	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"symbol": symbol, "spot": math.Round(spot*100) / 100,
-		"expiries": expiries, "strikes": buildStrikeOptions(strikes, atm, strikeWindowSize),
+		"spot_stale": staleAnchor,
+		"expiries":   expiries, "strikes": rows,
 		"atm_strike": atm, "chain_expiry": pick,
 	})
 }

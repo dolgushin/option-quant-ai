@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -589,5 +591,28 @@ func TestBuildSyntheticQuantities(t *testing.T) {
 	}
 	if plan.Legs[1].Qty != 4 || plan.Legs[1].Side != "BUY" || !plan.Legs[1].IsFuture {
 		t.Fatalf("futures leg wrong: %+v", plan.Legs[1])
+	}
+}
+
+// TestLastSpotCache pins the stale-anchor fallback: a remembered live spot
+// survives on disk and is served when feeds are down; nothing is stored
+// without a store path or for non-positive spots.
+func TestLastSpotCache(t *testing.T) {
+	oldFile := straddleFile
+	straddleFile = filepath.Join(t.TempDir(), "straddles.json")
+	defer func() { straddleFile = oldFile }()
+	rememberSpot("TSTSPOT", 85608)
+	if got := lastKnownSpot("TSTSPOT"); got != 85608 {
+		t.Fatalf("cached spot = %v, want 85608", got)
+	}
+	if b, err := os.ReadFile(filepath.Join(filepath.Dir(straddleFile), "straddle_spot.json")); err != nil || len(b) == 0 {
+		t.Fatalf("spot cache file missing: %v", err)
+	}
+	rememberSpot("TSTSPOT", 0)
+	if got := lastKnownSpot("TSTSPOT"); got != 85608 {
+		t.Fatalf("zero remember must not clobber: got %v", got)
+	}
+	if got := lastKnownSpot("NOPE"); got != 0 {
+		t.Fatalf("unknown symbol = %v, want 0", got)
 	}
 }
