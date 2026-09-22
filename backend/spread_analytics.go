@@ -511,3 +511,57 @@ func findBoardOption(board *optioncalc.Board, strike float64, isCall bool) *opti
 	}
 	return nil
 }
+
+// expiryStats carries the expiry-payoff facts a position profile shows as
+// "extended statistics": breakeven spots, best/worst P&L in the curve range.
+type expiryStats struct {
+	Breakevens  []float64 `json:"breakevens"`
+	MaxProfit   float64   `json:"max_profit"`
+	MaxProfitAt float64   `json:"max_profit_at"`
+	MinPnl      float64   `json:"min_pnl"`
+	MinPnlAt    float64   `json:"min_pnl_at"`
+}
+
+// curveExpiryStats derives expiryStats from a spot grid and its expiry P&L.
+// Breakevens are linearly interpolated zero crossings. Pure — unit-tested.
+func curveExpiryStats(spots, pnl []float64) expiryStats {
+	st := expiryStats{Breakevens: []float64{}}
+	n := len(spots)
+	if n == 0 || len(pnl) != n {
+		return st
+	}
+	st.MaxProfit, st.MaxProfitAt = pnl[0], spots[0]
+	st.MinPnl, st.MinPnlAt = pnl[0], spots[0]
+	lastBE := math.NaN()
+	pushBE := func(x float64) {
+		x = math.Round(x)
+		if math.IsNaN(lastBE) || math.Abs(x-lastBE) > 1 {
+			st.Breakevens = append(st.Breakevens, x)
+			lastBE = x
+		}
+	}
+	if pnl[0] == 0 {
+		pushBE(spots[0])
+	}
+	for i := 1; i < n; i++ {
+		if pnl[i] > st.MaxProfit {
+			st.MaxProfit, st.MaxProfitAt = pnl[i], spots[i]
+		}
+		if pnl[i] < st.MinPnl {
+			st.MinPnl, st.MinPnlAt = pnl[i], spots[i]
+		}
+		a, b := pnl[i-1], pnl[i]
+		switch {
+		case b == 0:
+			pushBE(spots[i])
+		case (a < 0 && b > 0) || (a > 0 && b < 0):
+			t := math.Abs(a) / (math.Abs(a) + math.Abs(b))
+			pushBE(spots[i-1] + t*(spots[i]-spots[i-1]))
+		}
+	}
+	st.MaxProfit = math.Round(st.MaxProfit*100) / 100
+	st.MaxProfitAt = math.Round(st.MaxProfitAt)
+	st.MinPnl = math.Round(st.MinPnl*100) / 100
+	st.MinPnlAt = math.Round(st.MinPnlAt)
+	return st
+}

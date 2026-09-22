@@ -223,3 +223,32 @@ func TestTheoMarkedOpenPositionFallback(t *testing.T) {
 		t.Fatalf("bySecid must be empty on fallback, got %v", bySecid)
 	}
 }
+
+// TestCurveExpiryStats builds a synthetic short-straddle expiry triangle
+// (strike 86000, credit 1453×8): breakevens at 86000±11624, max at strike.
+func TestCurveExpiryStats(t *testing.T) {
+	spots := []float64{}
+	pnl := []float64{}
+	for s := 70000.0; s <= 102000.0; s += 500.0 {
+		spots = append(spots, s)
+		pnl = append(pnl, 11624-math.Abs(s-86000))
+	}
+	st := curveExpiryStats(spots, pnl)
+	if len(st.Breakevens) != 2 {
+		t.Fatalf("breakevens = %v, want 2 crossings", st.Breakevens)
+	}
+	if math.Abs(st.Breakevens[0]-74376) > 500 || math.Abs(st.Breakevens[1]-97624) > 500 {
+		t.Fatalf("breakevens = %v, want ~74376/97624", st.Breakevens)
+	}
+	if math.Abs(st.MaxProfit-11624) > 1 || math.Abs(st.MaxProfitAt-86000) > 500 {
+		t.Fatalf("max = %v @ %v, want 11624 @ 86000", st.MaxProfit, st.MaxProfitAt)
+	}
+	if st.MinPnl >= 0 || (st.MinPnlAt != 70000 && st.MinPnlAt != 102000) {
+		t.Fatalf("min = %v @ %v, want negative at a range edge", st.MinPnl, st.MinPnlAt)
+	}
+	// Degenerate input: no panic, empty breakevens.
+	empty := curveExpiryStats(nil, nil)
+	if len(empty.Breakevens) != 0 {
+		t.Fatalf("empty breakevens = %v, want none", empty.Breakevens)
+	}
+}
