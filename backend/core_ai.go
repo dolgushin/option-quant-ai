@@ -148,14 +148,18 @@ func isCryptoSymbol(symbol string) bool {
 }
 
 // tradingHalted reports whether automated trading is paused: MOEX is closed
-// on weekends, so loops must not hedge/roll/scan on stale Friday data.
-// Crypto is exempt. Pure — unit-tested.
+// on weekends and overnight (23:50–09:00 MSK), so loops must not hedge/roll/
+// scan on stale/ghost books. Crypto is exempt (24/7). Pure — unit-tested.
 func tradingHalted(symbol string, now time.Time) bool {
 	if isCryptoSymbol(symbol) {
 		return false
 	}
-	wd := now.In(mskLoc()).Weekday()
-	return wd == time.Saturday || wd == time.Sunday
+	t := now.In(mskLoc())
+	if wd := t.Weekday(); wd == time.Saturday || wd == time.Sunday {
+		return true
+	}
+	h, m := t.Hour(), t.Minute()
+	return h < 9 || (h == 23 && m >= 50)
 }
 
 var (
@@ -163,19 +167,19 @@ var (
 	weekendGateNotified bool
 )
 
-// weekendHalt gates the automation loops (spreads, straddles, autoscan):
-// true while MOEX is closed for the weekend. Logs transitions once instead
-// of spamming every pass. Manual UI actions stay available.
-func weekendHalt() bool {
+// marketHalt gates the automation loops (spreads, straddles, autoscan).
+// Logs transitions once instead of spamming every pass. Manual UI actions
+// stay available.
+func marketHalt() bool {
 	halted := tradingHalted("", time.Now())
 	weekendGateMu.Lock()
 	defer weekendGateMu.Unlock()
 	if halted && !weekendGateNotified {
-		log.Printf("core: weekend halt — automated trading paused")
+		log.Printf("core: market halt — automated trading paused")
 		weekendGateNotified = true
 	}
 	if !halted && weekendGateNotified {
-		log.Printf("core: weekend over — automated trading resumed")
+		log.Printf("core: market open — automated trading resumed")
 		weekendGateNotified = false
 	}
 	return halted
@@ -644,7 +648,7 @@ func coreAutoScanLoop() {
 			time.Sleep(30 * time.Second)
 			continue
 		}
-		if weekendHalt() {
+		if marketHalt() {
 			time.Sleep(interval)
 			continue
 		}

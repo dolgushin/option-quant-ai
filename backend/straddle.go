@@ -278,6 +278,17 @@ func hedgeTargetDelta(rec *straddleRecord) float64 {
 	return q
 }
 
+// hedgeEntry is one executed hedge for the visible journal.
+type hedgeEntry struct {
+	At     string  `json:"at"`
+	Side   string  `json:"side"`
+	Qty    int     `json:"qty"`
+	Price  float64 `json:"price"`
+	Closed float64 `json:"closed_pnl"`
+	Reason string  `json:"reason"`
+	Manual bool    `json:"manual"`
+}
+
 // straddleRecord is a live paper short straddle with its hedge state.
 type straddleRecord struct {
 	ID            string             `json:"id"`
@@ -298,6 +309,7 @@ type straddleRecord struct {
 	HedgeCount    int                `json:"hedge_count"`
 	LastHedgeAt   string             `json:"last_hedge_at"`
 	LastHedgeSpot float64            `json:"last_hedge_spot"`
+	HedgeLog      []hedgeEntry       `json:"hedge_log,omitempty"`
 }
 
 // straddleShouldStop reports whether the realized loss hit the 2× stop.
@@ -1270,6 +1282,7 @@ func straddleAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		"pnl":           math.Round(pos.PnL*100) / 100,
 		"realized":      math.Round(pos.RealizedPnL*100) / 100,
 		"spot_suspect":  spotSuspect,
+		"hedge_log":     s.HedgeLog,
 	})
 }
 
@@ -1427,7 +1440,7 @@ func startStraddleManager() {
 	go func() {
 		for {
 			time.Sleep(60 * time.Second)
-			if weekendHalt() {
+			if marketHalt() {
 				continue
 			}
 			runStraddleManagerPass()
@@ -1531,6 +1544,14 @@ func executeStraddleHedge(s *straddleRecord, pos *quant.Position, ev straddleEva
 	s.HedgeCount++
 	s.LastHedgeAt = now.Format(time.RFC3339)
 	s.LastHedgeSpot = spot
+	s.HedgeLog = append(s.HedgeLog, hedgeEntry{
+		At: now.Format("02.01 15:04"), Side: ev.Side, Qty: ev.Qty,
+		Price: fill, Closed: math.Round(realized*100) / 100,
+		Reason: ev.Reason, Manual: manual,
+	})
+	if len(s.HedgeLog) > 50 {
+		s.HedgeLog = s.HedgeLog[len(s.HedgeLog)-50:]
+	}
 	saveStraddleRecord(*s)
 	band := resolveHedgeRules(s.Hedge).DeltaBand
 	if hedgeNotifyWanted(manual, dev, band, ev.Qty) {

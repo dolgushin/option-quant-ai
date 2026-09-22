@@ -256,8 +256,12 @@ func TestCountPricedInstruments(t *testing.T) {
 // TestTradingHalted pins the weekend gate in MSK (server locale independent)
 // with the crypto exemption. 2026-09-18/19/20/21 = Fri/Sat/Sun/Mon.
 func TestTradingHalted(t *testing.T) {
-	utc := func(y, m, d, h int) time.Time {
-		return time.Date(y, time.Month(m), d, h, 0, 0, 0, time.UTC)
+	utc := func(y, m, d, h int, min ...int) time.Time {
+		mm := 0
+		if len(min) > 0 {
+			mm = min[0]
+		}
+		return time.Date(y, time.Month(m), d, h, mm, 0, 0, time.UTC)
 	}
 	if tradingHalted("Si", utc(2026, 9, 18, 12)) {
 		t.Fatal("Friday midday must trade")
@@ -281,6 +285,24 @@ func TestTradingHalted(t *testing.T) {
 	}
 	if tradingHalted("ETH", utc(2026, 9, 20, 12)) {
 		t.Fatal("ETH must trade 24/7")
+	}
+	// Overnight halt (MSK): Friday 20:50 UTC = 23:50 MSK halted, 18:00 UTC
+	// = 21:00 MSK trades (evening session), 06:00 UTC = 09:00 MSK trades.
+	if !tradingHalted("Si", utc(2026, 9, 18, 20, 50)) {
+		t.Fatal("23:50 MSK must halt")
+	}
+	if tradingHalted("Si", utc(2026, 9, 18, 18, 0)) {
+		t.Fatal("21:00 MSK evening session must trade")
+	}
+	if tradingHalted("Si", utc(2026, 9, 18, 6, 0)) {
+		t.Fatal("09:00 MSK must trade")
+	}
+	if !tradingHalted("Si", utc(2026, 9, 18, 5, 59)) {
+		t.Fatal("08:59 MSK must halt")
+	}
+	// Night never touches crypto either.
+	if tradingHalted("BTC", utc(2026, 9, 18, 20, 50)) {
+		t.Fatal("BTC must trade through the night break")
 	}
 }
 
