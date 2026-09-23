@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"testing"
+	"time"
 
 	"option-quant-ai/quant"
 )
@@ -163,7 +164,7 @@ func TestAggregateProtectGridStats(t *testing.T) {
 			FillLog: []gridFill{{Kind: "LADDER"}}},
 	}
 	live := map[string]struct{ Pnl, Theta float64 }{"pos-3": {200, -50}}
-	st := aggregateProtectGridStats(recs, live)
+	st := aggregateProtectGridStats(recs, live, nil)
 	if st.Total != 3 || st.Open != 1 || st.Closed != 2 {
 		t.Fatalf("counts wrong: %+v", st)
 	}
@@ -188,9 +189,57 @@ func TestAggregateProtectGridStats(t *testing.T) {
 }
 
 func TestAggregateProtectGridStatsEmpty(t *testing.T) {
-	st := aggregateProtectGridStats(nil, nil)
+	st := aggregateProtectGridStats(nil, nil, nil)
 	if st.Total != 0 || st.Rows == nil || st.WinRate != 0 {
 		t.Fatalf("empty must be zero with non-nil rows: %+v", st)
+	}
+}
+
+func TestMatchGridTradeHealsOldClose(t *testing.T) {
+	opened := time.Date(2026, 9, 22, 10, 0, 0, 0, time.UTC)
+	rec := protectGridRecord{ID: "old", Symbol: "Si", Direction: gridShort,
+		Status: "CLOSED", OpenedAt: opened.Format(time.RFC3339)}
+	trades := []quant.Trade{
+		{ID: "trd-1", Strategy: "Protective Grid", Symbol: "Si",
+			OpenedAt:   opened.Add(2 * time.Minute),
+			EntryValue: 11390, ExitValue: 22083, RealizedPnL: 10693},
+		{ID: "trd-2", Strategy: "Bull Put Spread", Symbol: "Si",
+			OpenedAt: opened.Add(time.Minute), RealizedPnL: 999},
+	}
+	used := map[string]bool{}
+	m := matchGridTrade(rec, trades, used)
+	if m == nil || m.ID != "trd-1" {
+		t.Fatalf("must match the grid trade, got %+v", m)
+	}
+	st := aggregateProtectGridStats([]protectGridRecord{rec}, nil, trades)
+	if len(st.Rows) != 1 || !st.Rows[0].PnlKnown || st.Rows[0].Pnl != 10693 {
+		t.Fatalf("healed row wrong: %+v", st.Rows)
+	}
+	if st.Rows[0].EntryValue != 11390 || st.Rows[0].ExitValue != 22083 {
+		t.Fatalf("entry/exit must ride along: %+v", st.Rows[0])
+	}
+	if st.Wins != 1 || st.WinRate != 100 {
+		t.Fatalf("healed win must count: wins=%d rate=%v", st.Wins, st.WinRate)
+	}
+}
+
+func TestMatchGridTradeNoDoubleAssign(t *testing.T) {
+	opened := time.Date(2026, 9, 22, 10, 0, 0, 0, time.UTC)
+	mk := func(id string) protectGridRecord {
+		return protectGridRecord{ID: id, Symbol: "Si", Status: "CLOSED",
+			OpenedAt: opened.Format(time.RFC3339)}
+	}
+	trades := []quant.Trade{
+		{ID: "trd-1", Strategy: "Protective Grid", Symbol: "Si",
+			OpenedAt: opened.Add(time.Minute), RealizedPnL: 100},
+	}
+	used := map[string]bool{}
+	if matchGridTrade(mk("a"), trades, used) == nil {
+		t.Fatalf("first record must match")
+	}
+	used["trd-1"] = true
+	if matchGridTrade(mk("b"), trades, used) != nil {
+		t.Fatalf("one trade must not heal two records")
 	}
 }
 

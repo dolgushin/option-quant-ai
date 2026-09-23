@@ -2388,16 +2388,21 @@
                     + `<span>Заливок: <b>${d.fills}</b> · комиссий ≈ <b>${(d.fees || 0).toLocaleString('ru-RU')} ₽</b></span>`
                     + `<span>Тета живых: <b>${(d.theta_day_open || 0).toLocaleString('ru-RU')} ₽/день</b></span></div>`;
                 html += `<table class="w-full text-left mt-2 text-slate-300"><thead class="text-slate-500 border-b border-slate-700 uppercase">`
-                    + `<tr><th class="py-1 pr-2">Сетка</th><th class="py-1 pr-2">Статус</th><th class="py-1 pr-2 text-right">P&L ₽</th><th class="py-1 pr-2 text-right">Сетка ₽</th><th class="py-1 pr-2 text-right">Круги</th><th class="py-1 pr-2 text-right">Заливки</th><th class="py-1 pr-2 text-right">Комис. ₽</th></tr></thead><tbody>`;
+                    + `<tr><th class="py-1 pr-2">Сетка</th><th class="py-1 pr-2">Статус</th><th class="py-1 pr-2 text-right">P&L ₽</th><th class="py-1 pr-2 text-right">Вход→выход</th><th class="py-1 pr-2 text-right">Сетка ₽</th><th class="py-1 pr-2 text-right">Круги</th><th class="py-1 pr-2 text-right">Заливки</th><th class="py-1 pr-2 text-right">Комис. ₽</th><th class="py-1 pr-2">Закрытие</th><th class="py-1"></th></tr></thead><tbody>`;
                 (d.rows || []).forEach(r => {
                     const c = !r.pnl_known ? 'text-slate-500' : r.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                    const io = (r.entry_value || r.exit_value) ? `${(r.entry_value || 0).toLocaleString('ru-RU')}→${(r.exit_value || 0).toLocaleString('ru-RU')}` : '—';
                     html += `<tr class="border-b border-slate-800"><td class="py-1 pr-2">${r.direction === 'LONG' ? '🟢' : '🔴'} ${r.symbol} <span class="text-slate-500">${(r.opened_at || '').slice(0, 10)}</span></td>`
                         + `<td class="py-1 pr-2 text-slate-400">${r.status === 'OPEN' ? 'открыта' : 'закрыта'}</td>`
                         + `<td class="py-1 pr-2 text-right ${c}">${r.pnl_known ? ((r.pnl >= 0 ? '+' : '') + r.pnl.toLocaleString('ru-RU')) : '—'}</td>`
+                        + `<td class="py-1 pr-2 text-right text-slate-400">${io}</td>`
                         + `<td class="py-1 pr-2 text-right">${r.realized_grid.toLocaleString('ru-RU')}</td>`
                         + `<td class="py-1 pr-2 text-right">${r.takes} (${r.take_pnl.toLocaleString('ru-RU')})</td>`
                         + `<td class="py-1 pr-2 text-right">${r.fills}</td>`
-                        + `<td class="py-1 pr-2 text-right">${r.fees.toLocaleString('ru-RU')}</td></tr>`;
+                        + `<td class="py-1 pr-2 text-right">${r.fees.toLocaleString('ru-RU')}</td>`
+                        + `<td class="py-1 pr-2 text-slate-500">${r.status === 'OPEN' ? '' : (r.close_reason || '—')}</td>`
+                        + `<td class="py-1 text-right"><button onclick="togglePgridProfile('${r.id}')" class="px-2 py-1 text-[10px] bg-indigo-700 hover:bg-indigo-600 text-white rounded transition">📊 Профиль</button></td></tr>`
+                    + `<tr id="pgd-${r.id}" class="hidden"><td colspan="10" class="p-0 border-b border-slate-800 bg-slate-900/40"><div id="pgd-box-${r.id}" class="p-3"></div></td></tr>`;
                 });
                 el.innerHTML = html + '</tbody></table>';
             } catch (e) { el.innerHTML = `<span class="text-rose-400">❌ ${e.message}</span>`; }
@@ -2495,6 +2500,18 @@
                 const res = await fetch(`/api/v1/protect-grid/analytics?id=${encodeURIComponent(id)}`);
                 const d = await res.json();
                 if (d.error) { box.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${d.error}</div>`; return; }
+                if (d.closed) {
+                    const g = d.grid || {};
+                    let html = `<div class="font-mono text-[11px] text-slate-200">Итог <b>${(d.final_pnl || 0).toLocaleString('ru-RU')} ₽</b> · Закрыта: ${d.close_reason || '—'}</div>`;
+                    html += `<div class="text-[10px] text-slate-500 font-mono uppercase mt-2 mb-1">Ноги на выходе (вход → выход)</div>`
+                        + `<table class="w-full text-left font-mono text-[11px] text-slate-300"><thead class="text-slate-500 border-b border-slate-700"><tr><th class="pr-2">Нога</th><th class="text-right">Кол-во</th><th class="text-right">Вход</th><th class="text-right">Выход</th></tr></thead><tbody>`
+                        + ((d.exit_legs || []).map(l => `<tr class="border-b border-slate-800"><td class="pr-2">${l.side} ${l.kind === 'OPTION' ? (l.is_call ? 'CALL' : 'PUT') + ' ' + l.strike : 'FUT ' + l.secid}</td><td class="text-right">${l.qty}</td><td class="text-right">${l.entry}</td><td class="text-right">${l.exit}</td></tr>`).join('') || '<tr><td class="text-slate-500">нет данных (закрыта до учёта выходов)</td></tr>') + '</tbody></table>';
+                    html += `<div class="text-[10px] text-slate-500 font-mono uppercase mt-2 mb-1">Журнал заливок</div>`
+                        + `<div class="font-mono text-[11px] text-slate-400 max-h-40 overflow-y-auto">`
+                        + (((g.fill_log || d.fill_log || []).slice().reverse().map(f => `<div>${f.at} · ${f.kind} ${f.side} ${f.qty} @ ${f.price}${f.note ? ' · ' + f.note : ''}</div>`).join('')) || 'пусто') + '</div>';
+                    box.innerHTML = html;
+                    return;
+                }
                 let html = `<div class="font-mono text-[11px] text-slate-200">P&L <b>${d.pnl}</b> ₽ (реализовано сеткой ${d.realized} ₽) · `
                     + `Инвентарь ${d.inventory} (цель ${d.target}) · Готовых тейков ${d.closable_tp} · Δ ${d.net_delta} · Тета ${d.theta_day} ₽/день · `
                     + `Безубыток ${Number.isFinite(d.breakeven_roundtrips_per_day) ? d.breakeven_roundtrips_per_day : '∞ (тета не окупается)'} кругов/день · DTE ${d.dte}${d.spot_suspect ? ' · <span class="text-amber-300">спот подозрительный</span>' : ''}</div>`;
