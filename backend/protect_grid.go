@@ -986,6 +986,7 @@ func protectGridListHandler(w http.ResponseWriter, r *http.Request) {
 			item["inventory"] = gridOpenInventory(pos.Legs, g.Direction)
 			item["net_delta"] = math.Round(pos.Delta*100) / 100
 			item["theta_day"] = math.Round(pos.Theta*100) / 100
+			item["margin"] = math.Round(pos.Margin)
 		} else {
 			item["note"] = "позиция не найдена"
 		}
@@ -1253,6 +1254,7 @@ func protectGridAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		"closable_tp":                  closable,
 		"net_delta":                    math.Round(pos.Delta*100) / 100,
 		"theta_day":                    math.Round(pos.Theta*100) / 100,
+		"margin":                       math.Round(pos.Margin),
 		"breakeven_roundtrips_per_day": finiteOrNil(gridBreakevenRoundTripsPerDay(math.Abs(pos.Theta), g.TakeProfit, mult, g.FeePerFill)),
 		"wing_payoff_expiry":           payoff,
 		"scenarios":                    scenarios,
