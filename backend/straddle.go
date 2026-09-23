@@ -692,41 +692,35 @@ func isFuturesSecID(root, secid string) bool {
 	return re.MatchString(secid)
 }
 
-// frontFuturesSecID computes the front futures contract for the symbol
-// from the current date (pure calendar math — same logic as the MOEX
-// series badge). Used as a last-resort fallback when Alor search
-// returns no futures-like symbols. Pure — unit-tested.
+// frontFuturesSecID computes the front futures contract for the symbol:
+// the nearest quarterly expiry (H/M/U/Z) whose 3rd Thursday hasn't passed
+// (rolls at midnight UTC of expiry day; thirdThursday is shared with the
+// options-expiry code). Month-granular math picks corpses (SiU6 on Sep 22 —
+// dead since Sep 17, empty book, hedge refused); expiry-day math rolls to
+// SiZ6. Pure — unit-tested.
 func frontFuturesSecID(root string, now time.Time) string {
-	// Standard MOEX month codes for futures expiries.
-	// The cycle is quarterly: H(3), M(6), U(9), Z(12).
-	var monthCodes = []byte{'H', 'M', 'U', 'Z'}
-	var monthVals = []time.Month{time.March, time.June, time.September, time.December}
-
-	m := now.Month()
+	quarters := []struct {
+		code  byte
+		month time.Month
+	}{{'H', time.March}, {'M', time.June}, {'U', time.September}, {'Z', time.December}}
 	y := now.Year()
-
-	// Find the first expiry month >= current month
-	idx := 0
-	for i, mv := range monthVals {
-		if mv >= m {
-			idx = i
-			break
+	for k := 0; k < 12; k++ {
+		for _, q := range quarters {
+			if y == now.Year() && q.month < now.Month() {
+				continue
+			}
+			if exp := thirdThursday(y, int(q.month)); exp.After(now) {
+				return fmt.Sprintf("%s%c%d", root, q.code, y%10)
+			}
 		}
+		y++
 	}
-	// If all remaining months are past, roll to next year's first (H)
-	if idx == 0 && m > time.December {
-		y += 1
-	}
-
-	// Year digit is last digit of year
-	yearDigit := y % 10
-	return fmt.Sprintf("%s%c%d", root, monthCodes[idx], yearDigit)
+	return fmt.Sprintf("%sZ%d", root, now.Year()%10)
 }
 
 func resolveFuturesAlor(symbols []string, root string, now time.Time) string {
 	best := ""
-	var bestY int
-	var bestM time.Month
+	var bestExp time.Time
 	re := regexp.MustCompile(`^` + regexp.QuoteMeta(root) + `([FGHJKMNQUVXZ])(\d)$`)
 	for _, s := range symbols {
 		m := re.FindStringSubmatch(s)
@@ -738,8 +732,9 @@ func resolveFuturesAlor(symbols []string, root string, now time.Time) string {
 		if y < now.Year() || (y == now.Year() && mo < now.Month()) {
 			y += 10
 		}
-		if best == "" || y < bestY || (y == bestY && mo < bestM) {
-			best, bestY, bestM = s, y, mo
+		// An expired contract (3rd Thursday passed) has no book — skip it.
+		if exp := thirdThursday(y, int(mo)); exp.After(now) && (best == "" || exp.Before(bestExp)) {
+			best, bestExp = s, exp
 		}
 	}
 	return best

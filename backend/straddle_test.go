@@ -355,10 +355,11 @@ func TestResolveFuturesAlor(t *testing.T) {
 	if got := resolveFuturesAlor(syms, "Si", now); got != "SiU6" {
 		t.Fatalf("front = %q, want SiU6", got)
 	}
-	// After September expiry the front rolls to December.
+	// After September expiry (3rd Thursday Sep 17) the front rolls to
+	// December — an expired contract has no book.
 	late := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
-	if got := resolveFuturesAlor(syms, "Si", late); got != "SiU6" {
-		t.Fatalf("month-granular front = %q, want SiU6 (month not over)", got)
+	if got := resolveFuturesAlor(syms, "Si", late); got != "SiZ6" {
+		t.Fatalf("post-expiry front = %q, want SiZ6", got)
 	}
 	if got := resolveFuturesAlor(syms, "RI", now); got != "RIU6" {
 		t.Fatalf("RI front = %q, want RIU6", got)
@@ -687,22 +688,44 @@ func TestIsFuturesSecID(t *testing.T) {
 	}
 }
 
-// TestFrontFuturesSecID pins the calendar fallback: quarterly cycle
-// H/M/U/Z picks the first expiry at/after now.
+// TestFrontFuturesSecID pins expiry-day rolling: U6 lives until the 3rd
+// Thursday of September (Sep 17 2026) — Sep 10 gives SiU6, Sep 22 already
+// rolls to SiZ6. Month-granular math picked the corpse and the hedge died
+// on its empty book.
 func TestFrontFuturesSecID(t *testing.T) {
 	cases := []struct {
 		now  time.Time
 		want string
 	}{
-		{time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC), "SiU6"},
+		{time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC), "SiU6"},
+		{time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC), "SiZ6"},
 		{time.Date(2026, 12, 15, 12, 0, 0, 0, time.UTC), "SiZ6"},
 		{time.Date(2027, 1, 10, 12, 0, 0, 0, time.UTC), "SiH7"},
-		{time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC), "RIU6"},
+		{time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC), "RIU6"},
+		{time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC), "RIZ6"},
 	}
 	for _, c := range cases {
 		root := c.want[:2]
 		if got := frontFuturesSecID(root, c.now); got != c.want {
-			t.Fatalf("front(%s, %v) = %s, want %s", root, c.now.Format("2006-01"), got, c.want)
+			t.Fatalf("front(%s, %v) = %s, want %s", root, c.now.Format("2006-01-02"), got, c.want)
+		}
+	}
+}
+
+// TestThirdThursday pins the MOEX expiry-day math.
+func TestThirdThursday(t *testing.T) {
+	cases := []struct {
+		y, d int
+		m    time.Month
+	}{
+		{2026, 17, time.September},
+		{2026, 17, time.December},
+		{2027, 18, time.March},
+		{2027, 21, time.January},
+	}
+	for _, c := range cases {
+		if got := thirdThursday(c.y, int(c.m)); got.Day() != c.d {
+			t.Fatalf("3rd Thursday %d-%02d = %v, want day %d", c.y, c.m, got.Format("2006-01-02"), c.d)
 		}
 	}
 }
