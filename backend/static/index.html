@@ -935,6 +935,7 @@
                     <button onclick="openPgrid()" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg transition">Открыть (бумага)</button>
                 </div>
                 <div id="pgrid-plan" class="font-mono text-[11px] text-slate-400 mt-2"></div>
+                <div class="text-[10px] text-slate-500 font-mono mt-2">Лот: первый юнит (лот/уровень фьюч) открывается сразу по рынку; дальше +1 юнит каждые «шаг» пунктов против позиции, всего до «макс.». Сетка динамическая: после полного выхода якорь подтягивается к рынку (тот же уровень перезаряжается и зарабатывает снова), при переполнении и уходе цены лестница пересобирается за ценой. Каждая заливка и тейк видны в 📊 Профиле → журнал заливок и в статистике (круги).</div>
             </div>
             <div id="pgrid-list" class="space-y-2"></div>
         </div>
@@ -2561,7 +2562,7 @@
                     return;
                 }
                 let html = `<div class="font-mono text-[11px] text-slate-200">P&L <b>${d.pnl}</b> ₽ (реализовано сеткой ${d.realized} ₽) · `
-                    + `Инвентарь ${d.inventory} (цель ${d.target}) · Готовых тейков ${d.closable_tp} · Δ ${d.net_delta} · Тета ${d.theta_day} ₽/день · `
+                    + `Инвентарь ${d.inventory} (цель ${d.target}) · Якорь ${d.anchor} · След. уровень ${d.next_rung} · Готовых тейков ${d.closable_tp} · Δ ${d.net_delta} · Тета ${d.theta_day} ₽/день · `
                     + `Безубыток ${Number.isFinite(d.breakeven_roundtrips_per_day) ? d.breakeven_roundtrips_per_day : '∞ (тета не окупается)'} кругов/день · DTE ${d.dte}${d.spot_suspect ? ' · <span class="text-amber-300">спот подозрительный</span>' : ''}</div>`;
                 html += `<div class="grid grid-cols-1 xl:grid-cols-2 gap-3 mt-2">`;
                 html += `<div><div class="text-[10px] text-slate-500 font-mono uppercase mb-1">Крыло к экспирации (защита минус вход)</div>`

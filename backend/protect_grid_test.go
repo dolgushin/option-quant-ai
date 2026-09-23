@@ -66,6 +66,57 @@ func TestGridLadderTarget(t *testing.T) {
 	}
 }
 
+func TestTrailGridAnchor(t *testing.T) {
+	// Virgin grid never slides before its first unit opens.
+	if a := trailGridAnchor(gridLong, 86000, 85900, 25, 5, 0, false); a != 86000 {
+		t.Fatalf("virgin flat must hold entry, got %v", a)
+	}
+	// Flat traded grid re-centers on the market (next dip re-arms).
+	if a := trailGridAnchor(gridLong, 86000, 86100, 25, 5, 0, true); a != 86100 {
+		t.Fatalf("flat traded must follow price, got %v", a)
+	}
+	// Fully loaded grid outrun by price shifts the ladder along (risk capped).
+	if a := trailGridAnchor(gridLong, 86000, 85000, 25, 5, 5, true); a != 85125 {
+		t.Fatalf("full grid must recenter behind price, got %v", a)
+	}
+	// Fully loaded grid inside coverage holds the anchor.
+	if a := trailGridAnchor(gridLong, 86000, 85900, 25, 5, 5, true); a != 86000 {
+		t.Fatalf("covered full grid must hold, got %v", a)
+	}
+	// Partial inventory never trails.
+	if a := trailGridAnchor(gridLong, 86000, 86100, 25, 5, 2, true); a != 86000 {
+		t.Fatalf("working grid must hold, got %v", a)
+	}
+	// SHORT mirror.
+	if a := trailGridAnchor(gridShort, 86000, 85900, 25, 5, 0, true); a != 85900 {
+		t.Fatalf("short flat must follow price, got %v", a)
+	}
+	if a := trailGridAnchor(gridShort, 86000, 87000, 25, 5, 5, true); a != 86875 {
+		t.Fatalf("short full must recenter, got %v", a)
+	}
+}
+
+func TestSimulateGridRearmsInNewZone(t *testing.T) {
+	// Rally then oscillate ABOVE the entry: a frozen ladder would bank one
+	// circle and idle; the trailing ladder works the new zone (3 circles).
+	path := []float64{86000, 86025, 86050, 86025, 86050}
+	real, _, fills, _, _ := simulateGrid(gridLong, path, 86000, 25, 25, 1, 0, 1, 5)
+	if real != 75 || fills != 7 {
+		t.Fatalf("want 3 rearmed circles (75, 7 fills), got real=%v fills=%d", real, fills)
+	}
+}
+
+func TestSimulateGridDownAndBack(t *testing.T) {
+	// The user's scenario: hard fall against the LONG grid (ladder loads to
+	// the cap, puts go ITM) + full return — the bounce pays two circles and
+	// the grid reloads at the top.
+	path := []float64{86000, 85975, 85950, 85925, 85900, 85925, 85950, 85975, 86000, 86025}
+	real, _, fills, inv, _ := simulateGrid(gridLong, path, 86000, 25, 25, 1, 0, 1, 2)
+	if real != 50 || inv != 1 || fills != 5 {
+		t.Fatalf("want down-and-back +50 with reload, got real=%v inv=%d fills=%d", real, inv, fills)
+	}
+}
+
 func TestGridBreakeven(t *testing.T) {
 	// theta 300 ₽/day, one round trip earns the 25-point TAKE (×1) and pays
 	// 2×4 fee → edge 17 → 18 round trips.

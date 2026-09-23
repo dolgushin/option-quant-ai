@@ -139,19 +139,20 @@ func finiteOrNil(v float64) *float64 {
 	return &v
 }
 
-// gridLadderTarget is the stateless inventory target of a one-sided grid:
-// how many futures the ladder wants at this spot. LONG: one more long every
-// `step` points below entry (bounce ladder); SHORT mirrored. Clamped to
-// [0, maxInv]. Pure — unit-tested.
-func gridLadderTarget(direction string, entry, spot, step float64, maxInv int) int {
-	if step <= 0 || maxInv <= 0 || entry <= 0 || spot <= 0 {
+// gridLadderTarget is the inventory target of a one-sided grid relative to
+// its anchor: how many futures the ladder wants at this spot. LONG: one more
+// long every `step` points below the anchor (bounce ladder) plus one market
+// unit at/above it; SHORT mirrored. Clamped to [0, maxInv]. Pure —
+// unit-tested.
+func gridLadderTarget(direction string, anchor, spot, step float64, maxInv int) int {
+	if step <= 0 || maxInv <= 0 || anchor <= 0 || spot <= 0 {
 		return 0
 	}
 	var depth float64
 	if direction == gridLong {
-		depth = (entry - spot) / step
+		depth = (anchor - spot) / step
 	} else if direction == gridShort {
-		depth = (spot - entry) / step
+		depth = (spot - anchor) / step
 	} else {
 		return 0
 	}
@@ -169,6 +170,47 @@ func gridLadderTarget(direction string, entry, spot, step float64, maxInv int) i
 		target = maxInv
 	}
 	return target
+}
+
+// trailGridAnchor moves the ladder anchor after price: a flat grid (all units
+// took profit) re-centers on the market so the next S-sized dip re-arms the
+// ladder right where the tape is — the same level earns again and again.
+// A fully loaded grid whose price ran past the far rung re-centers the ladder
+// behind the price (no new risk: inventory is already capped) so the bounce
+// is harvested rung by rung and fresh dips reload near the market. `traded`
+// (any ladder fill yet) keeps a brand-new grid from sliding before its first
+// unit opens. Pure — unit-tested.
+func trailGridAnchor(direction string, anchor, spot, step float64, maxInv, inventory int, traded bool) float64 {
+	if step <= 0 || maxInv <= 0 || anchor <= 0 || spot <= 0 {
+		return anchor
+	}
+	span := float64(maxInv) * step
+	switch direction {
+	case gridLong:
+		if inventory <= 0 {
+			if traded {
+				return spot
+			}
+			return anchor
+		}
+		if inventory >= maxInv && spot < anchor-span {
+			return spot + span
+		}
+		return anchor
+	case gridShort:
+		if inventory <= 0 {
+			if traded {
+				return spot
+			}
+			return anchor
+		}
+		if inventory >= maxInv && spot > anchor+span {
+			return spot - span
+		}
+		return anchor
+	default:
+		return anchor
+	}
 }
 
 // gridOpenInventory counts the net one-sided futures inventory on a position
@@ -227,15 +269,17 @@ type gridLot struct {
 	qty   int
 }
 
-// simulateGrid runs the ladder + per-unit-TP policy over a price path and
-// returns realized P&L (rubles), closing inventory + its unrealized value,
-// fills and the max adverse excursion in points. Simulator only — the live
-// manager replays the same policy one pass at a time. Pure — unit-tested.
+// simulateGrid runs the trailing ladder + per-unit-TP policy over a price
+// path and returns realized P&L (rubles), closing inventory + its unrealized
+// value, fills and the max adverse excursion in points. Simulator only — the
+// live manager replays the same policy one pass at a time. Pure —
+// unit-tested.
 func simulateGrid(direction string, prices []float64, entry, step, tpPts, mult, fee float64, qtyPerLevel, maxInv int) (realized, unrealized float64, fills, inventory, maxAdverse int) {
 	if len(prices) == 0 || step <= 0 || mult <= 0 || qtyPerLevel <= 0 || maxInv <= 0 {
 		return 0, 0, 0, 0, 0
 	}
 	lots := []gridLot{}
+	anchor := entry
 	adverse := 0.0
 	round := func(v float64) float64 { return math.Round(v*100) / 100 }
 	for _, px := range prices {
@@ -264,8 +308,9 @@ func simulateGrid(direction string, prices []float64, entry, step, tpPts, mult, 
 			}
 		}
 		lots = kept
-		// 2) Ladder top-up toward the target.
-		target := gridLadderTarget(direction, entry, px, step, maxInv)
+		// 2) Trail the anchor, then top up toward the target from it.
+		anchor = trailGridAnchor(direction, anchor, px, step, maxInv, inventory, fills > 0)
+		target := gridLadderTarget(direction, anchor, px, step, maxInv)
 		for inventory < target {
 			lots = append(lots, gridLot{entry: px, qty: qtyPerLevel})
 			inventory += qtyPerLevel
@@ -362,6 +407,7 @@ type protectGridRecord struct {
 	ProtectIsCall bool          `json:"protect_is_call"`
 	ProtectQty    int           `json:"protect_qty"`
 	ProtectEntry  float64       `json:"protect_entry"`
+	Anchor        float64       `json:"anchor"` // trailing ladder anchor: entry at open, then follows price
 	GridStep      float64       `json:"grid_step"`
 	TakeProfit    float64       `json:"take_profit"`
 	QtyPerLevel   int           `json:"qty_per_level"`
@@ -443,6 +489,25 @@ func openProtectGrids() []protectGridRecord {
 		}
 	}
 	return out
+}
+
+// pgridAnchor resolves the working ladder anchor (trailing). Records opened
+// before trailing existed carry Anchor=0 and fall back to the entry spot.
+func pgridAnchor(g *protectGridRecord) float64 {
+	if g.Anchor > 0 {
+		return g.Anchor
+	}
+	return g.EntrySpot
+}
+
+// pgridNextRung is the nearest ladder rung on the buy side of the anchor:
+// the price a dip must touch for the next unit. Pure.
+func pgridNextRung(g *protectGridRecord) float64 {
+	a := pgridAnchor(g)
+	if g.Direction == gridShort {
+		return a + g.GridStep
+	}
+	return a - g.GridStep
 }
 
 func allProtectGrids() []protectGridRecord {
@@ -882,7 +947,7 @@ func protectGridOpenHandler(w http.ResponseWriter, r *http.Request) {
 	rec := protectGridRecord{
 		ID: recID("pgrid"), PositionID: p.ID,
 		Symbol: req.Symbol, Direction: req.Direction, Expiry: req.Expiry,
-		EntrySpot: spot, ProtectSecID: plan.ProtectSecID, ProtectStrike: plan.ProtectStrike,
+		EntrySpot: spot, Anchor: spot, ProtectSecID: plan.ProtectSecID, ProtectStrike: plan.ProtectStrike,
 		ProtectIsCall: plan.ProtectIsCall, ProtectQty: req.ProtectQty, ProtectEntry: wingFill,
 		EntryValue: math.Round(p.EntryValue*100) / 100,
 		GridStep:   plan.GridStep, TakeProfit: plan.TakeProfit, QtyPerLevel: req.QtyPerLevel,
@@ -1152,7 +1217,7 @@ func protectGridAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	dte := dteInDays(g.Expiry, time.Now())
 	inv := gridOpenInventory(pos.Legs, g.Direction)
-	target := gridLadderTarget(g.Direction, g.EntrySpot, spot, g.GridStep, g.MaxInventory)
+	target := gridLadderTarget(g.Direction, pgridAnchor(&g), spot, g.GridStep, g.MaxInventory)
 	closable := gridTakeProfitLegs(pos.Legs, g.Direction, spot, g.TakeProfit)
 	// Option expiry payoff at ±2 steps (per-share → rubles via mult).
 	payoff := []map[string]interface{}{}
@@ -1183,6 +1248,8 @@ func protectGridAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		"realized":                     math.Round(pos.RealizedPnL*100) / 100,
 		"inventory":                    inv,
 		"target":                       target,
+		"anchor":                       math.Round(pgridAnchor(&g)*100) / 100,
+		"next_rung":                    math.Round(pgridNextRung(&g)*100) / 100,
 		"closable_tp":                  closable,
 		"net_delta":                    math.Round(pos.Delta*100) / 100,
 		"theta_day":                    math.Round(pos.Theta*100) / 100,
@@ -1342,10 +1409,17 @@ func runProtectGridPass() {
 				}
 			}
 		}
-		// 2) Ladder top-up toward the stateless target (cap 3 lots/pass so a
-		// gap never opens the whole book at once).
+		// 2) Trail the anchor behind the price, then top up toward the target
+		// from it (cap 3 lots/pass so a gap never opens the whole book at
+		// once). A flat grid re-centers on the market (next dip re-arms);
+		// a fully loaded grid outrun by price shifts its ladder along.
 		inv := gridOpenInventory(pos.Legs, g.Direction)
-		target := gridLadderTarget(g.Direction, g.EntrySpot, spot, g.GridStep, g.MaxInventory)
+		anchor := pgridAnchor(&g)
+		if trailed := trailGridAnchor(g.Direction, anchor, spot, g.GridStep, g.MaxInventory, inv, g.Fills > 0); trailed != anchor {
+			g.Anchor = trailed
+			saveProtectGridRecord(g)
+		}
+		target := gridLadderTarget(g.Direction, pgridAnchor(&g), spot, g.GridStep, g.MaxInventory)
 		if target > inv {
 			add := target - inv
 			if add > 3 {
