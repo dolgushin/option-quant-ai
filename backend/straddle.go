@@ -701,10 +701,10 @@ func frontFuturesSecID(root string, now time.Time) string {
 	// The cycle is quarterly: H(3), M(6), U(9), Z(12).
 	var monthCodes = []byte{'H', 'M', 'U', 'Z'}
 	var monthVals = []time.Month{time.March, time.June, time.September, time.December}
-	
+
 	m := now.Month()
 	y := now.Year()
-	
+
 	// Find the first expiry month >= current month
 	idx := 0
 	for i, mv := range monthVals {
@@ -717,7 +717,7 @@ func frontFuturesSecID(root string, now time.Time) string {
 	if idx == 0 && m > time.December {
 		y += 1
 	}
-	
+
 	// Year digit is last digit of year
 	yearDigit := y % 10
 	return fmt.Sprintf("%s%c%d", root, monthCodes[idx], yearDigit)

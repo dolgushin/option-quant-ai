@@ -686,3 +686,23 @@ func TestIsFuturesSecID(t *testing.T) {
 		}
 	}
 }
+
+// TestFrontFuturesSecID pins the calendar fallback: quarterly cycle
+// H/M/U/Z picks the first expiry at/after now.
+func TestFrontFuturesSecID(t *testing.T) {
+	cases := []struct {
+		now  time.Time
+		want string
+	}{
+		{time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC), "SiU6"},
+		{time.Date(2026, 12, 15, 12, 0, 0, 0, time.UTC), "SiZ6"},
+		{time.Date(2027, 1, 10, 12, 0, 0, 0, time.UTC), "SiH7"},
+		{time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC), "RIU6"},
+	}
+	for _, c := range cases {
+		root := c.want[:2]
+		if got := frontFuturesSecID(root, c.now); got != c.want {
+			t.Fatalf("front(%s, %v) = %s, want %s", root, c.now.Format("2006-01"), got, c.want)
+		}
+	}
+}
