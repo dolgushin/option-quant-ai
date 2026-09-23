@@ -1000,6 +1000,7 @@
                 <button id="rg-tf-5" onclick="setRgTF('5')" class="px-3 py-1.5 bg-slate-900 text-slate-300 border border-slate-700 rounded-lg transition">5 мин</button>
                 <button id="rg-tf-10" onclick="setRgTF('10')" class="px-3 py-1.5 bg-slate-900 text-slate-300 border border-slate-700 rounded-lg transition">10 мин</button>
                 <button id="rg-tf-60" onclick="setRgTF('60')" class="px-3 py-1.5 bg-slate-900 text-slate-300 border border-slate-700 rounded-lg transition">1 час</button>
+                <span class="text-slate-600 ml-2">колесо мыши над графиком — масштаб</span>
             </div>
             <div id="rg-today" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
             <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
@@ -1669,6 +1670,9 @@
             }).join('');
         }
 
+        let rgHistFull = null; // {days, symbol}
+        let rgHistWin = 0; // 0 = all; wheel over chart zooms
+
         function renderRangesHistory(h, symbol) {
             const box = document.getElementById('rg-table');
             if (!box) return;
@@ -1676,6 +1680,8 @@
                 box.innerHTML = '<div class="text-slate-500 text-center py-4 font-mono text-[11px]">Нет данных</div>';
                 return;
             }
+            rgHistFull = { days: h.days, symbol };
+            rgHistWin = 0;
             let html = `<table class="w-full text-left text-[11px] font-mono text-slate-300">
                 <thead class="text-slate-500 border-b border-slate-700 uppercase">
                     <tr><th class="py-1 pr-2">Дата</th><th class="py-1 pr-2 text-right">Откр.</th><th class="py-1 pr-2 text-right">Макс</th><th class="py-1 pr-2 text-right">Мин</th><th class="py-1 pr-2 text-right">Закр.</th><th class="py-1 pr-2 text-right">Диапазон</th><th class="py-1 pr-2 text-right">ATR(14)</th><th class="py-1 text-right">% ATR</th></tr>
@@ -1693,21 +1699,31 @@
                 </tr>`;
             });
             box.innerHTML = html + '</tbody></table>';
+            drawRgHist();
+        }
 
+        function drawRgHist() {
+            if (!rgHistFull) return;
+            const { days, symbol } = rgHistFull;
+            const rows = rgHistWin > 0 ? days.slice(-rgHistWin) : days;
+            const ct = document.getElementById('rg-chart-title');
+            if (ct) ct.textContent = 'Дневной диапазон vs ATR(14), пунктов' + (rgHistWin > 0 ? ` · видно ${rows.length} из ${days.length}` : '');
             const canvas = document.getElementById('rg-chart');
             if (canvas && typeof Chart !== 'undefined') {
                 if (rgChart) rgChart.destroy();
                 rgChart = new Chart(canvas.getContext('2d'), {
                     type: 'bar',
                     data: {
-                        labels: h.days.map(r => r.date.slice(5)),
+                        labels: rows.map(r => r.date.slice(5)),
                         datasets: [
-                            { label: 'Диапазон', data: h.days.map(r => r.range), backgroundColor: h.days.map(r => (r.range_pct_atr || 0) >= 100 ? 'rgba(251,113,133,.75)' : (r.range_pct_atr || 0) >= 70 ? 'rgba(251,191,36,.75)' : 'rgba(52,211,153,.65)') },
-                            { label: 'ATR(14)', data: h.days.map(r => r.atr14), type: 'line', borderColor: '#e2e8f0', borderWidth: 2, pointRadius: 0, fill: false },
+                            { label: 'Диапазон', data: rows.map(r => r.range), backgroundColor: rows.map(r => (r.range_pct_atr || 0) >= 100 ? 'rgba(251,113,133,.75)' : (r.range_pct_atr || 0) >= 70 ? 'rgba(251,191,36,.75)' : 'rgba(52,211,153,.65)') },
+                            { label: 'ATR(14)', data: rows.map(r => r.atr14), type: 'line', borderColor: '#e2e8f0', borderWidth: 2, pointRadius: 0, fill: false },
                         ],
                     },
                     options: {
                         animation: false,
+                        responsive: true,
+                        maintainAspectRatio: false,
                         scales: {
                             x: { ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 12 }, grid: { color: '#1e293b' } },
                             y: { ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 7 }, grid: { color: '#1e293b' } },
@@ -1715,6 +1731,15 @@
                         plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 9 }, boxWidth: 12 } } },
                     },
                 });
+                canvas.onwheel = (e) => {
+                    e.preventDefault();
+                    const total = rgHistFull ? rgHistFull.days.length : 0;
+                    if (!total) return;
+                    let cur = rgHistWin > 0 ? rgHistWin : total;
+                    cur += (e.deltaY > 0 ? 2 : -2);
+                    rgHistWin = cur >= total ? 0 : Math.max(5, cur);
+                    drawRgHist();
+                };
             }
         }
 
@@ -1742,55 +1767,52 @@
             box.innerHTML = html + '</tbody></table>';
         }
 
+        let rgIntraFull = null; // {bars, avg, max, symbol}
+        let rgIntraWin = 0; // 0 = all; wheel over chart zooms
+
         function renderRangesIntraday(d, symbol) {
             const box = document.getElementById('rg-table');
-            const canvas = document.getElementById('rg-chart');
             if (d.error) {
                 if (box) box.innerHTML = '<div class="text-rose-400 text-center py-4 font-mono text-[11px]">MOEX недоступна: ' + d.error + '</div>';
                 if (rgChart) { rgChart.destroy(); rgChart = null; }
                 return;
             }
             const bars = d.bars || [];
-            const avg = d.avg_range || 0;
             if (!bars.length) {
                 if (box) box.innerHTML = '<div class="text-slate-500 text-center py-4 font-mono text-[11px]">Нет баров (торги закрыты?)</div>';
                 if (rgChart) { rgChart.destroy(); rgChart = null; }
                 return;
             }
+            rgIntraFull = { bars, avg: d.avg_range || 0, max: d.max_range || 0, symbol };
+            rgIntraWin = 0;
             if (box) {
-                const shown = bars.slice(-150).reverse();
-                let html = `<div class="font-mono text-[11px] text-slate-400 mb-2">баров: ${bars.length} · средний диапазон: <span class="text-slate-100 font-bold">${rgFmt(symbol, avg)}</span> · максимальный: <span class="text-rose-300 font-bold">${rgFmt(symbol, d.max_range)}</span></div>
-                <table class="w-full text-left text-[11px] font-mono text-slate-300">
-                    <thead class="text-slate-500 border-b border-slate-700 uppercase">
-                        <tr><th class="py-1 pr-2">Время</th><th class="py-1 pr-2 text-right">Откр.</th><th class="py-1 pr-2 text-right">Макс</th><th class="py-1 pr-2 text-right">Мин</th><th class="py-1 pr-2 text-right">Закр.</th><th class="py-1 pr-2 text-right">Диапазон</th><th class="py-1 text-right">Объём</th></tr>
-                    </thead><tbody>`;
-                shown.forEach(b => {
-                    const hot = avg > 0 && b.range >= 2 * avg ? 'text-rose-400' : avg > 0 && b.range >= avg ? 'text-amber-300' : 'text-slate-100';
-                    html += `<tr class="border-b border-slate-800">
-                        <td class="py-1 pr-2 text-slate-200">${b.time}</td>
-                        <td class="py-1 pr-2 text-right">${rgFmt(symbol, b.open)}</td>
-                        <td class="py-1 pr-2 text-right text-emerald-300">${rgFmt(symbol, b.high)}</td>
-                        <td class="py-1 pr-2 text-right text-rose-300">${rgFmt(symbol, b.low)}</td>
-                        <td class="py-1 pr-2 text-right">${rgFmt(symbol, b.close)}</td>
-                        <td class="py-1 pr-2 text-right font-bold ${hot}">${rgFmt(symbol, b.range)}</td>
-                        <td class="py-1 text-right text-slate-400">${b.volume ? Math.round(b.volume).toLocaleString('ru-RU') : '—'}</td>
-                    </tr>`;
-                });
-                box.innerHTML = html + '</tbody></table>';
+                box.innerHTML = `<div class="font-mono text-[11px] text-slate-400">баров: ${bars.length} · период: <span class="text-slate-200">${bars[0].time} — ${bars[bars.length - 1].time}</span> · средний диапазон: <span class="text-slate-100 font-bold">${rgFmt(symbol, rgIntraFull.avg)}</span> · максимальный: <span class="text-rose-300 font-bold">${rgFmt(symbol, rgIntraFull.max)}</span></div>`;
             }
+            drawRgIntra();
+        }
+
+        function drawRgIntra() {
+            if (!rgIntraFull) return;
+            const { bars, avg, symbol } = rgIntraFull;
+            const rows = rgIntraWin > 0 ? bars.slice(-rgIntraWin) : bars;
+            const ct = document.getElementById('rg-chart-title');
+            if (ct) ct.textContent = 'Диапазон бара, пунктов (линия — средний)' + (rgIntraWin > 0 ? ` · видно ${rows.length} из ${bars.length}` : '');
+            const canvas = document.getElementById('rg-chart');
             if (canvas && typeof Chart !== 'undefined') {
                 if (rgChart) rgChart.destroy();
                 rgChart = new Chart(canvas.getContext('2d'), {
                     type: 'bar',
                     data: {
-                        labels: bars.map(b => b.time.slice(5)),
+                        labels: rows.map(b => b.time.slice(5)),
                         datasets: [
-                            { label: 'Диапазон', data: bars.map(b => b.range), backgroundColor: bars.map(b => avg > 0 && b.range >= 2 * avg ? 'rgba(251,113,133,.75)' : avg > 0 && b.range >= avg ? 'rgba(251,191,36,.75)' : 'rgba(52,211,153,.65)') },
-                            { label: 'Средний', data: bars.map(() => avg), type: 'line', borderColor: '#e2e8f0', borderWidth: 2, pointRadius: 0, fill: false },
+                            { label: 'Диапазон', data: rows.map(b => b.range), backgroundColor: rows.map(b => avg > 0 && b.range >= 2 * avg ? 'rgba(251,113,133,.75)' : avg > 0 && b.range >= avg ? 'rgba(251,191,36,.75)' : 'rgba(52,211,153,.65)') },
+                            { label: 'Средний', data: rows.map(() => avg), type: 'line', borderColor: '#e2e8f0', borderWidth: 2, pointRadius: 0, fill: false },
                         ],
                     },
                     options: {
                         animation: false,
+                        responsive: true,
+                        maintainAspectRatio: false,
                         scales: {
                             x: { ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 12 }, grid: { color: '#1e293b' } },
                             y: { ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 7 }, grid: { color: '#1e293b' } },
@@ -1798,6 +1820,15 @@
                         plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 9 }, boxWidth: 12 } } },
                     },
                 });
+                canvas.onwheel = (e) => {
+                    e.preventDefault();
+                    const total = rgIntraFull ? rgIntraFull.bars.length : 0;
+                    if (!total) return;
+                    let cur = rgIntraWin > 0 ? rgIntraWin : total;
+                    cur += (e.deltaY > 0 ? 20 : -20);
+                    rgIntraWin = cur >= total ? 0 : Math.max(10, cur);
+                    drawRgIntra();
+                };
             }
         }
 
@@ -1807,12 +1838,7 @@
 
         function setRgArbWin(n) {
             rgArbWin = n;
-            [['rg-arb-w100', 100], ['rg-arb-w200', 200], ['rg-arb-w400', 0]].forEach(([id, v]) => {
-                const b = document.getElementById(id);
-                if (b) b.className = (v === n)
-                    ? 'px-2.5 py-1.5 bg-emerald-600 text-white font-bold rounded-lg transition'
-                    : 'px-2.5 py-1.5 bg-slate-900 text-slate-300 border border-slate-700 rounded-lg transition';
-            });
+            syncRgArbWinBtns();
             if (rgArbData) renderRangesArb(rgArbData);
         }
 
@@ -1845,12 +1871,13 @@
                 return;
             }
             let times = d.times || [], ad = d.a_data || [], bd = d.b_data || [], sp = d.spread || [];
-            if (rgArbWin > 0 && times.length > rgArbWin) {
+            const total = times.length;
+            if (rgArbWin > 0 && total > rgArbWin) {
                 times = times.slice(-rgArbWin); ad = ad.slice(-rgArbWin); bd = bd.slice(-rgArbWin); sp = sp.slice(-rgArbWin);
             }
             const z = d.z || 0;
             const zCls = Math.abs(z) >= 2 ? 'text-rose-400' : Math.abs(z) >= 1 ? 'text-amber-300' : 'text-emerald-400';
-            if (box) box.innerHTML = `Пара <span class="text-slate-100 font-bold">${d.a}/${d.b}</span> · баров: ${times.length} · расхождение сейчас: <span class="text-slate-100 font-bold">${d.spread_last} п.п.</span> · среднее: ${d.spread_mean} · σ: ${d.spread_std} · z: <span class="${zCls} font-bold">${z > 0 ? '+' : ''}${d.z}</span>`;
+            if (box) box.innerHTML = `Пара <span class="text-slate-100 font-bold">${d.a}/${d.b}</span> · видно ${times.length} из ${total} · расхождение сейчас: <span class="text-slate-100 font-bold">${d.spread_last} п.п.</span> · среднее: ${d.spread_mean} · σ: ${d.spread_std} · z: <span class="${zCls} font-bold">${z > 0 ? '+' : ''}${d.z}</span>`;
             if (canvas && typeof Chart !== 'undefined' && times.length) {
                 if (rgArbChart) rgArbChart.destroy();
                 rgArbChart = new Chart(canvas.getContext('2d'), {
@@ -1865,6 +1892,8 @@
                     },
                     options: {
                         animation: false,
+                        responsive: true,
+                        maintainAspectRatio: false,
                         interaction: { mode: 'index', intersect: false },
                         scales: {
                             x: { ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 14 }, grid: { color: '#1e293b' } },
@@ -1874,7 +1903,26 @@
                         plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 10 }, boxWidth: 14 } } },
                     },
                 });
+                canvas.onwheel = (e) => {
+                    e.preventDefault();
+                    const total = rgArbData ? (rgArbData.times || []).length : 0;
+                    if (!total) return;
+                    let cur = rgArbWin > 0 ? rgArbWin : total;
+                    cur += (e.deltaY > 0 ? 20 : -20);
+                    rgArbWin = cur >= total ? 0 : Math.max(20, cur);
+                    syncRgArbWinBtns();
+                    renderRangesArb(rgArbData);
+                };
             }
+        }
+
+        function syncRgArbWinBtns() {
+            [['rg-arb-w100', 100], ['rg-arb-w200', 200], ['rg-arb-w400', 0]].forEach(([id, v]) => {
+                const b = document.getElementById(id);
+                if (b) b.className = (v === rgArbWin)
+                    ? 'px-2.5 py-1.5 bg-emerald-600 text-white font-bold rounded-lg transition'
+                    : 'px-2.5 py-1.5 bg-slate-900 text-slate-300 border border-slate-700 rounded-lg transition';
+            });
         }
 
         // ---- Forecast module ----
