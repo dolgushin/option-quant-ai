@@ -2562,7 +2562,7 @@
                     box.innerHTML = html;
                     return;
                 }
-                let html = `<div class="font-mono text-[11px] text-slate-200">P&L <b>${d.pnl}</b> ₽ (реализовано сеткой ${d.realized} ₽) · `
+                let html = `<div class="font-mono text-[11px] text-slate-200">Фьючерс <b>${(d.spot || 0).toLocaleString('ru-RU')}</b>${d.spot_suspect ? ' <span class="text-amber-300">(подозрительный)</span>' : ''} · P&L <b>${d.pnl}</b> ₽ (реализовано сеткой ${d.realized} ₽) · `
                     + `Инвентарь ${d.inventory} (цель ${d.target}) · Якорь ${d.anchor} · След. уровень ${d.next_rung} · Готовых тейков ${d.closable_tp} · Δ ${d.net_delta} · Тета ${d.theta_day} ₽/день · ГО ${(d.margin || 0).toLocaleString('ru-RU')} ₽ · `
                     + `Безубыток ${Number.isFinite(d.breakeven_roundtrips_per_day) ? d.breakeven_roundtrips_per_day : '∞ (тета не окупается)'} кругов/день · DTE ${d.dte}${d.spot_suspect ? ' · <span class="text-amber-300">спот подозрительный</span>' : ''}</div>`;
                 html += `<div class="grid grid-cols-1 xl:grid-cols-2 gap-3 mt-2">`;

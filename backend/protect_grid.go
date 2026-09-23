@@ -1245,6 +1245,7 @@ func protectGridAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"grid":                         g,
+		"spot":                         math.Round(spot*100) / 100,
 		"pnl":                          math.Round(pos.PnL*100) / 100,
 		"realized":                     math.Round(pos.RealizedPnL*100) / 100,
 		"inventory":                    inv,
