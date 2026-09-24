@@ -516,9 +516,22 @@ type pgridChart struct {
 	WingNow    []float64          `json:"wing_now"`
 	WingNowPnl float64            `json:"wing_now_pnl"`
 	IsCall     bool               `json:"is_call"`
+	Wing       pgridWingParams    `json:"wing"`
 	Rungs      []float64          `json:"rungs"`
 	Lots       []pgridLotMark     `json:"lots"`
 	Markers    map[string]float64 `json:"markers"`
+}
+
+// pgridWingParams lets the frontend reprice the wing at any spot (chart
+// zoom): strike/entry/qty/mult/side plus the live IV and time to expiry.
+type pgridWingParams struct {
+	Strike float64 `json:"strike"`
+	Entry  float64 `json:"entry"`
+	Qty    int     `json:"qty"`
+	Mult   float64 `json:"mult"`
+	IsCall bool    `json:"is_call"`
+	IV     float64 `json:"iv"`
+	TYears float64 `json:"t_years"`
 }
 
 // buildPgridChart composes the profile chart payload. LONG rungs sit above
@@ -1386,6 +1399,10 @@ func protectGridAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	chart := buildPgridChart(g.Direction, g.ProtectStrike, g.ProtectEntry, g.ProtectIsCall,
 		g.ProtectQty, mult, pgridAnchor(&g), g.GridStep, spot, g.EntrySpot, g.MaxInventory, lots, ivAnnual, tYears)
+	chart.Wing = pgridWingParams{
+		Strike: g.ProtectStrike, Entry: g.ProtectEntry, Qty: g.ProtectQty,
+		Mult: mult, IsCall: g.ProtectIsCall, IV: ivAnnual, TYears: tYears,
+	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"grid":                         g,
 		"spot":                         math.Round(spot*100) / 100,

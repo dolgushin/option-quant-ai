@@ -2580,7 +2580,11 @@
                 let html = `<div class="font-mono text-[11px] text-slate-200">Фьючерс <b>${(d.spot || 0).toLocaleString('ru-RU')}</b>${d.spot_suspect ? ' <span class="text-amber-300">(подозрительный)</span>' : ''} · P&L <b>${d.pnl}</b> ₽ (реализовано сеткой ${d.realized} ₽) · `
                     + `Инвентарь ${d.inventory} (цель ${d.target}) · Якорь ${d.anchor} · След. уровень ${d.next_rung} · Готовых тейков ${d.closable_tp} · Δ ${d.net_delta} · Тета ${d.theta_day} ₽/день · ГО ${(d.margin || 0).toLocaleString('ru-RU')} ₽ · `
                     + `Безубыток ${Number.isFinite(d.breakeven_roundtrips_per_day) ? d.breakeven_roundtrips_per_day : '∞ (тета не окупается)'} кругов/день · DTE ${d.dte}${d.spot_suspect ? ' · <span class="text-amber-300">спот подозрительный</span>' : ''}</div>`;
-                html += `<div class="mt-2"><div class="text-[10px] text-slate-500 font-mono uppercase mb-1">Позиция на графике: крыло к экспирации + уровни сетки</div><canvas id="pgd-chart-${id}" height="95"></canvas></div>`;
+                html += `<div class="mt-2"><div class="flex justify-between items-center mb-1"><div class="text-[10px] text-slate-500 font-mono uppercase">Позиция на графике: крыло к экспирации + уровни сетки</div>`
+                    + `<div class="flex gap-1"><button onclick="pgridZoom('${id}',1)" title="Приблизить" class="px-2 py-0.5 text-[11px] bg-slate-700 hover:bg-slate-600 text-white rounded transition">+</button>`
+                    + `<button onclick="pgridZoom('${id}',-1)" title="Отдалить" class="px-2 py-0.5 text-[11px] bg-slate-700 hover:bg-slate-600 text-white rounded transition">−</button>`
+                    + `<button onclick="pgridZoom('${id}',0)" title="Сбросить масштаб" class="px-2 py-0.5 text-[11px] bg-slate-700 hover:bg-slate-600 text-white rounded transition">⤾</button></div></div>`
+                    + `<canvas id="pgd-chart-${id}" height="95"></canvas></div>`;
                 html += `<div class="grid grid-cols-1 xl:grid-cols-2 gap-3 mt-2">`;
                 html += `<div><div class="text-[10px] text-slate-500 font-mono uppercase mb-1">Крыло к экспирации (защита минус вход)</div>`
                     + `<table class="w-full text-left font-mono text-[11px] text-slate-300"><thead class="text-slate-500 border-b border-slate-700"><tr><th class="pr-2">Спот</th><th class="text-right">Крыло ₽</th></tr></thead><tbody>`
@@ -2685,12 +2689,80 @@
             return out;
         }
 
+        const pgridChartData = {};
+        const pgridZoomRanges = {};
+
+        // Black-Scholes for chart zoom (same r=16% convention as the backend).
+        function pgridNormCDF(x) {
+            const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741, a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
+            const s = x < 0 ? -1 : 1, ax = Math.abs(x) / Math.SQRT2;
+            const t = 1 / (1 + p * ax);
+            const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-ax * ax);
+            return 0.5 * (1 + s * y);
+        }
+
+        function pgridBSPrice(isCall, S, K, T, r, sigma) {
+            if (!(S > 0) || !(K > 0) || !(T > 0) || !(sigma > 0)) return Math.max(isCall ? S - K : K - S, 0);
+            const d1 = (Math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * Math.sqrt(T));
+            const d2 = d1 - sigma * Math.sqrt(T);
+            const df = Math.exp(-r * T);
+            return isCall ? S * pgridNormCDF(d1) - K * df * pgridNormCDF(d2)
+                : K * df * pgridNormCDF(-d2) - S * pgridNormCDF(-d1);
+        }
+
+        function pgridViewRange(id, ch) {
+            const z = pgridZoomRanges[id];
+            if (z && isFinite(z.lo) && isFinite(z.hi) && z.hi > z.lo) return z;
+            return { lo: ch.spots[0], hi: ch.spots[ch.spots.length - 1] };
+        }
+
+        // +1 zoom in, -1 zoom out (anchored on the live spot), 0 reset.
+        function pgridZoom(id, dir) {
+            const ch = pgridChartData[id];
+            if (!ch || !ch.spots || !ch.spots.length) return;
+            if (dir === 0) {
+                delete pgridZoomRanges[id];
+            } else {
+                const base = ch.spots[ch.spots.length - 1] - ch.spots[0];
+                const v = pgridViewRange(id, ch);
+                const f = dir > 0 ? 1 / 1.6 : 1.6;
+                const ns = Math.min(Math.max((v.hi - v.lo) * f, base / 10), base * 16);
+                const m = ch.markers || {};
+                const c = (m.spot > 0) ? m.spot : (v.lo + v.hi) / 2;
+                pgridZoomRanges[id] = { lo: c - ns / 2, hi: c + ns / 2 };
+            }
+            drawPgridChart(id, ch);
+        }
+
         function drawPgridChart(id, ch) {
             const canvas = document.getElementById(`pgd-chart-${id}`);
             if (!canvas || typeof Chart === 'undefined' || !ch || !ch.spots || !ch.spots.length) return;
-            const pts = ch.spots.map((s, i) => ({ x: s, y: ch.wing_expiry[i] }));
+            pgridChartData[id] = ch;
+            const view = pgridViewRange(id, ch);
+            const w = ch.wing || {};
+            const n = 61;
+            let pts, nowPts = null;
+            if (w.strike > 0 && (w.qty || 0) > 0 && (w.mult || 0) > 0) {
+                pts = [];
+                const hasIV = w.iv > 0.02 && w.t_years > 0;
+                if (hasIV) nowPts = [];
+                for (let i = 0; i < n; i++) {
+                    const s = view.lo + (view.hi - view.lo) * i / (n - 1);
+                    const intr = w.is_call ? Math.max(s - w.strike, 0) : Math.max(w.strike - s, 0);
+                    pts.push({ x: s, y: Math.round(((intr - w.entry) * w.mult * w.qty) * 100) / 100 });
+                    if (nowPts) {
+                        const px = pgridBSPrice(w.is_call, s, w.strike, w.t_years, 0.16, w.iv);
+                        nowPts.push({ x: s, y: Math.round(((px - w.entry) * w.mult * w.qty) * 100) / 100 });
+                    }
+                }
+            } else {
+                pts = ch.spots.map((s, i) => ({ x: s, y: ch.wing_expiry[i] }));
+                if ((ch.wing_now || []).length === ch.spots.length) {
+                    nowPts = ch.spots.map((s, i) => ({ x: s, y: ch.wing_now[i] }));
+                }
+            }
             let ys = pts.map(p => p.y);
-            if ((ch.wing_now || []).length === ch.spots.length) ys = ys.concat(ch.wing_now);
+            if (nowPts) ys = ys.concat(nowPts.map(p => p.y));
             let yMin = Math.min(...ys), yMax = Math.max(...ys);
             if (yMax - yMin < 1) { yMax += 1; yMin -= 1; }
             const padY = (yMax - yMin) * 0.1;
@@ -2728,24 +2800,23 @@
             const tps = (ch.lots || []).map(l => l.tp).filter(v => v > 0);
             if (entries.length) datasets.push(vsegs(entries, '#34d399', 2.5, [], 'лоты'));
             if (tps.length) datasets.push(vsegs(tps, '#34d399', 1.5, [4, 2], 'тейки'));
-            if ((ch.wing_now || []).length === ch.spots.length) {
+            if (nowPts) {
                 datasets.push({
                     label: 'Крыло сейчас, ₽',
-                    data: ch.spots.map((s, i) => ({ x: s, y: ch.wing_now[i] })),
+                    data: nowPts,
                     borderColor: '#f472b6', borderWidth: 2, pointRadius: 0, fill: false,
                 });
             }
             // Breakevens: where each wing curve crosses zero.
-            ch.breakevens = pgridBreakevens(ch.spots, ch.wing_expiry)
-                .concat(((ch.wing_now || []).length === ch.spots.length) ? pgridBreakevens(ch.spots, ch.wing_now) : []);
+            ch.breakevens = pgridBreakevens(pts.map(p => p.x), pts.map(p => p.y))
+                .concat(nowPts ? pgridBreakevens(nowPts.map(p => p.x), nowPts.map(p => p.y)) : []);
             const overlay = { tags: pgridTags(ch, skipAnchor), dots: [] };
             if (isFinite(m.spot) && isFinite(ch.wing_now_pnl)) {
                 overlay.dots.push({ x: m.spot, y: ch.wing_now_pnl, color: '#f472b6' });
             }
             (ch.breakevens || []).forEach(b => overlay.dots.push({ x: b, y: 0, color: '#f1f5f9' }));
-            if (isFinite(m.strike) && ch.spots.length) {
-                const xlo = ch.spots[0], xhi = ch.spots[ch.spots.length - 1];
-                overlay.shade = ch.is_call ? { from: m.strike, to: xhi } : { from: xlo, to: m.strike };
+            if (isFinite(m.strike)) {
+                overlay.shade = ch.is_call ? { from: m.strike, to: view.hi } : { from: view.lo, to: m.strike };
             }
             const ctx = canvas.getContext('2d');
             if (pgridCharts[id]) pgridCharts[id].destroy();
@@ -2756,7 +2827,7 @@
                     animation: false,
                     layout: { padding: { top: 22 } },
                     scales: {
-                        x: { type: 'linear', title: { display: true, text: 'Цена фьючерса', color: '#64748b', font: { size: 9 } }, ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 8 }, grid: { color: '#1e293b' } },
+                        x: { type: 'linear', min: view.lo, max: view.hi, title: { display: true, text: 'Цена фьючерса', color: '#64748b', font: { size: 9 } }, ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 8 }, grid: { color: '#1e293b' } },
                         y: { min: Math.floor(yMin), max: Math.ceil(yMax), title: { display: true, text: 'Крыло, ₽', color: '#64748b', font: { size: 9 } }, ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 6 }, grid: { color: '#1e293b' } },
                     },
                     plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 9 }, boxWidth: 12 } }, pgridPriceTags: overlay },
