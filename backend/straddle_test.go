@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -727,5 +728,30 @@ func TestThirdThursday(t *testing.T) {
 		if got := thirdThursday(c.y, int(c.m)); got.Day() != c.d {
 			t.Fatalf("3rd Thursday %d-%02d = %v, want day %d", c.y, c.m, got.Format("2006-01-02"), c.d)
 		}
+	}
+}
+
+// TestMergeFuturesLegs pins the exchange view: same-contract same-side
+// futures collapse to one VWAP row (2 lots @ average); opposite sides and
+// option tickets stay split.
+func TestMergeFuturesLegs(t *testing.T) {
+	legs := []analyticsLeg{
+		{SecID: "SiZ6", Side: "BUY", Kind: "FUTURES", Quantity: 1, Entry: 86697, Current: 86734},
+		{SecID: "Si86000BJ6", Side: "SELL", Kind: "OPTION", Quantity: 4, Entry: 1417.5, Current: 1554.5},
+		{SecID: "SiZ6", Side: "BUY", Kind: "FUTURES", Quantity: 1, Entry: 86721, Current: 86734},
+		{SecID: "SiZ6", Side: "SELL", Kind: "FUTURES", Quantity: 1, Entry: 86700, Current: 86734},
+	}
+	got := mergeFuturesLegs(legs)
+	if len(got) != 3 {
+		t.Fatalf("merged rows = %d, want 3", len(got))
+	}
+	if got[0].Quantity != 2 || math.Abs(got[0].Entry-86709) > 0.01 {
+		t.Fatalf("merged BUY = %d @ %v, want 2 @ 86709", got[0].Quantity, got[0].Entry)
+	}
+	if got[1].Kind != "OPTION" || got[2].Side != "SELL" || got[2].Quantity != 1 {
+		t.Fatalf("split rows wrong: %+v", got)
+	}
+	if len(mergeFuturesLegs(nil)) != 0 {
+		t.Fatal("nil must stay empty")
 	}
 }

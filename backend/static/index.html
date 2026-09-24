@@ -2626,6 +2626,10 @@
                 });
                 const sgn = v => (v >= 0 ? '+' : '') + Math.round(v).toLocaleString('ru-RU');
                 const attrLine = `<div class="text-[10px] font-mono text-slate-400 mb-2">в т.ч. опционы ${sgn(opt)} ₽ · фьючерсы ${sgn(fut)} ₽ · закрытые хеджи ${sgn(d.realized || 0)} ₽</div>`;
+                // Hedge bottom line: what hedging earned/lost in total —
+                // realized on closed tickets plus live P&L of open futures.
+                const closedSum = (d.hedge_log || []).reduce((s, h) => s + (h.closed || 0), 0);
+                const hedgeTotalLine = `<div class="text-[10px] font-mono text-slate-300 mb-2">Хеджи итого ${sgn(closedSum + fut)} ₽ · закрытые ${sgn(closedSum)} ₽ · открытые ${sgn(fut)} ₽</div>`;
                 // Extended statistics strip: expiry facts (breakevens, best /
                 // worst in range), greek totals, leg IVs, days held. Totals,
                 // IVs and curves arrive precomputed in d.analytics.
@@ -2650,7 +2654,7 @@
                 if (d.hedge_log && d.hedge_log.length) {
                     const rows = d.hedge_log.slice().reverse().map(h => {
                         const c = h.closed >= 0 ? 'text-emerald-300' : 'text-rose-300';
-                        return `<tr class="border-b border-slate-800/60"><td class="py-0.5 pr-2 text-slate-400">${h.at || ''}</td><td class="py-0.5 pr-2">${h.side} ${h.qty} @ ${Math.round(h.price || 0).toLocaleString('ru-RU')}${h.manual ? ' (ручн.)' : ''}</td><td class="py-0.5 text-right ${c}">${(h.closed >= 0 ? '+' : '') + Math.round(h.closed || 0).toLocaleString('ru-RU')}</td></tr>`;
+                        return `<tr class="border-b border-slate-800/60"><td class="py-0.5 pr-2 text-slate-400">${h.at || ''}</td><td class="py-0.5 pr-2">${h.side} ${h.qty}${h.secid ? ' ' + h.secid : ''} @ ${Math.round(h.price || 0).toLocaleString('ru-RU')}${h.manual ? ' (ручн.)' : ''}</td><td class="py-0.5 text-right ${c}">${(h.closed >= 0 ? '+' : '') + Math.round(h.closed || 0).toLocaleString('ru-RU')}</td></tr>`;
                     }).join('');
                     hedgeLog = `<div class="text-[10px] font-mono text-slate-400 mt-2 mb-1">Журнал хеджей (${d.hedge_log.length})</div>
                         <table class="w-full text-left text-[10px] font-mono text-slate-300 mb-2"><tbody>${rows}</tbody></table>`;
@@ -2662,6 +2666,7 @@
                     </div>
                     ${spotLine}
                     ${attrLine}
+                    ${hedgeTotalLine}
                     ${statStrip}
                     ${hedgeLog}
                     ${legs}

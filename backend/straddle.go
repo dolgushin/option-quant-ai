@@ -283,6 +283,7 @@ func hedgeTargetDelta(rec *straddleRecord) float64 {
 type hedgeEntry struct {
 	At     string  `json:"at"`
 	Side   string  `json:"side"`
+	SecID  string  `json:"secid,omitempty"`
 	Qty    int     `json:"qty"`
 	Price  float64 `json:"price"`
 	Closed float64 `json:"closed_pnl"`
@@ -1425,6 +1426,39 @@ func buildHedgeView(rec *straddleRecord, spots, deltas []float64, curSpot float6
 	return v
 }
 
+// mergeFuturesLegs collapses same-contract same-side futures legs into one
+// display row at the volume-weighted average entry — the exchange view (2
+// lots @ average) instead of one row per hedge ticket. P&L, delta and curves
+// are aggregation-neutral for futures (linear in qty at VWAP). Option legs
+// pass through untouched (their IVs differ per ticket). Pure — unit-tested.
+func mergeFuturesLegs(legs []analyticsLeg) []analyticsLeg {
+	out := make([]analyticsLeg, 0, len(legs))
+	idx := map[string]int{}
+	for _, l := range legs {
+		if l.Kind != "FUTURES" {
+			out = append(out, l)
+			continue
+		}
+		key := l.SecID + "|" + l.Side
+		if j, ok := idx[key]; ok {
+			m := &out[j]
+			if total := float64(m.Quantity + l.Quantity); total > 0 {
+				m.Entry = (m.Entry*float64(m.Quantity) + l.Entry*float64(l.Quantity)) / total
+			}
+			m.Quantity += l.Quantity
+			continue
+		}
+		idx[key] = len(out)
+		out = append(out, l)
+	}
+	for i := range out {
+		if out[i].Kind == "FUTURES" {
+			out[i].Entry = math.Round(out[i].Entry*100) / 100
+		}
+	}
+	return out
+}
+
 // GET /api/v1/straddles/analytics?id=str-... — legs, curves, theta accrual,
 // hedge forecast.
 func straddleAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
@@ -1473,6 +1507,7 @@ func straddleAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		legs = append(legs, leg)
 	}
+	legs = mergeFuturesLegs(legs)
 	a := buildSpreadAnalytics(pos.Symbol, s.Expiry, spot, dte, mult, legs)
 	xs, cumul := thetaAccrualCurve(a.Legs, spot, dte, mult, 14)
 	hv := buildHedgeView(&s, a.Curves.Spots, a.Curves.DeltaNow, spot, time.Now())
@@ -1793,7 +1828,7 @@ func executeStraddleHedge(s *straddleRecord, pos *quant.Position, ev straddleEva
 	s.LastHedgeAt = now.Format(time.RFC3339)
 	s.LastHedgeSpot = spot
 	s.HedgeLog = append(s.HedgeLog, hedgeEntry{
-		At: now.Format("02.01 15:04"), Side: ev.Side, Qty: ev.Qty,
+		At: now.Format("02.01 15:04"), Side: ev.Side, SecID: futSec, Qty: ev.Qty,
 		Price: fill, Closed: math.Round(realized*100) / 100,
 		Reason: ev.Reason, Manual: manual,
 	})
