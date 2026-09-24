@@ -128,7 +128,7 @@ func TestSimulateGridIgnoresFall(t *testing.T) {
 
 func TestBuildPgridChart(t *testing.T) {
 	// LONG + PUT 85500 ×10, anchor 85875, step 50, spot 86803.
-	ch := buildPgridChart(gridLong, 85500, 1165, false, 10, 1, 85875, 50, 86803, 85875, 10, nil)
+	ch := buildPgridChart(gridLong, 85500, 1165, false, 10, 1, 85875, 50, 86803, 85875, 10, nil, 0.30, 20.0/365.0)
 	if len(ch.Rungs) != 10 || ch.Rungs[0] != 85925 || ch.Rungs[9] != 86375 {
 		t.Fatalf("long rungs must step up from anchor, got %v", ch.Rungs)
 	}
@@ -159,9 +159,23 @@ func TestBuildPgridChart(t *testing.T) {
 			t.Fatalf("missing marker %s", m)
 		}
 	}
+	// Current wing P&L rides above the expiry payoff (long time value).
+	if len(ch.WingNow) != 61 {
+		t.Fatalf("want 61 now-curve points, got %d", len(ch.WingNow))
+	}
+	for i := range ch.WingNow {
+		if ch.WingNow[i] < ch.WingExpiry[i] {
+			t.Fatalf("long wing now must beat expiry payoff at %v: %v < %v", ch.Spots[i], ch.WingNow[i], ch.WingExpiry[i])
+		}
+	}
+	// No IV → no now-curve (never a half-built one).
+	chNoIV := buildPgridChart(gridLong, 85500, 1165, false, 10, 1, 85875, 50, 86803, 85875, 10, nil, 0, 0)
+	if chNoIV.WingNow != nil {
+		t.Fatalf("without IV the now-curve must be absent")
+	}
 	// SHORT mirror: rungs below the anchor; deep ITM call pays intrinsic.
 	chS := buildPgridChart(gridShort, 86000, 1200, true, 1, 1, 85900, 25, 89000, 85900, 5,
-		[]pgridLotMark{{Entry: 88900, TP: 88875, Qty: 2}})
+		[]pgridLotMark{{Entry: 88900, TP: 88875, Qty: 2}}, 0.30, 20.0/365.0)
 	if len(chS.Rungs) != 5 || chS.Rungs[0] != 85875 {
 		t.Fatalf("short rungs must step down, got %v", chS.Rungs)
 	}

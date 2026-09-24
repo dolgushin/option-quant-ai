@@ -2598,11 +2598,51 @@
 
         const pgridCharts = {};
 
+        // Price tags above every vertical: rung/lot/TP/marker values, two
+        // staggered rows, near-duplicates drawn once.
+        const pgridPriceTagsPlugin = {
+            id: 'pgridPriceTags',
+            afterDraw(chart, args, opts) {
+                const tags = (opts && opts.tags) || [];
+                if (!tags.length) return;
+                const { ctx, chartArea, scales: { x } } = chart;
+                ctx.save();
+                ctx.font = '9px system-ui';
+                ctx.textAlign = 'center';
+                tags.forEach(t => {
+                    const px = x.getPixelForValue(t.x);
+                    if (!isFinite(px) || px < chartArea.left || px > chartArea.right) return;
+                    ctx.fillStyle = t.color || '#94a3b8';
+                    ctx.fillText(t.text, px, chartArea.top + 9 + (t.row || 0) * 11);
+                });
+                ctx.restore();
+            }
+        };
+
+        function pgridTags(ch) {
+            const tags = [];
+            const push = (x, color) => { if (x > 0 && isFinite(x)) tags.push({ x, color, text: String(Math.round(x)) }); };
+            const m = ch.markers || {};
+            push(m.spot, '#f59e0b'); push(m.entry, '#f1f5f9'); push(m.anchor, '#22d3ee'); push(m.strike, '#c084fc');
+            (ch.rungs || []).forEach(r => push(r, '#64748b'));
+            (ch.lots || []).forEach(l => { push(l.entry, '#34d399'); push(l.tp, '#34d399'); });
+            tags.sort((a, b) => a.x - b.x);
+            const out = [];
+            tags.forEach(t => {
+                const last = out[out.length - 1];
+                if (last && Math.abs(last.x - t.x) < 1e-9) return;
+                t.row = out.length % 2;
+                out.push(t);
+            });
+            return out;
+        }
+
         function drawPgridChart(id, ch) {
             const canvas = document.getElementById(`pgd-chart-${id}`);
             if (!canvas || typeof Chart === 'undefined' || !ch || !ch.spots || !ch.spots.length) return;
             const pts = ch.spots.map((s, i) => ({ x: s, y: ch.wing_expiry[i] }));
             let ys = pts.map(p => p.y);
+            if ((ch.wing_now || []).length === ch.spots.length) ys = ys.concat(ch.wing_now);
             let yMin = Math.min(...ys), yMax = Math.max(...ys);
             if (yMax - yMin < 1) { yMax += 1; yMin -= 1; }
             const padY = (yMax - yMin) * 0.1;
@@ -2639,6 +2679,21 @@
             const tps = (ch.lots || []).map(l => l.tp).filter(v => v > 0);
             if (entries.length) datasets.push(vsegs(entries, '#34d399', 2.5, [], 'лоты'));
             if (tps.length) datasets.push(vsegs(tps, '#34d399', 1.5, [4, 2], 'тейки'));
+            if ((ch.wing_now || []).length === ch.spots.length) {
+                datasets.push({
+                    label: 'Крыло сейчас, ₽',
+                    data: ch.spots.map((s, i) => ({ x: s, y: ch.wing_now[i] })),
+                    borderColor: '#f472b6', borderWidth: 2, pointRadius: 0, fill: false,
+                });
+            }
+            if (isFinite(m.spot) && isFinite(ch.wing_now_pnl)) {
+                datasets.push({
+                    label: 'P&L крыла сейчас',
+                    data: [{ x: m.spot, y: ch.wing_now_pnl }],
+                    borderColor: '#f472b6', backgroundColor: '#f472b6',
+                    showLine: false, pointRadius: 4, pointHoverRadius: 5,
+                });
+            }
             const ctx = canvas.getContext('2d');
             if (pgridCharts[id]) pgridCharts[id].destroy();
             pgridCharts[id] = new Chart(ctx, {
@@ -2646,12 +2701,14 @@
                 data: { datasets },
                 options: {
                     animation: false,
+                    layout: { padding: { top: 22 } },
                     scales: {
                         x: { type: 'linear', title: { display: true, text: 'Цена фьючерса', color: '#64748b', font: { size: 9 } }, ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 8 }, grid: { color: '#1e293b' } },
                         y: { min: Math.floor(yMin), max: Math.ceil(yMax), title: { display: true, text: 'Крыло, ₽', color: '#64748b', font: { size: 9 } }, ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 6 }, grid: { color: '#1e293b' } },
                     },
-                    plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 9 }, boxWidth: 12 } } },
+                    plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 9 }, boxWidth: 12 } }, pgridPriceTags: { tags: pgridTags(ch) } },
                 },
+                plugins: [pgridPriceTagsPlugin],
             });
         }
 

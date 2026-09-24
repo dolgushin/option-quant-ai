@@ -507,20 +507,24 @@ type pgridLotMark struct {
 }
 
 // pgridChart is everything the profile chart needs on one price axis:
-// the protective wing's expiry payoff plus the grid layout (rungs, open
-// lots with TPs) and markers (spot, entry, anchor, strike).
+// the protective wing's expiry payoff AND its current (BS) P&L plus the grid
+// layout (rungs, open lots with TPs) and markers (spot, entry, anchor,
+// strike).
 type pgridChart struct {
 	Spots      []float64          `json:"spots"`
 	WingExpiry []float64          `json:"wing_expiry"`
+	WingNow    []float64          `json:"wing_now"`
+	WingNowPnl float64            `json:"wing_now_pnl"`
 	Rungs      []float64          `json:"rungs"`
 	Lots       []pgridLotMark     `json:"lots"`
 	Markers    map[string]float64 `json:"markers"`
 }
 
 // buildPgridChart composes the profile chart payload. LONG rungs sit above
-// the anchor, SHORT below; the wing is the long option's expiry payoff
-// (intrinsic minus entry, ×mult×qty). Pure — unit-tested.
-func buildPgridChart(direction string, strike, optEntry float64, isCall bool, optQty int, mult, anchor, step, spot, entry float64, maxInv int, lots []pgridLotMark) pgridChart {
+// the anchor, SHORT below; the wing is the long option's expiry payoff plus
+// its BS value now at ivAnnual (flat smile) minus entry, ×mult×qty — a long
+// option's time value keeps WingNow above WingExpiry. Pure — unit-tested.
+func buildPgridChart(direction string, strike, optEntry float64, isCall bool, optQty int, mult, anchor, step, spot, entry float64, maxInv int, lots []pgridLotMark, ivAnnual, tYears float64) pgridChart {
 	ch := pgridChart{Markers: map[string]float64{}}
 	if step <= 0 || maxInv <= 0 {
 		return ch
@@ -568,6 +572,17 @@ func buildPgridChart(direction string, strike, optEntry float64, isCall bool, op
 	}
 	lo, hi = lo-pad, hi+pad
 	const n = 61
+	priceNow := func(s float64) (float64, bool) {
+		if ivAnnual <= 0.02 || tYears <= 0 {
+			return 0, false
+		}
+		t := tYears
+		if t < 1.0/3650.0 {
+			t = 1.0 / 3650.0
+		}
+		g := quant.CalculateBlackScholes(isCall, s, strike, t, 0.16, ivAnnual)
+		return (g.Price - optEntry) * mult * float64(optQty), true
+	}
 	for i := 0; i < n; i++ {
 		s := lo + (hi-lo)*float64(i)/float64(n-1)
 		var intr float64
@@ -579,6 +594,16 @@ func buildPgridChart(direction string, strike, optEntry float64, isCall bool, op
 		pnl := (intr - optEntry) * mult * float64(optQty)
 		ch.Spots = append(ch.Spots, math.Round(s*100)/100)
 		ch.WingExpiry = append(ch.WingExpiry, math.Round(pnl*100)/100)
+		if v, ok := priceNow(s); ok {
+			ch.WingNow = append(ch.WingNow, math.Round(v*100)/100)
+		}
+	}
+	if len(ch.WingNow) == n {
+		if v, ok := priceNow(spot); ok {
+			ch.WingNowPnl = math.Round(v*100) / 100
+		}
+	} else {
+		ch.WingNow = nil
 	}
 	return ch
 }
@@ -1338,8 +1363,18 @@ func protectGridAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		lots = append(lots, pgridLotMark{Entry: l.EntryPrice, TP: tp, Qty: l.Quantity})
 	}
+	ivAnnual, tYears := 0.0, float64(dte)/365.0
+	for _, l := range pos.Legs {
+		if l.Kind != "OPTION" || l.CurrentPrice <= 0 || l.Strike <= 0 || spot <= 0 || tYears <= 0 {
+			continue
+		}
+		if iv := quant.ImpliedVolatility(l.IsCall, l.CurrentPrice, spot, l.Strike, tYears, 0.16); iv > 0.02 && iv <= 3 {
+			ivAnnual = iv
+		}
+		break
+	}
 	chart := buildPgridChart(g.Direction, g.ProtectStrike, g.ProtectEntry, g.ProtectIsCall,
-		g.ProtectQty, mult, pgridAnchor(&g), g.GridStep, spot, g.EntrySpot, g.MaxInventory, lots)
+		g.ProtectQty, mult, pgridAnchor(&g), g.GridStep, spot, g.EntrySpot, g.MaxInventory, lots, ivAnnual, tYears)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"grid":                         g,
 		"spot":                         math.Round(spot*100) / 100,
