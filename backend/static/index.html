@@ -2322,7 +2322,7 @@
                 }
                 let html = `<table class="w-full text-left text-[11px] font-mono text-slate-300">
                     <thead class="text-slate-500 border-b border-slate-700 uppercase">
-                    <tr><th class="py-1 pr-2">Стрэддл</th><th class="py-1 pr-2 text-right">Страйк</th><th class="py-1 pr-2 text-right">DTE</th><th class="py-1 pr-2 text-right">К-во</th><th class="py-1 pr-2 text-right">Кредит ₽</th><th class="py-1 pr-2 text-right">P&L ₽</th><th class="py-1 pr-2 text-right">ГО ₽</th><th class="py-1 pr-2 text-right">Δ</th><th class="py-1 pr-2">Хедж</th><th class="py-1"></th></tr>
+                    <tr><th class="py-1 pr-2">Стрэддл</th><th class="py-1 pr-2 text-right">Страйк</th><th class="py-1 pr-2 text-right">DTE</th><th class="py-1 pr-2 text-right">К-во</th><th class="py-1 pr-2 text-right">Кредит ₽</th><th class="py-1 pr-2 text-right">P&L ₽</th><th class="py-1 pr-2 text-right">ГО ₽</th><th class="py-1 pr-2 text-right">Δ</th><th class="py-1 pr-2 text-right">Θ/д</th><th class="py-1 pr-2">Хедж</th><th class="py-1"></th></tr>
                     </thead><tbody>`;
                 d.straddles.forEach(s => {
                     const pnlCls = (s.pnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400';
@@ -2337,11 +2337,12 @@
                         <td class="py-1 pr-2 text-right font-bold ${pnlCls}">${(s.pnl || 0) >= 0 ? '+' : ''}${(s.pnl || 0).toLocaleString('ru-RU')}</td>
                         <td class="py-1 pr-2 text-right text-amber-300">${(s.margin || 0).toLocaleString('ru-RU')}</td>
                         <td class="py-1 pr-2 text-right">${s.net_delta || 0}</td>
+                        <td class="py-1 pr-2 text-right text-emerald-300">${(s.net_theta || 0).toLocaleString('ru-RU')}</td>
                         <td class="py-1 pr-2 text-slate-400">${s.hedge_rule || ''} ×${s.hedge_count || 0}</td>
                         <td class="py-1 text-right whitespace-nowrap"><button onclick="toggleStraddleProfile('${s.id}')" class="px-2 py-1 text-[10px] bg-indigo-700 hover:bg-indigo-600 text-white rounded transition">📊 Профиль</button>
                         <button onclick="hedgeStraddle('${s.id}')" class="px-2 py-1 text-[10px] bg-sky-700 hover:bg-sky-600 text-white rounded transition">⚖ Хедж</button>
                         <button onclick="closeStraddle('${s.id}')" class="px-2 py-1 text-[10px] bg-rose-700 hover:bg-rose-600 text-white rounded transition">✕ Закрыть</button></td></tr>
-                    <tr id="strd-${s.id}" class="hidden"><td colspan="10" class="p-0 border-b border-slate-800 bg-slate-900/40"><div id="strd-box-${s.id}" class="p-3"></div></td></tr>`;
+                    <tr id="strd-${s.id}" class="hidden"><td colspan="11" class="p-0 border-b border-slate-800 bg-slate-900/40"><div id="strd-box-${s.id}" class="p-3"></div></td></tr>`;
                 });
                 el.innerHTML = html + '</tbody></table>';
             } catch (e) { el.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${e.message}</div>`; }
@@ -2565,7 +2566,7 @@
                 let html = `<div class="font-mono text-[11px] text-slate-200">Фьючерс <b>${(d.spot || 0).toLocaleString('ru-RU')}</b>${d.spot_suspect ? ' <span class="text-amber-300">(подозрительный)</span>' : ''} · P&L <b>${d.pnl}</b> ₽ (реализовано сеткой ${d.realized} ₽) · `
                     + `Инвентарь ${d.inventory} (цель ${d.target}) · Якорь ${d.anchor} · След. уровень ${d.next_rung} · Готовых тейков ${d.closable_tp} · Δ ${d.net_delta} · Тета ${d.theta_day} ₽/день · ГО ${(d.margin || 0).toLocaleString('ru-RU')} ₽ · `
                     + `Безубыток ${Number.isFinite(d.breakeven_roundtrips_per_day) ? d.breakeven_roundtrips_per_day : '∞ (тета не окупается)'} кругов/день · DTE ${d.dte}${d.spot_suspect ? ' · <span class="text-amber-300">спот подозрительный</span>' : ''}</div>`;
-                html += `<div class="mt-2"><div class="text-[10px] text-slate-500 font-mono uppercase mb-1">Позиция на графике: крыло к экспирации + уровни сетки</div><canvas id="pgd-chart-${id}" height="220"></canvas></div>`;
+                html += `<div class="mt-2"><div class="text-[10px] text-slate-500 font-mono uppercase mb-1">Позиция на графике: крыло к экспирации + уровни сетки</div><canvas id="pgd-chart-${id}" height="145"></canvas></div>`;
                 html += `<div class="grid grid-cols-1 xl:grid-cols-2 gap-3 mt-2">`;
                 html += `<div><div class="text-[10px] text-slate-500 font-mono uppercase mb-1">Крыло к экспирации (защита минус вход)</div>`
                     + `<table class="w-full text-left font-mono text-[11px] text-slate-300"><thead class="text-slate-500 border-b border-slate-700"><tr><th class="pr-2">Спот</th><th class="text-right">Крыло ₽</th></tr></thead><tbody>`
@@ -2696,8 +2697,8 @@
                 const fmtN = (v, dgt = 0) => (v >= 0 ? '+' : '') + Number(v || 0).toLocaleString('ru-RU', { maximumFractionDigits: dgt });
                 const beTxt = (es.breakevens || []).map(x => Math.round(x).toLocaleString('ru-RU')).join(' … ') || '—';
                 const ivTxt = (a.legs || []).filter(l => l.kind !== 'FUTURES' && (l.iv || 0) > 0).map(l => l.iv.toFixed(1) + '%').join(' / ') || '—';
-                let daysHeld = '—';
-                if (d.opened_at) { const ms = Date.now() - new Date(d.opened_at).getTime(); if (ms >= 0) daysHeld = Math.floor(ms / 864e5) + ' дн.'; }
+                let daysHeld = '—', daysNum = 0;
+                if (d.opened_at) { const ms = Date.now() - new Date(d.opened_at).getTime(); if (ms >= 0) { daysNum = Math.floor(ms / 864e5); daysHeld = daysNum + ' дн.'; } }
                 const statStrip = `<div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
                     ${kpiCard('Безубыток', beTxt, 'text-slate-100')}
                     ${kpiCard('Макс. на эксп.', es.max_profit != null ? `${fmtN(es.max_profit)} @ ${Math.round(es.max_profit_at || 0).toLocaleString('ru-RU')}` : '—', pnlCls(es.max_profit || 0))}
@@ -2705,6 +2706,7 @@
                     ${kpiCard('Кредит / стоп', `${fmtN(d.net_credit || 0)} / ${Math.round(d.stop_level || 0).toLocaleString('ru-RU')}`, 'text-slate-100')}
                     ${kpiCard('ΣΔ', (tt.delta || 0).toFixed(2), 'text-slate-100')}
                     ${kpiCard('ΣΘ/день', fmtN(tt.theta || 0, 1), pnlCls(tt.theta || 0))}
+                    ${kpiCard('Набежало теты ≈', fmtN(daysNum * (tt.theta || 0)), pnlCls(daysNum * (tt.theta || 0)))}
                     ${kpiCard('ΣVega / ΣΓ', `${(tt.vega || 0).toFixed(1)} / ${(tt.gamma || 0).toFixed(4)}`, 'text-slate-100')}
                     ${kpiCard('IV ног · в позиции', `${ivTxt} · ${daysHeld}`, 'text-slate-100')}
                 </div>`;
