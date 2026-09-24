@@ -2611,25 +2611,25 @@
                     const x2 = Math.min(x.getPixelForValue(o.shade.to), chartArea.right);
                     if (x2 > x1) {
                         ctx.save();
-                        ctx.fillStyle = 'rgba(167, 139, 250, 0.07)';
+                        ctx.fillStyle = 'rgba(167, 139, 250, 0.14)';
                         ctx.fillRect(x1, chartArea.top, x2 - x1, chartArea.bottom - chartArea.top);
                         ctx.restore();
                     }
                 }
-                if (o.dot && isFinite(o.dot.x) && isFinite(o.dot.y)) {
-                    const px = x.getPixelForValue(o.dot.x), py = y.getPixelForValue(o.dot.y);
-                    if (isFinite(px) && isFinite(py) && px >= chartArea.left && px <= chartArea.right && py >= chartArea.top && py <= chartArea.bottom) {
-                        ctx.save();
-                        ctx.fillStyle = '#f472b6';
-                        ctx.beginPath();
-                        ctx.arc(px, py, 4, 0, Math.PI * 2);
-                        ctx.fill();
-                        ctx.strokeStyle = '#0f172a';
-                        ctx.lineWidth = 1.5;
-                        ctx.stroke();
-                        ctx.restore();
-                    }
-                }
+                (o.dots || []).forEach(d => {
+                    if (!d || !isFinite(d.x) || !isFinite(d.y)) return;
+                    const px = x.getPixelForValue(d.x), py = y.getPixelForValue(d.y);
+                    if (!isFinite(px) || !isFinite(py) || px < chartArea.left || px > chartArea.right || py < chartArea.top || py > chartArea.bottom) return;
+                    ctx.save();
+                    ctx.fillStyle = d.color || '#f472b6';
+                    ctx.beginPath();
+                    ctx.arc(px, py, 4, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.strokeStyle = '#0f172a';
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+                    ctx.restore();
+                });
                 const tags = o.tags || [];
                 if (!tags.length) return;
                 ctx.save();
@@ -2648,13 +2648,16 @@
             }
         };
 
-        function pgridTags(ch) {
+        function pgridTags(ch, skipAnchor) {
             const tags = [];
-            const push = (x, color) => { if (x > 0 && isFinite(x)) tags.push({ x, color, text: String(Math.round(x)) }); };
+            const push = (x, color, text) => { if (x > 0 && isFinite(x)) tags.push({ x, color, text: text || String(Math.round(x)) }); };
             const m = ch.markers || {};
-            push(m.spot, '#f59e0b'); push(m.entry, '#f1f5f9'); push(m.anchor, '#22d3ee'); push(m.strike, '#c084fc');
+            push(m.spot, '#f59e0b'); push(m.entry, '#f1f5f9');
+            if (!skipAnchor) push(m.anchor, '#22d3ee');
+            push(m.strike, '#c084fc');
             (ch.rungs || []).forEach(r => push(r, '#64748b'));
             (ch.lots || []).forEach(l => { push(l.entry, '#34d399'); push(l.tp, '#34d399'); });
+            (ch.breakevens || []).forEach(b => push(b, '#f1f5f9', 'БУ ' + Math.round(b)));
             tags.sort((a, b) => a.x - b.x);
             const out = [];
             tags.forEach(t => {
@@ -2663,6 +2666,22 @@
                 t.row = out.length % 2;
                 out.push(t);
             });
+            return out;
+        }
+
+        // Zero crossings of a curve = breakeven spots (linear interpolation).
+        function pgridBreakevens(spots, vals) {
+            const out = [];
+            if (!spots || !vals || spots.length !== vals.length) return out;
+            for (let i = 1; i < spots.length && out.length < 2; i++) {
+                const a = vals[i - 1], b = vals[i];
+                if (!isFinite(a) || !isFinite(b)) continue;
+                if ((a < 0 && b >= 0) || (a > 0 && b <= 0)) {
+                    const denom = Math.abs(a) + Math.abs(b);
+                    const t = denom < 1e-12 ? 0 : Math.abs(a) / denom;
+                    out.push(spots[i - 1] + (spots[i] - spots[i - 1]) * t);
+                }
+            }
             return out;
         }
 
@@ -2694,10 +2713,11 @@
                 });
             }
             const m = ch.markers || {};
+            const skipAnchor = isFinite(m.anchor) && isFinite(m.entry) && Math.abs(m.anchor - m.entry) < 0.005;
             const marks = [
                 ['spot', m.spot, '#f59e0b', 2, [], 'фьючерс'],
                 ['entry', m.entry, '#f1f5f9', 1.5, [], 'вход'],
-                ['anchor', m.anchor, '#22d3ee', 1.5, [5, 3], 'якорь'],
+                ['anchor', skipAnchor ? -1 : m.anchor, '#22d3ee', 1.5, [5, 3], 'якорь'],
                 ['strike', m.strike, '#c084fc', 1.5, [2, 2], 'страйк'],
             ];
             marks.forEach(([key, x, color, w, dash, label]) => {
@@ -2715,10 +2735,14 @@
                     borderColor: '#f472b6', borderWidth: 2, pointRadius: 0, fill: false,
                 });
             }
-            const overlay = { tags: pgridTags(ch) };
+            // Breakevens: where each wing curve crosses zero.
+            ch.breakevens = pgridBreakevens(ch.spots, ch.wing_expiry)
+                .concat(((ch.wing_now || []).length === ch.spots.length) ? pgridBreakevens(ch.spots, ch.wing_now) : []);
+            const overlay = { tags: pgridTags(ch, skipAnchor), dots: [] };
             if (isFinite(m.spot) && isFinite(ch.wing_now_pnl)) {
-                overlay.dot = { x: m.spot, y: ch.wing_now_pnl };
+                overlay.dots.push({ x: m.spot, y: ch.wing_now_pnl, color: '#f472b6' });
             }
+            (ch.breakevens || []).forEach(b => overlay.dots.push({ x: b, y: 0, color: '#f1f5f9' }));
             if (isFinite(m.strike) && ch.spots.length) {
                 const xlo = ch.spots[0], xhi = ch.spots[ch.spots.length - 1];
                 overlay.shade = ch.is_call ? { from: m.strike, to: xhi } : { from: xlo, to: m.strike };
