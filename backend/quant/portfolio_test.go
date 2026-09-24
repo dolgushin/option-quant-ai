@@ -143,6 +143,24 @@ func TestClearTrades(t *testing.T) {
 }
 
 // TestSaveAndRemovePosition verifies add/replace/remove position semantics.
+func TestRemoveTradesByStrategy(t *testing.T) {
+	resetState()
+	AddTrade(Trade{ID: "a", Strategy: "Protective Grid", RealizedPnL: 100})
+	AddTrade(Trade{ID: "b", Strategy: "Short Straddle", RealizedPnL: 50})
+	AddTrade(Trade{ID: "c", Strategy: "Protective Grid", RealizedPnL: -20})
+	if n := RemoveTradesByStrategy("Protective Grid"); n != 2 {
+		t.Fatalf("want 2 removed, got %d", n)
+	}
+	left := GetTrades()
+	if len(left) != 1 || left[0].ID != "b" {
+		t.Fatalf("only other strategies must survive: %+v", left)
+	}
+	if n := RemoveTradesByStrategy("Protective Grid"); n != 0 {
+		t.Fatalf("second wipe must remove 0, got %d", n)
+	}
+	resetState()
+}
+
 func TestSaveAndRemovePosition(t *testing.T) {
 	resetState()
 

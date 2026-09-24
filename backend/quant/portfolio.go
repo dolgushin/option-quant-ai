@@ -359,6 +359,28 @@ func ClearTrades() int {
 	return n
 }
 
+// RemoveTradesByStrategy removes closed trades of one strategy only (module
+// test-mode reset) and persists. Returns the number removed. Pure wrt the
+// filter — unit-tested.
+func RemoveTradesByStrategy(strategy string) int {
+	positionsMu.Lock()
+	kept := tradeHistory[:0]
+	n := 0
+	for _, t := range tradeHistory {
+		if t.Strategy == strategy {
+			n++
+			continue
+		}
+		kept = append(kept, t)
+	}
+	tradeHistory = kept
+	positionsMu.Unlock()
+	if n > 0 {
+		Persist()
+	}
+	return n
+}
+
 // ComputeStats aggregates statistics over all closed trades.
 func ComputeStats() Stats {
 	positionsMu.Lock()

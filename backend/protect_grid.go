@@ -599,6 +599,17 @@ func buildPgridChart(direction string, strike, optEntry float64, isCall bool, op
 	return ch
 }
 
+// clearProtectGridRecords wipes the whole registry (test-mode reset).
+// Returns the number of removed records.
+func clearProtectGridRecords() int {
+	pgridMu.Lock()
+	defer pgridMu.Unlock()
+	n := len(pgridStore)
+	pgridStore = nil
+	persistProtectGrids()
+	return n
+}
+
 func allProtectGrids() []protectGridRecord {
 	pgridMu.Lock()
 	defer pgridMu.Unlock()
@@ -1578,6 +1589,55 @@ func pgridExecuteLadder(g *protectGridRecord, pos *quant.Position, side string, 
 	}
 	saveProtectGridRecord(*g)
 	return nil
+}
+
+// POST /api/v1/protect-grid/clear {"close_open":true,"clear_journal":true} —
+// test-mode reset: close every OPEN grid, then wipe all records (open and
+// closed) and, on request, the module's journal trades. Closes are quiet
+// (no Telegram) to avoid spamming one receipt per grid.
+func protectGridClearHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		CloseOpen    *bool `json:"close_open"`
+		ClearJournal *bool `json:"clear_journal"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	closeOpen, clearJournal := true, true
+	if req.CloseOpen != nil {
+		closeOpen = *req.CloseOpen
+	}
+	if req.ClearJournal != nil {
+		clearJournal = *req.ClearJournal
+	}
+	closed, orphaned := 0, 0
+	if closeOpen {
+		for _, g := range openProtectGrids() {
+			pos, ok := quant.GetPositionByID(g.PositionID)
+			if !ok {
+				g.Status = "CLOSED"
+				g.ClosedAt = time.Now().Format(time.RFC3339)
+				g.CloseReason = "очистка (позиция не найдена)"
+				saveProtectGridRecord(g)
+				orphaned++
+				continue
+			}
+			closeProtectGrid(&g, pos, "очистка модуля", false)
+			closed++
+		}
+	}
+	removed := clearProtectGridRecords()
+	journal := 0
+	if clearJournal {
+		journal = quant.RemoveTradesByStrategy("Protective Grid")
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true, "closed": closed, "orphaned": orphaned,
+		"records_removed": removed, "journal_removed": journal,
+	})
 }
 
 // GET /api/v1/protect-grid/manager — status stub (log lives in fill journals).

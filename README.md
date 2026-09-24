@@ -179,7 +179,7 @@ backend/
 | Рынок | `/api/v1/series`, `/api/v1/series/set`, `/api/v1/moex/quote`, `/api/v1/spot`, `/api/v1/vol-surface` |
 | Спреды | `/api/v1/spreads/{plan,advice,analytics,open,close,hedge,roll,rules,manager,depth}`, `/api/v1/mc-pnl`, `/api/v1/mc-scan` |
 | Стрэддлы | `/api/v1/straddles/{meta,strikes,discover,open,hedge,close,analytics}` |
-| Защитная сетка | `/api/v1/protect-grid/{signal,plan,open,close,analytics,manager,stats}` |
+| Защитная сетка | `/api/v1/protect-grid/{signal,plan,open,close,analytics,manager,stats,clear}` |
 | Портфель | `/api/v1/positions`, `/api/v1/positions/{open,close,hedge,sizing,expiry-risk,pnl-attribution}`, `/api/v1/portfolio`, `/api/v1/risk`, `/api/v1/risk/{heatmap,stress}` |
 | Опционы | `/api/v1/options/{skew,iv-rank,trend,recommendations,rolling-advice,gamma-step,exit-advice,vertical-spread}` |
 | Стратегии | `/api/v1/strategy/{build,ironcondor,parity,rotation}`, `/api/v1/backtest` |

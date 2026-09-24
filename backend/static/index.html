@@ -890,7 +890,10 @@
         <div id="pgrid-view" class="hidden space-y-4 md:space-y-6">
             <div class="flex justify-between items-center flex-wrap gap-2">
                 <h2 class="text-lg font-semibold text-slate-200">🛡 Защитная сетка (бумага)</h2>
-                <button onclick="loadPgridMeta(); loadPgridSignal(); loadPgridStats(); loadPgrids();" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded-lg transition">↻ Обновить</button>
+                <div class="flex gap-2">
+                    <button onclick="loadPgridMeta(); loadPgridSignal(); loadPgridStats(); loadPgrids();" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded-lg transition">↻ Обновить</button>
+                    <button onclick="clearPgrids()" title="Закрыть все открытые сетки и стереть историю записей и сделок модуля (сброс для тестирования)" class="px-3 py-1.5 bg-rose-900 hover:bg-rose-700 text-white text-xs font-bold rounded-lg transition">🗑 Очистить всё</button>
+                </div>
             </div>
             <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
                 <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">Сигнал исчерпания дневного диапазона</div>
@@ -2456,6 +2459,17 @@
                 });
                 el.innerHTML = html + '</tbody></table>';
             } catch (e) { el.innerHTML = `<span class="text-rose-400">❌ ${e.message}</span>`; }
+        }
+
+        async function clearPgrids() {
+            if (!confirm('Очистить модуль? Открытые сетки закроются по рынку, история записей и сделок «Protective Grid» будет стёрта. Остальные стратегии не тронуты.')) return;
+            try {
+                const res = await fetch('/api/v1/protect-grid/clear', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ close_open: true, clear_journal: true }) });
+                const d = await res.json();
+                if (!d.success) { alert('❌ не очищено'); return; }
+                alert(`✅ Готово: закрыто ${d.closed}, записей стёрто ${d.records_removed}, сделок журнала стёрто ${d.journal_removed}`);
+                loadPgridStats(); loadPgrids();
+            } catch (e) { alert('❌ ' + e.message); }
         }
 
         async function planPgrid() {
