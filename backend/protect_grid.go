@@ -510,6 +510,95 @@ func pgridNextRung(g *protectGridRecord) float64 {
 	return a - g.GridStep
 }
 
+// pgridRung is one ladder level for the profile chart.
+type pgridRung struct {
+	Price float64 `json:"price"`
+}
+
+// pgridLotMark is one open futures lot with its take-profit level.
+type pgridLotMark struct {
+	Entry float64 `json:"entry"`
+	TP    float64 `json:"tp"`
+	Qty   int     `json:"qty"`
+}
+
+// pgridChart is everything the profile chart needs on one price axis:
+// the protective wing's expiry payoff plus the grid layout (rungs, open
+// lots with TPs) and markers (spot, entry, anchor, strike).
+type pgridChart struct {
+	Spots      []float64          `json:"spots"`
+	WingExpiry []float64          `json:"wing_expiry"`
+	Rungs      []float64          `json:"rungs"`
+	Lots       []pgridLotMark     `json:"lots"`
+	Markers    map[string]float64 `json:"markers"`
+}
+
+// buildPgridChart composes the profile chart payload. LONG rungs sit below
+// the anchor, SHORT above; the wing is the long option's expiry payoff
+// (intrinsic minus entry, ×mult×qty). Pure — unit-tested.
+func buildPgridChart(direction string, strike, optEntry float64, isCall bool, optQty int, mult, anchor, step, spot, entry float64, maxInv int, lots []pgridLotMark) pgridChart {
+	ch := pgridChart{Markers: map[string]float64{}}
+	if step <= 0 || maxInv <= 0 {
+		return ch
+	}
+	for k := 1; k <= maxInv; k++ {
+		if direction == gridShort {
+			ch.Rungs = append(ch.Rungs, anchor+float64(k)*step)
+		} else {
+			ch.Rungs = append(ch.Rungs, anchor-float64(k)*step)
+		}
+	}
+	ch.Lots = lots
+	if ch.Lots == nil {
+		ch.Lots = []pgridLotMark{}
+	}
+	ch.Markers["spot"] = spot
+	ch.Markers["entry"] = entry
+	ch.Markers["anchor"] = anchor
+	ch.Markers["strike"] = strike
+	// X range covers every drawn element with padding.
+	lo, hi := math.Inf(1), math.Inf(-1)
+	consider := func(v float64) {
+		if v > 0 && !math.IsInf(v, 0) {
+			lo = math.Min(lo, v)
+			hi = math.Max(hi, v)
+		}
+	}
+	consider(spot)
+	consider(entry)
+	consider(anchor)
+	consider(strike)
+	for _, r := range ch.Rungs {
+		consider(r)
+	}
+	for _, l := range lots {
+		consider(l.Entry)
+		consider(l.TP)
+	}
+	if math.IsInf(lo, 1) || hi <= lo {
+		return ch
+	}
+	pad := (hi - lo) * 0.15
+	if pad <= 0 {
+		pad = hi * 0.01
+	}
+	lo, hi = lo-pad, hi+pad
+	const n = 61
+	for i := 0; i < n; i++ {
+		s := lo + (hi-lo)*float64(i)/float64(n-1)
+		var intr float64
+		if isCall {
+			intr = math.Max(s-strike, 0)
+		} else {
+			intr = math.Max(strike-s, 0)
+		}
+		pnl := (intr - optEntry) * mult * float64(optQty)
+		ch.Spots = append(ch.Spots, math.Round(s*100)/100)
+		ch.WingExpiry = append(ch.WingExpiry, math.Round(pnl*100)/100)
+	}
+	return ch
+}
+
 func allProtectGrids() []protectGridRecord {
 	pgridMu.Lock()
 	defer pgridMu.Unlock()
@@ -1243,9 +1332,23 @@ func protectGridAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		real, unreal, fills, invS, adv := simulateGrid(g.Direction, path, g.EntrySpot, g.GridStep, g.TakeProfit, mult, g.FeePerFill, g.QtyPerLevel, g.MaxInventory)
 		scenarios = append(scenarios, gridScenario{Name: sd.name, GridPnL: real, Inventory: invS, Unreal: unreal, Fills: fills, MaxAdverse: adv})
 	}
+	lots := []pgridLotMark{}
+	for _, l := range pos.Legs {
+		if l.Kind != "FUTURES" || l.Quantity <= 0 {
+			continue
+		}
+		tp := l.EntryPrice + g.TakeProfit
+		if g.Direction == gridShort {
+			tp = l.EntryPrice - g.TakeProfit
+		}
+		lots = append(lots, pgridLotMark{Entry: l.EntryPrice, TP: tp, Qty: l.Quantity})
+	}
+	chart := buildPgridChart(g.Direction, g.ProtectStrike, g.ProtectEntry, g.ProtectIsCall,
+		g.ProtectQty, mult, pgridAnchor(&g), g.GridStep, spot, g.EntrySpot, g.MaxInventory, lots)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"grid":                         g,
 		"spot":                         math.Round(spot*100) / 100,
+		"chart":                        chart,
 		"pnl":                          math.Round(pos.PnL*100) / 100,
 		"realized":                     math.Round(pos.RealizedPnL*100) / 100,
 		"inventory":                    inv,

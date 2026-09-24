@@ -117,6 +117,59 @@ func TestSimulateGridDownAndBack(t *testing.T) {
 	}
 }
 
+func TestBuildPgridChart(t *testing.T) {
+	// LONG + PUT 85500 ×10, anchor 85875, step 50, spot 86803.
+	ch := buildPgridChart(gridLong, 85500, 1165, false, 10, 1, 85875, 50, 86803, 85875, 10, nil)
+	if len(ch.Rungs) != 10 || ch.Rungs[0] != 85825 || ch.Rungs[9] != 85375 {
+		t.Fatalf("long rungs must step down from anchor, got %v", ch.Rungs)
+	}
+	if len(ch.Spots) != 61 || len(ch.WingExpiry) != 61 {
+		t.Fatalf("want 61 curve points, got %d/%d", len(ch.Spots), len(ch.WingExpiry))
+	}
+	// Far above the strike the long put expires worthless: -premium.
+	last := ch.WingExpiry[len(ch.WingExpiry)-1]
+	if last != -11650 {
+		t.Fatalf("OTM put expiry must be -11650, got %v", last)
+	}
+	// Near the strike the loss is ~the full premium (grid resolution ±1 step).
+	found := false
+	for i, s := range ch.Spots {
+		if math.Abs(s-85500) < 60 {
+			if ch.WingExpiry[i] < -11650 || ch.WingExpiry[i] > -11000 {
+				t.Fatalf("near-strike put must be ~-premium, got %v", ch.WingExpiry[i])
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("curve must cover the strike")
+	}
+	for _, m := range []string{"spot", "entry", "anchor", "strike"} {
+		if _, ok := ch.Markers[m]; !ok {
+			t.Fatalf("missing marker %s", m)
+		}
+	}
+	// SHORT mirror: rungs above the anchor; deep ITM call pays intrinsic.
+	chS := buildPgridChart(gridShort, 86000, 1200, true, 1, 1, 85900, 25, 89000, 85900, 5,
+		[]pgridLotMark{{Entry: 88900, TP: 88875, Qty: 2}})
+	if len(chS.Rungs) != 5 || chS.Rungs[0] != 85925 {
+		t.Fatalf("short rungs must step up, got %v", chS.Rungs)
+	}
+	if len(chS.Lots) != 1 || chS.Lots[0].TP != 88875 {
+		t.Fatalf("lots must ride along: %+v", chS.Lots)
+	}
+	best := chS.WingExpiry[0]
+	for _, v := range chS.WingExpiry {
+		if v > best {
+			best = v
+		}
+	}
+	if best <= 0 {
+		t.Fatalf("deep ITM call curve must go positive, best=%v", best)
+	}
+}
+
 func TestGridBreakeven(t *testing.T) {
 	// theta 300 ₽/day, one round trip earns the 25-point TAKE (×1) and pays
 	// 2×4 fee → edge 17 → 18 round trips.
