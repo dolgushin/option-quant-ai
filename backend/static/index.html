@@ -2616,11 +2616,14 @@
             const datasets = [{
                 label: 'Крыло к экспирации, ₽',
                 data: pts, borderColor: '#a78bfa', borderWidth: 2, pointRadius: 0, fill: false,
-            }, {
-                label: 'ноль',
-                data: [{ x: pts[0].x, y: 0 }, { x: pts[pts.length - 1].x, y: 0 }],
-                borderColor: '#475569', borderWidth: 1, borderDash: [3, 3], pointRadius: 0, fill: false,
             }];
+            if (yMin <= 0 && 0 <= yMax) {
+                datasets.push({
+                    label: 'ноль',
+                    data: [{ x: pts[0].x, y: 0 }, { x: pts[pts.length - 1].x, y: 0 }],
+                    borderColor: '#475569', borderWidth: 1, borderDash: [3, 3], pointRadius: 0, fill: false,
+                });
+            }
             const m = ch.markers || {};
             const marks = [
                 ['spot', m.spot, '#f59e0b', 2, [], 'фьючерс'],
@@ -2645,7 +2648,7 @@
                     animation: false,
                     scales: {
                         x: { type: 'linear', title: { display: true, text: 'Цена фьючерса', color: '#64748b', font: { size: 9 } }, ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 8 }, grid: { color: '#1e293b' } },
-                        y: { title: { display: true, text: 'Крыло, ₽', color: '#64748b', font: { size: 9 } }, ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 6 }, grid: { color: '#1e293b' } },
+                        y: { min: Math.floor(yMin), max: Math.ceil(yMax), title: { display: true, text: 'Крыло, ₽', color: '#64748b', font: { size: 9 } }, ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 6 }, grid: { color: '#1e293b' } },
                     },
                     plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 9 }, boxWidth: 12 } } },
                 },
