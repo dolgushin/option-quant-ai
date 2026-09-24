@@ -159,6 +159,16 @@ func TestBuildPgridChart(t *testing.T) {
 			t.Fatalf("missing marker %s", m)
 		}
 	}
+	// The put's working (ITM) side keeps a full ladder span on screen.
+	minSpot := ch.Spots[0]
+	for _, s := range ch.Spots {
+		if s < minSpot {
+			minSpot = s
+		}
+	}
+	if minSpot > 85500-50*10 {
+		t.Fatalf("put kink zone must be visible, min spot=%v", minSpot)
+	}
 	// Current wing P&L rides above the expiry payoff (long time value).
 	if len(ch.WingNow) != 61 {
 		t.Fatalf("want 61 now-curve points, got %d", len(ch.WingNow))
@@ -190,6 +200,15 @@ func TestBuildPgridChart(t *testing.T) {
 	}
 	if best <= 0 {
 		t.Fatalf("deep ITM call curve must go positive, best=%v", best)
+	}
+	maxSpot := chS.Spots[0]
+	for _, s := range chS.Spots {
+		if s > maxSpot {
+			maxSpot = s
+		}
+	}
+	if maxSpot < 86000+25*5 {
+		t.Fatalf("call working side must be visible, max spot=%v", maxSpot)
 	}
 }
 

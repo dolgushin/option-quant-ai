@@ -571,6 +571,16 @@ func buildPgridChart(direction string, strike, optEntry float64, isCall bool, op
 		pad = hi * 0.01
 	}
 	lo, hi = lo-pad, hi+pad
+	// The wing's working side must stay on screen: a put earns left of the
+	// strike, a call right of it — give it one full ladder span so the kink
+	// never sits glued to the edge.
+	if span := step * float64(maxInv); span > 0 {
+		if isCall {
+			hi += span
+		} else {
+			lo -= span
+		}
+	}
 	const n = 61
 	priceNow := func(s float64) (float64, bool) {
 		if ivAnnual <= 0.02 || tYears <= 0 {

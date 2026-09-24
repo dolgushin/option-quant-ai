@@ -2599,7 +2599,8 @@
         const pgridCharts = {};
 
         // Price tags above every vertical: rung/lot/TP/marker values, two
-        // staggered rows, near-duplicates drawn once.
+        // staggered rows. Tags landing on the same pixels (entry ≈ anchor ≈
+        // spot) collapse into one — an unreadable pile helps nobody.
         const pgridPriceTagsPlugin = {
             id: 'pgridPriceTags',
             afterDraw(chart, args, opts) {
@@ -2609,9 +2610,12 @@
                 ctx.save();
                 ctx.font = '9px system-ui';
                 ctx.textAlign = 'center';
+                const drawn = [];
                 tags.forEach(t => {
                     const px = x.getPixelForValue(t.x);
                     if (!isFinite(px) || px < chartArea.left || px > chartArea.right) return;
+                    if (drawn.some(d => Math.abs(d - px) < 30)) return;
+                    drawn.push(px);
                     ctx.fillStyle = t.color || '#94a3b8';
                     ctx.fillText(t.text, px, chartArea.top + 9 + (t.row || 0) * 11);
                 });
