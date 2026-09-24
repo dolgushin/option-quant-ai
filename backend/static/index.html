@@ -2598,15 +2598,40 @@
 
         const pgridCharts = {};
 
-        // Price tags above every vertical: rung/lot/TP/marker values, two
-        // staggered rows. Tags landing on the same pixels (entry ≈ anchor ≈
-        // spot) collapse into one — an unreadable pile helps nobody.
+        // Chart overlays: price tags above every vertical (same-pixel tags
+        // collapse into one), the current wing P&L dot, and the wing's
+        // in-the-money zone shaded so the tape-vs-strike read is instant.
         const pgridPriceTagsPlugin = {
             id: 'pgridPriceTags',
             afterDraw(chart, args, opts) {
-                const tags = (opts && opts.tags) || [];
+                const o = opts || {};
+                const { ctx, chartArea, scales: { x, y } } = chart;
+                if (o.shade && isFinite(o.shade.from) && isFinite(o.shade.to)) {
+                    const x1 = Math.max(x.getPixelForValue(o.shade.from), chartArea.left);
+                    const x2 = Math.min(x.getPixelForValue(o.shade.to), chartArea.right);
+                    if (x2 > x1) {
+                        ctx.save();
+                        ctx.fillStyle = 'rgba(167, 139, 250, 0.07)';
+                        ctx.fillRect(x1, chartArea.top, x2 - x1, chartArea.bottom - chartArea.top);
+                        ctx.restore();
+                    }
+                }
+                if (o.dot && isFinite(o.dot.x) && isFinite(o.dot.y)) {
+                    const px = x.getPixelForValue(o.dot.x), py = y.getPixelForValue(o.dot.y);
+                    if (isFinite(px) && isFinite(py) && px >= chartArea.left && px <= chartArea.right && py >= chartArea.top && py <= chartArea.bottom) {
+                        ctx.save();
+                        ctx.fillStyle = '#f472b6';
+                        ctx.beginPath();
+                        ctx.arc(px, py, 4, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.strokeStyle = '#0f172a';
+                        ctx.lineWidth = 1.5;
+                        ctx.stroke();
+                        ctx.restore();
+                    }
+                }
+                const tags = o.tags || [];
                 if (!tags.length) return;
-                const { ctx, chartArea, scales: { x } } = chart;
                 ctx.save();
                 ctx.font = '9px system-ui';
                 ctx.textAlign = 'center';
@@ -2690,13 +2715,13 @@
                     borderColor: '#f472b6', borderWidth: 2, pointRadius: 0, fill: false,
                 });
             }
+            const overlay = { tags: pgridTags(ch) };
             if (isFinite(m.spot) && isFinite(ch.wing_now_pnl)) {
-                datasets.push({
-                    label: 'P&L крыла сейчас',
-                    data: [{ x: m.spot, y: ch.wing_now_pnl }],
-                    borderColor: '#f472b6', backgroundColor: '#f472b6',
-                    showLine: false, pointRadius: 4, pointHoverRadius: 5,
-                });
+                overlay.dot = { x: m.spot, y: ch.wing_now_pnl };
+            }
+            if (isFinite(m.strike) && ch.spots.length) {
+                const xlo = ch.spots[0], xhi = ch.spots[ch.spots.length - 1];
+                overlay.shade = ch.is_call ? { from: m.strike, to: xhi } : { from: xlo, to: m.strike };
             }
             const ctx = canvas.getContext('2d');
             if (pgridCharts[id]) pgridCharts[id].destroy();
@@ -2710,7 +2735,7 @@
                         x: { type: 'linear', title: { display: true, text: 'Цена фьючерса', color: '#64748b', font: { size: 9 } }, ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 8 }, grid: { color: '#1e293b' } },
                         y: { min: Math.floor(yMin), max: Math.ceil(yMax), title: { display: true, text: 'Крыло, ₽', color: '#64748b', font: { size: 9 } }, ticks: { color: '#94a3b8', font: { size: 9 }, maxTicksLimit: 6 }, grid: { color: '#1e293b' } },
                     },
-                    plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 9 }, boxWidth: 12 } }, pgridPriceTags: { tags: pgridTags(ch) } },
+                    plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 9 }, boxWidth: 12 } }, pgridPriceTags: overlay },
                 },
                 plugins: [pgridPriceTagsPlugin],
             });

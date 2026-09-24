@@ -169,6 +169,9 @@ func TestBuildPgridChart(t *testing.T) {
 	if minSpot > 85500-50*10 {
 		t.Fatalf("put kink zone must be visible, min spot=%v", minSpot)
 	}
+	if ch.IsCall {
+		t.Fatalf("put chart must carry is_call=false")
+	}
 	// Current wing P&L rides above the expiry payoff (long time value).
 	if len(ch.WingNow) != 61 {
 		t.Fatalf("want 61 now-curve points, got %d", len(ch.WingNow))
@@ -186,6 +189,9 @@ func TestBuildPgridChart(t *testing.T) {
 	// SHORT mirror: rungs below the anchor; deep ITM call pays intrinsic.
 	chS := buildPgridChart(gridShort, 86000, 1200, true, 1, 1, 85900, 25, 89000, 85900, 5,
 		[]pgridLotMark{{Entry: 88900, TP: 88875, Qty: 2}}, 0.30, 20.0/365.0)
+	if !chS.IsCall {
+		t.Fatalf("call chart must carry is_call=true")
+	}
 	if len(chS.Rungs) != 5 || chS.Rungs[0] != 85875 {
 		t.Fatalf("short rungs must step down, got %v", chS.Rungs)
 	}

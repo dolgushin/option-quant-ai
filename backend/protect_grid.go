@@ -515,6 +515,7 @@ type pgridChart struct {
 	WingExpiry []float64          `json:"wing_expiry"`
 	WingNow    []float64          `json:"wing_now"`
 	WingNowPnl float64            `json:"wing_now_pnl"`
+	IsCall     bool               `json:"is_call"`
 	Rungs      []float64          `json:"rungs"`
 	Lots       []pgridLotMark     `json:"lots"`
 	Markers    map[string]float64 `json:"markers"`
@@ -525,7 +526,7 @@ type pgridChart struct {
 // its BS value now at ivAnnual (flat smile) minus entry, ×mult×qty — a long
 // option's time value keeps WingNow above WingExpiry. Pure — unit-tested.
 func buildPgridChart(direction string, strike, optEntry float64, isCall bool, optQty int, mult, anchor, step, spot, entry float64, maxInv int, lots []pgridLotMark, ivAnnual, tYears float64) pgridChart {
-	ch := pgridChart{Markers: map[string]float64{}}
+	ch := pgridChart{Markers: map[string]float64{}, IsCall: isCall}
 	if step <= 0 || maxInv <= 0 {
 		return ch
 	}
