@@ -140,9 +140,11 @@ func finiteOrNil(v float64) *float64 {
 }
 
 // gridLadderTarget is the inventory target of a one-sided grid relative to
-// its anchor: how many futures the ladder wants at this spot. LONG: one more
-// long every `step` points below the anchor (bounce ladder) plus one market
-// unit at/above it; SHORT mirrored. Clamped to [0, maxInv]. Pure —
+// its anchor: how many futures the ladder wants at this spot. The ladder
+// works WITH the thesis, never against it: LONG buys strength — rungs sit
+// ABOVE the anchor (first buy only at anchor+step, never at the anchor
+// itself), the downside is the put's job; SHORT mirrors below the anchor
+// with the call covering the upside. Clamped to [0, maxInv]. Pure —
 // unit-tested.
 func gridLadderTarget(direction string, anchor, spot, step float64, maxInv int) int {
 	if step <= 0 || maxInv <= 0 || anchor <= 0 || spot <= 0 {
@@ -150,21 +152,15 @@ func gridLadderTarget(direction string, anchor, spot, step float64, maxInv int) 
 	}
 	var depth float64
 	if direction == gridLong {
-		depth = (anchor - spot) / step
-	} else if direction == gridShort {
 		depth = (spot - anchor) / step
+	} else if direction == gridShort {
+		depth = (anchor - spot) / step
 	} else {
 		return 0
 	}
-	target := int(math.Floor(depth)) + 1
+	target := int(math.Floor(depth + 1e-9))
 	if target < 0 {
 		target = 0
-	}
-	if target == 0 && depth >= 0 {
-		// At/above entry for LONG (below for SHORT) the ladder still holds
-		// the first unit — the grid starts working immediately, not only
-		// after the first dip.
-		target = 1
 	}
 	if target > maxInv {
 		target = maxInv
@@ -172,40 +168,28 @@ func gridLadderTarget(direction string, anchor, spot, step float64, maxInv int) 
 	return target
 }
 
-// trailGridAnchor moves the ladder anchor after price: a flat grid (all units
-// took profit) re-centers on the market so the next S-sized dip re-arms the
-// ladder right where the tape is — the same level earns again and again.
-// A fully loaded grid whose price ran past the far rung re-centers the ladder
-// behind the price (no new risk: inventory is already capped) so the bounce
-// is harvested rung by rung and fresh dips reload near the market. `traded`
-// (any ladder fill yet) keeps a brand-new grid from sliding before its first
-// unit opens. Pure — unit-tested.
-func trailGridAnchor(direction string, anchor, spot, step float64, maxInv, inventory int, traded bool) float64 {
+// trailGridAnchor shifts a fully loaded ladder behind a runaway price: LONG
+// rungs sit above the anchor, so a rally past the far rung (spot above
+// anchor+span with max inventory) moves the anchor to spot-span — the same
+// zone keeps earning rung by rung instead of idling. No new risk is added
+// (inventory is already capped). Anything else holds the anchor: rungs are
+// fixed levels, so a pullback-then-rise re-arms the very same rung without
+// any sliding, and a virgin grid never drifts before its first unit. Pure —
+// unit-tested.
+func trailGridAnchor(direction string, anchor, spot, step float64, maxInv, inventory int) float64 {
 	if step <= 0 || maxInv <= 0 || anchor <= 0 || spot <= 0 {
 		return anchor
 	}
 	span := float64(maxInv) * step
 	switch direction {
 	case gridLong:
-		if inventory <= 0 {
-			if traded {
-				return spot
-			}
-			return anchor
-		}
-		if inventory >= maxInv && spot < anchor-span {
-			return spot + span
+		if inventory >= maxInv && spot > anchor+span {
+			return spot - span
 		}
 		return anchor
 	case gridShort:
-		if inventory <= 0 {
-			if traded {
-				return spot
-			}
-			return anchor
-		}
-		if inventory >= maxInv && spot > anchor+span {
-			return spot - span
+		if inventory >= maxInv && spot < anchor-span {
+			return spot + span
 		}
 		return anchor
 	default:
@@ -309,7 +293,7 @@ func simulateGrid(direction string, prices []float64, entry, step, tpPts, mult, 
 		}
 		lots = kept
 		// 2) Trail the anchor, then top up toward the target from it.
-		anchor = trailGridAnchor(direction, anchor, px, step, maxInv, inventory, fills > 0)
+		anchor = trailGridAnchor(direction, anchor, px, step, maxInv, inventory)
 		target := gridLadderTarget(direction, anchor, px, step, maxInv)
 		for inventory < target {
 			lots = append(lots, gridLot{entry: px, qty: qtyPerLevel})
@@ -500,14 +484,14 @@ func pgridAnchor(g *protectGridRecord) float64 {
 	return g.EntrySpot
 }
 
-// pgridNextRung is the nearest ladder rung on the buy side of the anchor:
-// the price a dip must touch for the next unit. Pure.
+// pgridNextRung is the nearest ladder rung on the working side of the
+// anchor: LONG buys only above it, SHORT sells only below it. Pure.
 func pgridNextRung(g *protectGridRecord) float64 {
 	a := pgridAnchor(g)
 	if g.Direction == gridShort {
-		return a + g.GridStep
+		return a - g.GridStep
 	}
-	return a - g.GridStep
+	return a + g.GridStep
 }
 
 // pgridRung is one ladder level for the profile chart.
@@ -533,8 +517,8 @@ type pgridChart struct {
 	Markers    map[string]float64 `json:"markers"`
 }
 
-// buildPgridChart composes the profile chart payload. LONG rungs sit below
-// the anchor, SHORT above; the wing is the long option's expiry payoff
+// buildPgridChart composes the profile chart payload. LONG rungs sit above
+// the anchor, SHORT below; the wing is the long option's expiry payoff
 // (intrinsic minus entry, ×mult×qty). Pure — unit-tested.
 func buildPgridChart(direction string, strike, optEntry float64, isCall bool, optQty int, mult, anchor, step, spot, entry float64, maxInv int, lots []pgridLotMark) pgridChart {
 	ch := pgridChart{Markers: map[string]float64{}}
@@ -543,9 +527,9 @@ func buildPgridChart(direction string, strike, optEntry float64, isCall bool, op
 	}
 	for k := 1; k <= maxInv; k++ {
 		if direction == gridShort {
-			ch.Rungs = append(ch.Rungs, anchor+float64(k)*step)
-		} else {
 			ch.Rungs = append(ch.Rungs, anchor-float64(k)*step)
+		} else {
+			ch.Rungs = append(ch.Rungs, anchor+float64(k)*step)
 		}
 	}
 	ch.Lots = lots
@@ -1526,13 +1510,13 @@ func runProtectGridPass() {
 				}
 			}
 		}
-		// 2) Trail the anchor behind the price, then top up toward the target
-		// from it (cap 3 lots/pass so a gap never opens the whole book at
-		// once). A flat grid re-centers on the market (next dip re-arms);
-		// a fully loaded grid outrun by price shifts its ladder along.
+		// 2) Trail a fully loaded ladder behind a runaway price, then top up
+		// toward the target from the anchor (cap 3 lots/pass so a gap never
+		// opens the whole book at once). Fixed rungs re-arm themselves on
+		// pullback-and-rise; nothing slides while flat.
 		inv := gridOpenInventory(pos.Legs, g.Direction)
 		anchor := pgridAnchor(&g)
-		if trailed := trailGridAnchor(g.Direction, anchor, spot, g.GridStep, g.MaxInventory, inv, g.Fills > 0); trailed != anchor {
+		if trailed := trailGridAnchor(g.Direction, anchor, spot, g.GridStep, g.MaxInventory, inv); trailed != anchor {
 			g.Anchor = trailed
 			saveProtectGridRecord(g)
 		}

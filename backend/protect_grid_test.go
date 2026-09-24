@@ -49,17 +49,29 @@ func TestResolveProtectStrikeOneStep(t *testing.T) {
 }
 
 func TestGridLadderTarget(t *testing.T) {
-	if got := gridLadderTarget(gridLong, 86000, 86000, 25, 5); got != 1 {
-		t.Fatalf("at entry ladder holds first unit, got %d", got)
+	// LONG works strength only: nothing at/under the anchor, first unit one
+	// step above it — never an instant entry at the anchor itself.
+	if got := gridLadderTarget(gridLong, 86000, 86000, 25, 5); got != 0 {
+		t.Fatalf("at anchor long must hold 0, got %d", got)
 	}
-	if got := gridLadderTarget(gridLong, 86000, 85940, 25, 5); got != 3 {
-		t.Fatalf("60pts under entry = 3 units, got %d", got)
+	if got := gridLadderTarget(gridLong, 86000, 85940, 25, 5); got != 0 {
+		t.Fatalf("below anchor long must hold 0, got %d", got)
 	}
-	if got := gridLadderTarget(gridLong, 86000, 85000, 25, 5); got != 5 {
+	if got := gridLadderTarget(gridLong, 86000, 86025, 25, 5); got != 1 {
+		t.Fatalf("one step above = 1 unit, got %d", got)
+	}
+	if got := gridLadderTarget(gridLong, 86000, 86100, 25, 5); got != 4 {
+		t.Fatalf("100pts above = 4 units, got %d", got)
+	}
+	if got := gridLadderTarget(gridLong, 86000, 87000, 25, 5); got != 5 {
 		t.Fatalf("must clamp at max, got %d", got)
 	}
-	if got := gridLadderTarget(gridShort, 86000, 86060, 25, 4); got != 3 {
-		t.Fatalf("short ladder mirrored, got %d", got)
+	// SHORT mirror: sells below the anchor only.
+	if got := gridLadderTarget(gridShort, 86000, 86000, 25, 4); got != 0 {
+		t.Fatalf("at anchor short must hold 0, got %d", got)
+	}
+	if got := gridLadderTarget(gridShort, 86000, 85940, 25, 4); got != 2 {
+		t.Fatalf("60pts under anchor = 2 shorts, got %d", got)
 	}
 	if got := gridLadderTarget("SIDEWAYS", 86000, 85900, 25, 4); got != 0 {
 		t.Fatalf("unknown direction → 0, got %d", got)
@@ -67,61 +79,58 @@ func TestGridLadderTarget(t *testing.T) {
 }
 
 func TestTrailGridAnchor(t *testing.T) {
-	// Virgin grid never slides before its first unit opens.
-	if a := trailGridAnchor(gridLong, 86000, 85900, 25, 5, 0, false); a != 86000 {
+	// Flat grids never slide — fixed rungs re-arm themselves.
+	if a := trailGridAnchor(gridLong, 86000, 86100, 25, 5, 0); a != 86000 {
 		t.Fatalf("virgin flat must hold entry, got %v", a)
 	}
-	// Flat traded grid re-centers on the market (next dip re-arms).
-	if a := trailGridAnchor(gridLong, 86000, 86100, 25, 5, 0, true); a != 86100 {
-		t.Fatalf("flat traded must follow price, got %v", a)
+	if a := trailGridAnchor(gridLong, 86000, 85000, 25, 5, 0); a != 86000 {
+		t.Fatalf("traded flat must hold (downside is the put's job), got %v", a)
 	}
-	// Fully loaded grid outrun by price shifts the ladder along (risk capped).
-	if a := trailGridAnchor(gridLong, 86000, 85000, 25, 5, 5, true); a != 85125 {
+	// Fully loaded grid outrun upward shifts the ladder along (risk capped).
+	if a := trailGridAnchor(gridLong, 86000, 87000, 25, 5, 5); a != 86875 {
 		t.Fatalf("full grid must recenter behind price, got %v", a)
 	}
 	// Fully loaded grid inside coverage holds the anchor.
-	if a := trailGridAnchor(gridLong, 86000, 85900, 25, 5, 5, true); a != 86000 {
+	if a := trailGridAnchor(gridLong, 86000, 86100, 25, 5, 5); a != 86000 {
 		t.Fatalf("covered full grid must hold, got %v", a)
 	}
 	// Partial inventory never trails.
-	if a := trailGridAnchor(gridLong, 86000, 86100, 25, 5, 2, true); a != 86000 {
+	if a := trailGridAnchor(gridLong, 86000, 87000, 25, 5, 2); a != 86000 {
 		t.Fatalf("working grid must hold, got %v", a)
 	}
-	// SHORT mirror.
-	if a := trailGridAnchor(gridShort, 86000, 85900, 25, 5, 0, true); a != 85900 {
-		t.Fatalf("short flat must follow price, got %v", a)
+	// SHORT mirror: full grid outrun downward recenters down.
+	if a := trailGridAnchor(gridShort, 86000, 85900, 25, 5, 0); a != 86000 {
+		t.Fatalf("short flat must hold, got %v", a)
 	}
-	if a := trailGridAnchor(gridShort, 86000, 87000, 25, 5, 5, true); a != 86875 {
+	if a := trailGridAnchor(gridShort, 86000, 85000, 25, 5, 5); a != 85125 {
 		t.Fatalf("short full must recenter, got %v", a)
 	}
 }
 
-func TestSimulateGridRearmsInNewZone(t *testing.T) {
-	// Rally then oscillate ABOVE the entry: a frozen ladder would bank one
-	// circle and idle; the trailing ladder works the new zone (3 circles).
-	path := []float64{86000, 86025, 86050, 86025, 86050}
-	real, _, fills, _, _ := simulateGrid(gridLong, path, 86000, 25, 25, 1, 0, 1, 5)
-	if real != 75 || fills != 7 {
-		t.Fatalf("want 3 rearmed circles (75, 7 fills), got real=%v fills=%d", real, fills)
+func TestSimulateGridPyramidsUp(t *testing.T) {
+	// Steady rally with a single-unit ladder: every rung banks its circle.
+	path := []float64{86000, 86025, 86050, 86075, 86100}
+	real, _, fills, inv, _ := simulateGrid(gridLong, path, 86000, 25, 25, 1, 0, 1, 1)
+	if real != 75 || fills != 7 || inv != 1 {
+		t.Fatalf("want rung-by-rung banking (75, 7 fills, 1 held), got real=%v fills=%d inv=%d", real, fills, inv)
 	}
 }
 
-func TestSimulateGridDownAndBack(t *testing.T) {
-	// The user's scenario: hard fall against the LONG grid (ladder loads to
-	// the cap, puts go ITM) + full return — the bounce pays two circles and
-	// the grid reloads at the top.
-	path := []float64{86000, 85975, 85950, 85925, 85900, 85925, 85950, 85975, 86000, 86025}
+func TestSimulateGridIgnoresFall(t *testing.T) {
+	// Fall first: the LONG ladder must NOT average down — puts own the
+	// downside. The return rally then loads the ladder and banks one circle.
+	path := []float64{86000, 85975, 85950, 85950, 85975, 86000, 86025, 86050}
 	real, _, fills, inv, _ := simulateGrid(gridLong, path, 86000, 25, 25, 1, 0, 1, 2)
-	if real != 50 || inv != 1 || fills != 5 {
-		t.Fatalf("want down-and-back +50 with reload, got real=%v inv=%d fills=%d", real, inv, fills)
+	if real != 25 || inv != 2 || fills != 4 {
+		t.Fatalf("want fall ignored, rally loaded (+25, 2 held, 4 fills), got real=%v inv=%d fills=%d", real, inv, fills)
 	}
 }
 
 func TestBuildPgridChart(t *testing.T) {
 	// LONG + PUT 85500 ×10, anchor 85875, step 50, spot 86803.
 	ch := buildPgridChart(gridLong, 85500, 1165, false, 10, 1, 85875, 50, 86803, 85875, 10, nil)
-	if len(ch.Rungs) != 10 || ch.Rungs[0] != 85825 || ch.Rungs[9] != 85375 {
-		t.Fatalf("long rungs must step down from anchor, got %v", ch.Rungs)
+	if len(ch.Rungs) != 10 || ch.Rungs[0] != 85925 || ch.Rungs[9] != 86375 {
+		t.Fatalf("long rungs must step up from anchor, got %v", ch.Rungs)
 	}
 	if len(ch.Spots) != 61 || len(ch.WingExpiry) != 61 {
 		t.Fatalf("want 61 curve points, got %d/%d", len(ch.Spots), len(ch.WingExpiry))
@@ -150,11 +159,11 @@ func TestBuildPgridChart(t *testing.T) {
 			t.Fatalf("missing marker %s", m)
 		}
 	}
-	// SHORT mirror: rungs above the anchor; deep ITM call pays intrinsic.
+	// SHORT mirror: rungs below the anchor; deep ITM call pays intrinsic.
 	chS := buildPgridChart(gridShort, 86000, 1200, true, 1, 1, 85900, 25, 89000, 85900, 5,
 		[]pgridLotMark{{Entry: 88900, TP: 88875, Qty: 2}})
-	if len(chS.Rungs) != 5 || chS.Rungs[0] != 85925 {
-		t.Fatalf("short rungs must step up, got %v", chS.Rungs)
+	if len(chS.Rungs) != 5 || chS.Rungs[0] != 85875 {
+		t.Fatalf("short rungs must step down, got %v", chS.Rungs)
 	}
 	if len(chS.Lots) != 1 || chS.Lots[0].TP != 88875 {
 		t.Fatalf("lots must ride along: %+v", chS.Lots)
@@ -195,32 +204,29 @@ func TestSimulateGridChopEarns(t *testing.T) {
 	}
 }
 
-func TestSimulateGridFlatNoFillsWeird(t *testing.T) {
+func TestSimulateGridFlatIdle(t *testing.T) {
 	path := synthPath("flat", 86000, 40, 0)
 	real, _, fills, inv, _ := simulateGrid(gridLong, path, 86000, 25, 25, 1, 0, 1, 5)
-	// Flat at entry: ladder opens the first unit once, no take profits.
-	if inv != 1 || fills != 1 || real != 0 {
-		t.Fatalf("flat holds 1 unit idle: real=%v fills=%d inv=%d", real, fills, inv)
+	// Flat at entry: no rung touched, grid waits (theta bleeds on the wing).
+	if inv != 0 || fills != 0 || real != 0 {
+		t.Fatalf("flat must stay out: real=%v fills=%d inv=%d", real, fills, inv)
 	}
 }
 
-func TestSimulateGridTrendAgainstCapsInventory(t *testing.T) {
+func TestSimulateGridTrendAgainstHoldsZero(t *testing.T) {
 	path := synthPath("trend_down", 86000, 160, 2000)
-	_, unreal, _, inv, adv := simulateGrid(gridLong, path, 86000, 25, 25, 1, 0, 1, 5)
-	if inv != 5 {
-		t.Fatalf("inventory must clamp at max 5, got %d", inv)
-	}
-	if unreal >= 0 || adv <= 0 {
-		t.Fatalf("trend against a LONG grid must sit in adverse water: unreal=%v adv=%d", unreal, adv)
+	real, unreal, fills, inv, _ := simulateGrid(gridLong, path, 86000, 25, 25, 1, 0, 1, 5)
+	if inv != 0 || fills != 0 || real != 0 || unreal != 0 {
+		t.Fatalf("downtrend must not load a LONG ladder: real=%v unreal=%v fills=%d inv=%d", real, unreal, fills, inv)
 	}
 }
 
 func TestSimulateGridTrendWithUs(t *testing.T) {
-	// LONG grid into an up-trend: first unit takes profit, ladder idles.
+	// LONG grid into an up-trend: rungs load on strength and bank circles.
 	path := synthPath("trend_up", 86000, 160, 500)
 	real, _, fills, inv, _ := simulateGrid(gridLong, path, 86000, 25, 25, 1, 0, 1, 5)
-	if real <= 0 || fills == 0 {
-		t.Fatalf("trend with us must bank the first unit: real=%v fills=%d inv=%d", real, fills, inv)
+	if real <= 0 || fills == 0 || inv <= 0 {
+		t.Fatalf("trend with us must earn: real=%v fills=%d inv=%d", real, fills, inv)
 	}
 }
 
