@@ -755,3 +755,28 @@ func TestMergeFuturesLegs(t *testing.T) {
 		t.Fatal("nil must stay empty")
 	}
 }
+
+// TestShiftPnlCurves pins true-total economics: settled hedge P&L shifts
+// both P&L curves by a constant (breakevens move, shapes don't).
+func TestShiftPnlCurves(t *testing.T) {
+	c := analyticsCurves{
+		Spots:     []float64{84000, 86000, 88000},
+		PnlNow:    []float64{-500, 1000, -500},
+		PnlExpiry: []float64{-1000, 2000, -1000},
+		DeltaNow:  []float64{-1, 0, 1},
+	}
+	shiftPnlCurves(&c, -1198)
+	for i, want := range []float64{-1698, -198, -1698} {
+		if c.PnlNow[i] != want {
+			t.Fatalf("pnl_now[%d] = %v, want %v", i, c.PnlNow[i], want)
+		}
+	}
+	for i, want := range []float64{-2198, 802, -2198} {
+		if c.PnlExpiry[i] != want {
+			t.Fatalf("pnl_expiry[%d] = %v, want %v", i, c.PnlExpiry[i], want)
+		}
+	}
+	if c.DeltaNow[1] != 0 || len(c.Spots) != 3 {
+		t.Fatalf("delta/spots must not move: %+v", c)
+	}
+}

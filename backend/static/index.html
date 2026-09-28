@@ -2883,9 +2883,11 @@
                 });
                 const sgn = v => (v >= 0 ? '+' : '') + Math.round(v).toLocaleString('ru-RU');
                 const attrLine = `<div class="text-[10px] font-mono text-slate-400 mb-2">в т.ч. опционы ${sgn(opt)} ₽ · фьючерсы ${sgn(fut)} ₽ · закрытые хеджи ${sgn(d.realized || 0)} ₽</div>`;
-                // Hedge bottom line: what hedging earned/lost in total —
-                // realized on closed tickets plus live P&L of open futures.
-                const closedSum = (d.hedge_log || []).reduce((s, h) => s + (h.closed || 0), 0);
+                // Hedge bottom line: what hedging earned/lost in total.
+                // Closed part comes from the position accumulator (d.realized):
+                // it is authoritative — per-row journal values missed
+                // recordings on older tickets. Open part is live futures P&L.
+                const closedSum = (d.realized || 0);
                 const hedgeTotalLine = `<div class="text-[10px] font-mono text-slate-300 mb-2">Хеджи итого ${sgn(closedSum + fut)} ₽ · закрытые ${sgn(closedSum)} ₽ · открытые ${sgn(fut)} ₽</div>`;
                 // Extended statistics strip: expiry facts (breakevens, best /
                 // worst in range), greek totals, leg IVs, days held. Totals,

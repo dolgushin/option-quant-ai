@@ -1459,6 +1459,19 @@ func mergeFuturesLegs(legs []analyticsLeg) []analyticsLeg {
 	return out
 }
 
+// shiftPnlCurves adds settled hedge P&L to the P&L curves so profile
+// economics (breakevens, max/min, charts) read as true totals, not
+// live-legs-only. Delta/theta curves are untouched (hedge trigger levels
+// must not move). Pure.
+func shiftPnlCurves(c *analyticsCurves, realized float64) {
+	for i := range c.PnlNow {
+		c.PnlNow[i] += realized
+	}
+	for i := range c.PnlExpiry {
+		c.PnlExpiry[i] += realized
+	}
+}
+
 // GET /api/v1/straddles/analytics?id=str-... — legs, curves, theta accrual,
 // hedge forecast.
 func straddleAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
@@ -1509,6 +1522,11 @@ func straddleAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	legs = mergeFuturesLegs(legs)
 	a := buildSpreadAnalytics(pos.Symbol, s.Expiry, spot, dte, mult, legs)
+	// True-total economics: shift the P&L curves by settled hedge P&L so
+	// breakevens, max/min and charts include the hedge drag, not just live
+	// legs. Delta/theta curves and hedge levels are untouched.
+	realizedAcc := math.Round(pos.RealizedPnL*100) / 100
+	shiftPnlCurves(&a.Curves, realizedAcc)
 	xs, cumul := thetaAccrualCurve(a.Legs, spot, dte, mult, 14)
 	hv := buildHedgeView(&s, a.Curves.Spots, a.Curves.DeltaNow, spot, time.Now())
 	// Marshal-first: a NaN anywhere in the payload must surface as a
@@ -1523,7 +1541,7 @@ func straddleAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		"net_credit":    s.NetCredit,
 		"stop_level":    s.StopLevel,
 		"pnl":           math.Round(pos.PnL*100) / 100,
-		"realized":      math.Round(pos.RealizedPnL*100) / 100,
+		"realized":      realizedAcc,
 		"spot_suspect":  spotSuspect,
 		"hedge_log":     s.HedgeLog,
 	}
@@ -1833,6 +1851,7 @@ func executeStraddleHedge(s *straddleRecord, pos *quant.Position, ev straddleEva
 		Price: fill, Closed: math.Round(realized*100) / 100,
 		Reason: ev.Reason, Manual: manual,
 	})
+	log.Printf("straddle hedge %s: %s %d %s @ %.0f realized %.0f (%s)", s.ID, ev.Side, ev.Qty, futSec, fill, realized, ev.Reason)
 	if len(s.HedgeLog) > 50 {
 		s.HedgeLog = s.HedgeLog[len(s.HedgeLog)-50:]
 	}
