@@ -2924,6 +2924,12 @@
                         <span class="text-amber-300 font-bold">Первый хедж:</span> ${h.text || '—'}
                         <span class="text-slate-500">(Δ сейчас ${h.current_delta || 0}, полоса ${h.band || 0})</span>
                     </div>
+                    <div class="text-[11px] font-mono text-slate-400 mb-2">Правило хеджа:
+                        <select id="strd-rule-${id}" class="bg-slate-900 border border-slate-600 rounded px-1 py-0.5 text-white">
+                            ${[['hybrid', 'Гибрид'], ['delta_band', 'Полоса Δ'], ['time', 'По времени'], ['price_band', 'Полоса цены']].map(([v, t]) => `<option value="${v}"${(d.hedge_rule || 'hybrid') === v ? ' selected' : ''}>${t}</option>`).join('')}
+                        </select>
+                        <button onclick="setStraddleRule('${id}')" class="px-2 py-0.5 text-[10px] bg-slate-700 hover:bg-slate-600 text-white rounded transition">OK</button>
+                    </div>
                     ${spotLine}
                     ${attrLine}
                     ${hedgeTotalLine}
@@ -2961,6 +2967,16 @@
                     ], []);
                 }
             } catch (e) { box.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${e.message}</div>`; }
+        }
+
+        async function setStraddleRule(id) {
+            const rule = document.getElementById(`strd-rule-${id}`).value;
+            try {
+                const res = await fetch('/api/v1/straddles/rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, rule }) });
+                const d = await res.json();
+                if (!d.success) { alert('❌ ' + (d.error || 'не применено')); return; }
+                renderStraddleProfile(id);
+            } catch (e) { alert('❌ ' + e.message); }
         }
 
         async function hedgeStraddle(id) {

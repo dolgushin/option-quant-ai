@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -778,5 +781,45 @@ func TestShiftPnlCurves(t *testing.T) {
 	}
 	if c.DeltaNow[1] != 0 || len(c.Spots) != 3 {
 		t.Fatalf("delta/spots must not move: %+v", c)
+	}
+}
+
+// TestStraddleRulesHandler pins live rule switching: hybrid → delta_band on
+// an open record, refusal of unknown rules and missing records.
+func TestStraddleRulesHandler(t *testing.T) {
+	straddleMu.Lock()
+	old := straddleStore
+	straddleStore = []straddleRecord{
+		{ID: "str-r1", Symbol: "Si", Status: "OPEN", Hedge: straddleHedgeRules{Rule: hedgeHybrid, DeltaBand: 1}},
+	}
+	straddleMu.Unlock()
+	defer func() {
+		straddleMu.Lock()
+		straddleStore = old
+		straddleMu.Unlock()
+	}()
+	post := func(body string) map[string]interface{} {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/straddles/rules", strings.NewReader(body))
+		rr := httptest.NewRecorder()
+		straddleRulesHandler(rr, req)
+		var out map[string]interface{}
+		if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+			t.Fatalf("bad json: %v", err)
+		}
+		return out
+	}
+	if d := post(`{"id":"str-r1","rule":"delta_band"}`); d["success"] != true {
+		t.Fatalf("switch refused: %v", d)
+	}
+	s, _ := straddleByID("str-r1")
+	if s.Hedge.Rule != hedgeDeltaBand {
+		t.Fatalf("rule = %q, want delta_band", s.Hedge.Rule)
+	}
+	if d := post(`{"id":"str-r1","rule":"nope"}`); d["success"] != false {
+		t.Fatalf("unknown rule accepted: %v", d)
+	}
+	if d := post(`{"id":"str-zzz","rule":"time"}`); d["success"] != false {
+		t.Fatalf("missing record accepted: %v", d)
 	}
 }

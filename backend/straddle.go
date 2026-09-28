@@ -1536,6 +1536,7 @@ func straddleAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 		"analytics":     a,
 		"theta_accrual": map[string]interface{}{"days": xs, "cumul": cumul},
 		"hedge":         hv,
+		"hedge_rule":    s.Hedge.Rule,
 		"expiry_stats":  curveExpiryStats(a.Curves.Spots, a.Curves.PnlExpiry),
 		"opened_at":     s.OpenedAt,
 		"net_credit":    s.NetCredit,
@@ -1894,4 +1895,42 @@ func straddleCloseHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	closeStraddlePosition(&s, pos, "закрыт вручную", true)
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+// POST /api/v1/straddles/rules {"id":"str-...","rule":"delta_band"} —
+// switch the hedge rule of an OPEN straddle (e.g. hybrid → delta-only,
+// dropping the time leg). Unknown rules are refused; a positive delta_band
+// overrides the band, otherwise it is kept.
+func straddleRulesHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ID        string  `json:"id"`
+		Rule      string  `json:"rule"`
+		DeltaBand float64 `json:"delta_band"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	switch req.Rule {
+	case hedgeDeltaBand, hedgeTime, hedgeHybrid, hedgePriceBand:
+	default:
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "неизвестное правило: " + req.Rule})
+		return
+	}
+	s, found := straddleByID(req.ID)
+	if !found || s.Status != "OPEN" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "straddle not found or not open"})
+		return
+	}
+	s.Hedge.Rule = req.Rule
+	if req.DeltaBand > 0 {
+		s.Hedge.DeltaBand = req.DeltaBand
+	}
+	saveStraddleRecord(s)
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "rule": req.Rule})
 }
