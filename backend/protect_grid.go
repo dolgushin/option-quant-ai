@@ -1023,6 +1023,10 @@ func protectGridOpenHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
 		return
 	}
+	if err := validateGridTargets(req.ProfitTarget, req.MaxLossRub, plan.PremiumTotal); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+		return
+	}
 	// A take profit below two fees loses on every circle by construction —
 	// refuse instead of opening a guaranteed bleeder (same strictness as
 	// the no-estimate rule).
@@ -1510,6 +1514,25 @@ func startProtectGridManager() {
 			runProtectGridPass()
 		}
 	}()
+}
+
+// validateGridTargets rejects dust-sized stop/take targets: below 10% of the
+// wing premium they can only be a units mistake (points typed into a rubles
+// field) — the grid would die on the first market breath. Empty (0) disables.
+// Pure — unit-tested.
+func validateGridTargets(profitTarget, maxLoss, premiumTotal float64) error {
+	if premiumTotal <= 0 {
+		return nil
+	}
+	if profitTarget > 0 && profitTarget < 0.1*premiumTotal {
+		return fmt.Errorf("тейк %.0f ₽ — меньше 10%% премии (%.0f ₽): поле в РУБЛЯХ итого, не в пунктах; оставь пустым, чтобы отключить",
+			profitTarget, premiumTotal)
+	}
+	if maxLoss > 0 && maxLoss < 0.1*premiumTotal {
+		return fmt.Errorf("стоп %.0f ₽ — меньше 10%% премии (%.0f ₽): поле в РУБЛЯХ итого, не в пунктах; оставь пустым, чтобы отключить",
+			maxLoss, premiumTotal)
+	}
+	return nil
 }
 
 // pgridEval is one loop decision. Pure apart from inputs.

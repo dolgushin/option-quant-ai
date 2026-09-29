@@ -392,6 +392,21 @@ func TestMatchGridTradeNoDoubleAssign(t *testing.T) {
 	}
 }
 
+func TestValidateGridTargets(t *testing.T) {
+	if err := validateGridTargets(0, 0, 12000); err != nil {
+		t.Fatalf("empty targets must pass: %v", err)
+	}
+	if err := validateGridTargets(3000, 5000, 12000); err != nil {
+		t.Fatalf("sane targets must pass: %v", err)
+	}
+	if err := validateGridTargets(50, 0, 12000); err == nil {
+		t.Fatalf("50-ruble take on 12000 premium must be refused")
+	}
+	if err := validateGridTargets(0, 50, 12000); err == nil {
+		t.Fatalf("50-ruble stop on 12000 premium must be refused")
+	}
+}
+
 func TestEvaluateProtectGridStops(t *testing.T) {
 	g := &protectGridRecord{MaxLossRub: 5000, ProfitTarget: 3000, TimeStopDTE: 7}
 	if ev := evaluateProtectGrid(g, -6000, 20); ev.Action != "CLOSE_STOP" {
