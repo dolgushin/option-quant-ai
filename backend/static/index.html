@@ -2532,7 +2532,7 @@
                         <td class="py-1 pr-2 text-right font-bold ${pnlCls}">${(g.pnl || 0) >= 0 ? '+' : ''}${(g.pnl || 0).toLocaleString('ru-RU')}</td>
                         <td class="py-1 pr-2 text-right text-amber-300">${(g.margin || 0).toLocaleString('ru-RU')}</td>
                         <td class="py-1 pr-2 text-right">${g.theta_day || 0}</td>
-                        <td class="py-1 pr-2 text-right">${g.fills || 0}</td>
+                        <td class="py-1 pr-2 text-right">${g.fills || 0}${g.last_error ? ` <span class="text-rose-400" title="${g.last_error}">⚠</span>` : ''}</td>
                         <td class="py-1 text-right whitespace-nowrap"><button onclick="togglePgridProfile('${g.id}')" class="px-2 py-1 text-[10px] bg-indigo-700 hover:bg-indigo-600 text-white rounded transition">📊 Профиль</button>
                         <button onclick="closePgrid('${g.id}')" class="px-2 py-1 text-[10px] bg-rose-700 hover:bg-rose-600 text-white rounded transition">✕ Закрыть</button></td></tr>
                     <tr id="pgd-${g.id}" class="hidden"><td colspan="10" class="p-0 border-b border-slate-800 bg-slate-900/40"><div id="pgd-box-${g.id}" class="p-3"></div></td></tr>`;
@@ -2577,9 +2577,11 @@
                     box.innerHTML = html;
                     return;
                 }
+                const gLastCheck = (d.grid && d.grid.last_check_at) ? ` · Проверено ${d.grid.last_check_at}` : '';
+                const gLastErr = (d.grid && d.grid.last_error) ? ` · <span class="text-rose-400" title="Последняя ошибка менеджера">⚠ ${d.grid.last_error}</span>` : '';
                 let html = `<div class="font-mono text-[11px] text-slate-200">Фьючерс <b>${(d.spot || 0).toLocaleString('ru-RU')}</b>${d.spot_suspect ? ' <span class="text-amber-300">(подозрительный)</span>' : ''} · P&L <b>${d.pnl}</b> ₽ (реализовано сеткой ${d.realized} ₽) · `
                     + `Инвентарь ${d.inventory} (цель ${d.target}) · Якорь ${d.anchor} · След. уровень ${d.next_rung} · Готовых тейков ${d.closable_tp} · Δ ${d.net_delta} · Тета ${d.theta_day} ₽/день · ГО ${(d.margin || 0).toLocaleString('ru-RU')} ₽ · `
-                    + `Безубыток ${Number.isFinite(d.breakeven_roundtrips_per_day) ? d.breakeven_roundtrips_per_day : '∞ (тета не окупается)'} кругов/день · DTE ${d.dte}${d.spot_suspect ? ' · <span class="text-amber-300">спот подозрительный</span>' : ''}</div>`;
+                    + `Безубыток ${Number.isFinite(d.breakeven_roundtrips_per_day) ? d.breakeven_roundtrips_per_day : '∞ (тета не окупается)'} кругов/день · DTE ${d.dte}${d.spot_suspect ? ' · <span class="text-amber-300">спот подозрительный</span>' : ''}${gLastCheck}${gLastErr}</div>`;
                 html += `<div class="mt-2"><div class="flex justify-between items-center mb-1"><div class="text-[10px] text-slate-500 font-mono uppercase">Позиция на графике: крыло к экспирации + уровни сетки</div>`
                     + `<div class="flex gap-1"><button onclick="pgridZoom('${id}',1)" title="Приблизить" class="px-2 py-0.5 text-[11px] bg-slate-700 hover:bg-slate-600 text-white rounded transition">+</button>`
                     + `<button onclick="pgridZoom('${id}',-1)" title="Отдалить" class="px-2 py-0.5 text-[11px] bg-slate-700 hover:bg-slate-600 text-white rounded transition">−</button>`
@@ -3345,7 +3347,12 @@
                 currentSpreadPlan = p;
                 document.getElementById('spr-plan-title').innerText =
                     `${p.display_name} · ${p.symbol} · эксп. ${p.expiry} (${p.days_to_exp} дн.) · спот ${p.spot_price.toLocaleString('ru-RU')}`;
-                document.getElementById('spr-plan-err').innerText = '';
+                if (p.conflicts && p.conflicts.length) {
+                    document.getElementById('spr-plan-err').innerText =
+                        '⛔ Страйки уже заняты: ' + p.conflicts.map(c => (c.display_name || c.type) + ' ' + c.id).join(', ') + ' — открытие будет отклонено';
+                } else {
+                    document.getElementById('spr-plan-err').innerText = '';
+                }
 
                 let legs = '';
                 p.legs.forEach(l => {

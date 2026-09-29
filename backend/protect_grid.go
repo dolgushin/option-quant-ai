@@ -404,6 +404,8 @@ type protectGridRecord struct {
 	RangePctAt    float64       `json:"range_pct_at_entry"`
 	Status        string        `json:"status"` // OPEN / CLOSED
 	OpenedAt      string        `json:"opened_at"`
+	LastCheckAt   string        `json:"last_check_at,omitempty"`
+	LastError     string        `json:"last_error,omitempty"`
 	ClosedAt      string        `json:"closed_at,omitempty"`
 	CloseReason   string        `json:"close_reason,omitempty"`
 	FinalPnl      float64       `json:"final_pnl,omitempty"` // closed-grid total (live P&L + netted realized), rubles
@@ -1113,6 +1115,7 @@ func protectGridListHandler(w http.ResponseWriter, r *http.Request) {
 			"entry_spot": g.EntrySpot, "protect_strike": g.ProtectStrike, "protect_qty": g.ProtectQty,
 			"grid_step": g.GridStep, "take_profit": g.TakeProfit, "max_inventory": g.MaxInventory,
 			"status": g.Status, "opened_at": g.OpenedAt, "fills": g.Fills,
+			"last_check": g.LastCheckAt, "last_error": g.LastError,
 			"dte": dteInDays(g.Expiry, time.Now()),
 		}
 		if pos, found := quant.GetPositionByID(g.PositionID); found {
@@ -1578,6 +1581,7 @@ func runProtectGridPass() {
 			continue
 		}
 		mult := contractMultiplier(pos.Symbol)
+		g.LastCheckAt = now.Format("15:04:05")
 		// 1) Take profits: close touched ladder legs via FIFO netting.
 		if qty := gridTakeProfitLegs(pos.Legs, g.Direction, spot, g.TakeProfit); qty > 0 {
 			side := "SELL"
@@ -1586,6 +1590,8 @@ func runProtectGridPass() {
 			}
 			if err := pgridExecuteLadder(&g, pos, side, qty, spot, mult, "TAKE", "тейк-профит юнита"); err != nil {
 				log.Printf("pgrid %s take failed: %v", g.ID, err)
+				g.LastError = err.Error()
+				saveProtectGridRecord(g)
 			} else {
 				// Reload after execution for the ladder step below.
 				if p2, ok2 := quant.GetPositionByID(g.PositionID); ok2 {
@@ -1618,7 +1624,14 @@ func runProtectGridPass() {
 			}
 			if err := pgridExecuteLadder(&g, pos, side, add*g.QtyPerLevel, spot, mult, "LADDER", fmt.Sprintf("лестница к цели %d", target)); err != nil {
 				log.Printf("pgrid %s ladder failed: %v", g.ID, err)
+				g.LastError = err.Error()
+				saveProtectGridRecord(g)
+			} else if g.LastError != "" {
+				g.LastError = ""
+				saveProtectGridRecord(g)
 			}
+		} else {
+			saveProtectGridRecord(g) // persist the check heartbeat
 		}
 	}
 }
