@@ -225,26 +225,119 @@ func gridOpenInventory(legs []quant.PositionLeg, direction string) int {
 	return net
 }
 
-// gridTakeProfitLegs finds open ladder legs whose per-unit take profit is
-// touched at spot: BUY legs with entry+tp <= spot (LONG), SELL legs with
-// entry-tp >= spot (SHORT). Returns the total closable qty. Pure.
-func gridTakeProfitLegs(legs []quant.PositionLeg, direction string, spot, tpPts float64) int {
+// gridTakeProfitBySecid groups closable ladder qty by contract: BUY legs with
+// entry+tp <= spot (LONG), SELL legs with entry-tp >= spot (SHORT). Per-secid
+// because legs on an expired contract close on their own secid — contracts
+// never net across expiries. Pure — unit-tested.
+func gridTakeProfitBySecid(legs []quant.PositionLeg, direction string, spot, tpPts float64) map[string]int {
+	out := map[string]int{}
 	if tpPts <= 0 || spot <= 0 {
-		return 0
+		return out
 	}
-	qty := 0
 	for _, l := range legs {
-		if l.Kind != "FUTURES" || l.Quantity <= 0 || l.EntryPrice <= 0 {
+		if l.Kind != "FUTURES" || l.Quantity <= 0 || l.EntryPrice <= 0 || l.SecID == "" {
 			continue
 		}
 		if direction == gridLong && l.Side == "BUY" && spot >= l.EntryPrice+tpPts {
-			qty += l.Quantity
+			out[l.SecID] += l.Quantity
 		}
 		if direction == gridShort && l.Side == "SELL" && spot <= l.EntryPrice-tpPts {
-			qty += l.Quantity
+			out[l.SecID] += l.Quantity
 		}
 	}
-	return qty
+	return out
+}
+
+// gridTakeProfitLegs is the total over contracts. Pure.
+func gridTakeProfitLegs(legs []quant.PositionLeg, direction string, spot, tpPts float64) int {
+	total := 0
+	for _, q := range gridTakeProfitBySecid(legs, direction, spot, tpPts) {
+		total += q
+	}
+	return total
+}
+
+// sortedKeys returns map keys in order (deterministic multi-leg passes).
+// Pure.
+func sortedKeys(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// pickLiveFuturesCode returns the nearest live contract for the root from a
+// MOEX futures board list (authoritative LastDelDate — month-letter guessing
+// goes stale mid-month, e.g. SiU6 kept "live" all September). Pure —
+// unit-tested.
+func pickLiveFuturesCode(contracts []futuresContract, symbol, today string) string {
+	best, bestDate := "", ""
+	for _, c := range contracts {
+		if !strings.HasPrefix(c.Code, symbol) || c.LastDelDate < today {
+			continue
+		}
+		if best == "" || c.LastDelDate < bestDate {
+			best, bestDate = c.Code, c.LastDelDate
+		}
+	}
+	return best
+}
+
+// resolveLiveFuturesCode is the network wrapper over the MOEX ISS board.
+func resolveLiveFuturesCode(symbol string) string {
+	contracts, err := moexFuturesContracts()
+	if err != nil {
+		return ""
+	}
+	return pickLiveFuturesCode(contracts, symbol, time.Now().Format("2006-01-02"))
+}
+
+// futuresContractExpired reports a KNOWN-dead contract (on the board with
+// LastDelDate before today). Unknown codes are not dead — a transient board
+// hiccup must never flip a live grid. Pure — unit-tested.
+func futuresContractExpired(contracts []futuresContract, code, today string) bool {
+	for _, c := range contracts {
+		if c.Code == code {
+			return c.LastDelDate < today
+		}
+	}
+	return false
+}
+
+// ensureLiveFutures remaps a grid whose futures contract expired (SiU6-style)
+// to the nearest live one. Legs already open on the dead contract stay
+// untouched; new fills go on the live code and takes close per-secid, so no
+// cross-expiry netting is ever attempted. Returns true on remap.
+func ensureLiveFutures(g *protectGridRecord) bool {
+	contracts, err := moexFuturesContracts()
+	if err != nil || len(contracts) == 0 {
+		return false
+	}
+	today := time.Now().Format("2006-01-02")
+	if !futuresContractExpired(contracts, g.FuturesSecID, today) {
+		return false
+	}
+	live := pickLiveFuturesCode(contracts, g.Symbol, today)
+	if live == "" || live == g.FuturesSecID {
+		return false
+	}
+	old := g.FuturesSecID
+	g.FuturesSecID = live
+	g.FillLog = append(g.FillLog, gridFill{
+		At: time.Now().Format("02.01 15:04"), Side: "-", Qty: 0,
+		Price: 0, Kind: "SWITCH", Note: fmt.Sprintf("контракт %s истёк → %s", old, live),
+	})
+	if len(g.FillLog) > 100 {
+		g.FillLog = g.FillLog[len(g.FillLog)-100:]
+	}
+	g.LastError = ""
+	saveProtectGridRecord(*g)
+	logTelegramErr("pgrid-switch", sendTelegramMessage(
+		fmt.Sprintf("🔀 Сетка %s %s: контракт %s истёк, дальше работаем на %s",
+			telegramEscape(g.Symbol), telegramEscape(g.ID), telegramEscape(old), telegramEscape(live))))
+	return true
 }
 
 // gridLot is one unit of simulated inventory for the offline simulator.
@@ -1049,9 +1142,12 @@ func protectGridOpenHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Futures contract for the ladder: front contract.
-	futSec := ""
-	if alorMarket != nil {
+	// Futures contract for the ladder: the nearest LIVE contract from the
+	// MOEX board (authoritative expiry dates — month-letter guessing keeps
+	// dead series like SiU6 "live" past expiry). Alor guess and the saved
+	// selection are fallbacks only.
+	futSec := resolveLiveFuturesCode(req.Symbol)
+	if futSec == "" && alorMarket != nil {
 		if syms, serr := alorMarket.FetchOptionChain(req.Symbol); serr == nil {
 			futSec = resolveFuturesAlor(syms, req.Symbol, time.Now())
 		}
@@ -1582,13 +1678,19 @@ func runProtectGridPass() {
 		}
 		mult := contractMultiplier(pos.Symbol)
 		g.LastCheckAt = now.Format("15:04:05")
-		// 1) Take profits: close touched ladder legs via FIFO netting.
-		if qty := gridTakeProfitLegs(pos.Legs, g.Direction, spot, g.TakeProfit); qty > 0 {
+		// 0) Dead futures contract (SiU6-style expiry) heals itself: remap to
+		// the nearest live one before any fill is attempted.
+		ensureLiveFutures(&g)
+		// 1) Take profits: close touched ladder legs via FIFO netting, each
+		// on its own contract.
+		takes := gridTakeProfitBySecid(pos.Legs, g.Direction, spot, g.TakeProfit)
+		for _, secid := range sortedKeys(takes) {
+			qty := takes[secid]
 			side := "SELL"
 			if g.Direction == gridShort {
 				side = "BUY"
 			}
-			if err := pgridExecuteLadder(&g, pos, side, qty, spot, mult, "TAKE", "тейк-профит юнита"); err != nil {
+			if err := pgridExecuteLadder(&g, pos, side, qty, spot, mult, "TAKE", "тейк-профит юнита", secid); err != nil {
 				log.Printf("pgrid %s take failed: %v", g.ID, err)
 				g.LastError = err.Error()
 				saveProtectGridRecord(g)
@@ -1622,7 +1724,7 @@ func runProtectGridPass() {
 			if g.Direction == gridShort {
 				side = "SELL"
 			}
-			if err := pgridExecuteLadder(&g, pos, side, add*g.QtyPerLevel, spot, mult, "LADDER", fmt.Sprintf("лестница к цели %d", target)); err != nil {
+			if err := pgridExecuteLadder(&g, pos, side, add*g.QtyPerLevel, spot, mult, "LADDER", fmt.Sprintf("лестница к цели %d", target), ""); err != nil {
 				log.Printf("pgrid %s ladder failed: %v", g.ID, err)
 				g.LastError = err.Error()
 				saveProtectGridRecord(g)
@@ -1637,25 +1739,30 @@ func runProtectGridPass() {
 }
 
 // pgridExecuteLadder nets/appends paper futures legs at the executable touch,
-// updates counters + journal. Shared by the loop (take + ladder).
-func pgridExecuteLadder(g *protectGridRecord, pos *quant.Position, side string, qty int, spot, mult float64, kind, note string) error {
+// updates counters + journal. Shared by the loop (take + ladder). An explicit
+// secid closes takes on their own contract (expired legs never net against
+// the live one); empty means the grid's current futures contract.
+func pgridExecuteLadder(g *protectGridRecord, pos *quant.Position, side string, qty int, spot, mult float64, kind, note, secid string) error {
 	if qty <= 0 {
 		return nil
 	}
-	if g.FuturesSecID == "" {
+	if secid == "" {
+		secid = g.FuturesSecID
+	}
+	if secid == "" {
 		return fmt.Errorf("нет фьючерса для сетки")
 	}
-	fill, err := futuresFillPrice(g.FuturesSecID, side)
+	fill, err := futuresFillPrice(secid, side)
 	if err != nil {
 		return err
 	}
-	legs, realized, residual := quant.NetFuturesLegs(pos.Legs, g.FuturesSecID, side, qty, fill, mult)
+	legs, realized, residual := quant.NetFuturesLegs(pos.Legs, secid, side, qty, fill, mult)
 	pos.Legs = legs
 	pos.RealizedPnL += realized
 	g.RealizedGrid += realized
 	if residual > 0 {
 		pos.Legs = append(pos.Legs, quant.PositionLeg{
-			SecID: g.FuturesSecID, Symbol: pos.Symbol, Kind: "FUTURES",
+			SecID: secid, Symbol: pos.Symbol, Kind: "FUTURES",
 			Side: side, Quantity: residual, EntryPrice: fill, CurrentPrice: fill,
 		})
 		pos.Margin += fill * mult * 0.15 * float64(residual)

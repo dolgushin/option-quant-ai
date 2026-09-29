@@ -269,10 +269,56 @@ func TestSimulateGridTrendWithUs(t *testing.T) {
 	}
 }
 
+func TestPickLiveFuturesCode(t *testing.T) {
+	board := []futuresContract{
+		{Code: "SiU6", LastDelDate: "2026-09-17"},
+		{Code: "SiZ6", LastDelDate: "2026-12-17"},
+		{Code: "SiH7", LastDelDate: "2027-03-17"},
+		{Code: "RIU6", LastDelDate: "2026-09-17"},
+	}
+	// September expiry is past: the dead SiU6 must never be picked.
+	if got := pickLiveFuturesCode(board, "Si", "2026-09-29"); got != "SiZ6" {
+		t.Fatalf("want SiZ6 after September expiry, got %s", got)
+	}
+	if got := pickLiveFuturesCode(board, "Si", "2026-09-01"); got != "SiU6" {
+		t.Fatalf("want SiU6 while still live, got %s", got)
+	}
+	if got := pickLiveFuturesCode(board, "ED", "2026-09-29"); got != "" {
+		t.Fatalf("unknown root must be empty, got %s", got)
+	}
+}
+
+func TestFuturesContractExpired(t *testing.T) {
+	board := []futuresContract{
+		{Code: "SiU6", LastDelDate: "2026-09-17"},
+		{Code: "SiZ6", LastDelDate: "2026-12-17"},
+	}
+	if !futuresContractExpired(board, "SiU6", "2026-09-29") {
+		t.Fatalf("SiU6 must read dead on 2026-09-29")
+	}
+	if futuresContractExpired(board, "SiZ6", "2026-09-29") {
+		t.Fatalf("SiZ6 must read live")
+	}
+	if futuresContractExpired(board, "SiM7", "2026-09-29") {
+		t.Fatalf("unknown code must not read dead (transient board gaps)")
+	}
+}
+
+func TestGridTakeProfitBySecid(t *testing.T) {
+	legs := []quant.PositionLeg{
+		{Kind: "FUTURES", SecID: "SiU6", Side: "BUY", Quantity: 2, EntryPrice: 85900},
+		{Kind: "FUTURES", SecID: "SiZ6", Side: "BUY", Quantity: 1, EntryPrice: 85990},
+	}
+	m := gridTakeProfitBySecid(legs, gridLong, 85930, 25)
+	if len(m) != 1 || m["SiU6"] != 2 {
+		t.Fatalf("only the SiU6 leg touched +25, on its own secid: %+v", m)
+	}
+}
+
 func TestGridTakeProfitLegs(t *testing.T) {
 	legs := []quant.PositionLeg{
-		{Kind: "FUTURES", Side: "BUY", Quantity: 2, EntryPrice: 85900},
-		{Kind: "FUTURES", Side: "BUY", Quantity: 1, EntryPrice: 85990},
+		{Kind: "FUTURES", SecID: "SiZ6", Side: "BUY", Quantity: 2, EntryPrice: 85900},
+		{Kind: "FUTURES", SecID: "SiZ6", Side: "BUY", Quantity: 1, EntryPrice: 85990},
 	}
 	if q := gridTakeProfitLegs(legs, gridLong, 85930, 25); q != 2 {
 		t.Fatalf("only the 85900 leg touched +25, got %d", q)
