@@ -1835,7 +1835,9 @@ func straddleHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	out := []map[string]interface{}{}
 	for i := len(recs) - 1; i >= 0 && len(out) < 50; i-- {
 		s := recs[i]
-		if s.Status != "CLOSED" {
+		// Pre-snapshot closes carry no data (zero rows are noise) —
+		// the history fills from the first snapshotted close.
+		if s.Status != "CLOSED" || s.ClosedAt == "" {
 			continue
 		}
 		days := 0
