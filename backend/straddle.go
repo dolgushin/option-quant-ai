@@ -1311,8 +1311,8 @@ func straddleMetaHandler(w http.ResponseWriter, r *http.Request) {
 // thetaAccrualCurve projects cumulative time-decay P&L over the coming days
 // at a frozen spot: Σ leg BS values at (t−d) minus value now. Short premium
 // accrues upward. Pure — unit-tested.
-func thetaAccrualCurve(legs []analyticsLeg, spot float64, dte int, mult float64, days int) (xs []float64, cumul []float64) {
-	const r = 0.16
+func thetaAccrualCurve(symbol string, legs []analyticsLeg, spot float64, dte int, mult float64, days int) (xs []float64, cumul []float64) {
+	r := quant.RiskFreeRate(symbol)
 	valueAt := func(tYears float64) float64 {
 		v := 0.0
 		for _, l := range legs {
@@ -1557,7 +1557,7 @@ func straddleAnalyticsHandler(w http.ResponseWriter, r *http.Request) {
 	// legs. Delta/theta curves and hedge levels are untouched.
 	realizedAcc := math.Round(pos.RealizedPnL*100) / 100
 	shiftPnlCurves(&a.Curves, realizedAcc)
-	xs, cumul := thetaAccrualCurve(a.Legs, spot, dte, mult, 14)
+	xs, cumul := thetaAccrualCurve(pos.Symbol, a.Legs, spot, dte, mult, 14)
 	hv := buildHedgeView(&s, a.Curves.Spots, a.Curves.DeltaNow, spot, time.Now())
 	// Marshal-first: a NaN anywhere in the payload must surface as a
 	// readable error, never as an empty body (the client fails with a

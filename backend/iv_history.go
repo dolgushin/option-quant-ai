@@ -312,7 +312,7 @@ func historicalATMIV(asset string, date string) float64 {
 		days = 30
 	}
 	t := float64(days) / 365.0
-	rRate := 0.16
+	rRate := quant.RiskFreeRate(asset)
 
 	ivC := quant.ImpliedVolatility(true, p.call, und, atmStrike, t, rRate)
 	ivP := quant.ImpliedVolatility(false, p.put, und, atmStrike, t, rRate)

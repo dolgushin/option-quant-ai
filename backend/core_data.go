@@ -312,7 +312,7 @@ func collectCoreInstrument(symbol string) coreInstrument {
 				if err2 != nil || q.Price <= 0 {
 					return 0
 				}
-				iv := quantIV(chain[i].IsCall, q.Price, in.Spot, k, t)
+				iv := quantIV(in.Symbol, chain[i].IsCall, q.Price, in.Spot, k, t)
 				return math.Round(iv*10000) / 100
 			}
 		}
@@ -340,7 +340,7 @@ func collectCoreInstrument(symbol string) coreInstrument {
 			for i := range chain {
 				if chain[i].Strike == strike && chain[i].IsCall == isCall {
 					if q, err := moexOptionQuoteEx(chain[i].SecID); err == nil && q.Price > 0 {
-						return quantIV(chain[i].IsCall, q.Price, in.Spot, strike, t)
+						return quantIV(in.Symbol, chain[i].IsCall, q.Price, in.Spot, strike, t)
 					}
 				}
 			}
@@ -373,8 +373,8 @@ func collectCoreInstrument(symbol string) coreInstrument {
 	return in
 }
 
-func quantIV(isCall bool, price, S, K, t float64) float64 {
-	iv := quant.ImpliedVolatility(isCall, price, S, K, t, 0.16)
+func quantIV(symbol string, isCall bool, price, S, K, t float64) float64 {
+	iv := quant.ImpliedVolatility(isCall, price, S, K, t, quant.RiskFreeRate(symbol))
 	if iv < 0.02 {
 		iv = 0.30
 	}

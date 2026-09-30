@@ -24,6 +24,20 @@ func NPrime(x float64) float64 {
 	return (1.0 / math.Sqrt(2.0*math.Pi)) * math.Exp(-0.5*x*x)
 }
 
+// RiskFreeRate returns the pricing rate for an underlying: futures-style
+// margined options (Si, RI — daily variation margin, no funding) price at
+// ~zero carry, while stock premium options (SBERP) use the key rate.
+// Pricing Si/RI with 16% breaks deep-DTE inversion (discounted intrinsic
+// above the market price) and skews deltas — see TestStraddleLiveMarks.
+func RiskFreeRate(symbol string) float64 {
+	switch symbol {
+	case "Si", "RI":
+		return 0.0
+	default:
+		return 0.16
+	}
+}
+
 // CalculateBlackScholes рассчитывает стоимость и Греки для Call или Put
 func CalculateBlackScholes(isCall bool, S, K, T, r, sigma float64) OptionGreeks {
 	if T <= 0 || sigma <= 0 || S <= 0 {

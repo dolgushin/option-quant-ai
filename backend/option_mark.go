@@ -100,7 +100,7 @@ func seriesIVForExpiry(symbol, expiry string) float64 {
 				return // dead / stale book — skip
 			}
 			mid := (q.Bid + q.Offer) / 2
-			iv := quant.ImpliedVolatility(o.IsCall, mid, spot, o.Strike, t, 0.16)
+			iv := quant.ImpliedVolatility(o.IsCall, mid, spot, o.Strike, t, quant.RiskFreeRate(symbol))
 			if iv > 0.02 && iv <= 3 {
 				samples <- iv
 			}
@@ -152,7 +152,7 @@ func optionMarkWithSrc(secid string, isCall bool, strike, spot float64, tYears f
 	}
 	if spot > 0 && strike > 0 && tYears > 0 {
 		if iv := seriesIVForExpiry(symbol, expiry); iv > 0 {
-			return quant.CalculateBlackScholes(isCall, spot, strike, tYears, 0.16, iv).Price, "theo"
+			return quant.CalculateBlackScholes(isCall, spot, strike, tYears, quant.RiskFreeRate(symbol), iv).Price, "theo"
 		}
 	}
 	return 0, "none"

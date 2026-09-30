@@ -63,7 +63,6 @@ func heatmapHandler(w http.ResponseWriter, r *http.Request) {
 
 	positions := quant.GetActivePositions()
 	now := time.Now()
-	rRate := 0.16
 
 	type point struct {
 		strike   float64
@@ -84,6 +83,7 @@ func heatmapHandler(w http.ResponseWriter, r *http.Request) {
 		quant.SavePosition(*p)
 
 		mult := contractMultiplier(p.Symbol)
+		rRate := quant.RiskFreeRate(p.Symbol)
 		days := dteInDays(p.Expiry, now)
 		if days <= 0 {
 			days = 30

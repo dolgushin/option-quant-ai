@@ -156,7 +156,6 @@ func pnlAttributionHandler(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	today := now.Format("2006-01-02")
-	rRate := 0.16
 
 	pnlSnapMu.Lock()
 	// On the first call of a new day, freeze yesterday's last state as the
@@ -189,7 +188,7 @@ func pnlAttributionHandler(w http.ResponseWriter, r *http.Request) {
 		for _, leg := range p.Legs {
 			iv := 0.0
 			if leg.Kind == "OPTION" {
-				iv = quant.ImpliedVolatility(leg.IsCall, leg.CurrentPrice, spot, leg.Strike, t, rRate)
+				iv = quant.ImpliedVolatility(leg.IsCall, leg.CurrentPrice, spot, leg.Strike, t, quant.RiskFreeRate(p.Symbol))
 			}
 			snap.Legs[leg.SecID] = pnlLegSnapshot{Price: leg.CurrentPrice, Spot: spot, IV: iv}
 		}
@@ -255,7 +254,7 @@ func pnlAttributionHandler(w http.ResponseWriter, r *http.Request) {
 				baselineLeg = true
 				prevPrice = leg.EntryPrice
 				if leg.Kind == "OPTION" {
-					prevIV = quant.ImpliedVolatility(leg.IsCall, leg.EntryPrice, curSpot, leg.Strike, t, rRate)
+					prevIV = quant.ImpliedVolatility(leg.IsCall, leg.EntryPrice, curSpot, leg.Strike, t, quant.RiskFreeRate(p.Symbol))
 				}
 			}
 
@@ -289,11 +288,11 @@ func pnlAttributionHandler(w http.ResponseWriter, r *http.Request) {
 				att.Residual = 0
 			} else {
 				// Greeks at the baseline state drive the linear attribution.
-				g := legGreeksAt(leg.IsCall, prevPrice, prevSpot, leg.Strike, t, rRate)
+				g := legGreeksAt(leg.IsCall, prevPrice, prevSpot, leg.Strike, t, quant.RiskFreeRate(p.Symbol))
 				// IV move in percentage points.
 				dIV := 0.0
 				if prevIV > 0 {
-					curIV := quant.ImpliedVolatility(leg.IsCall, curPrice, curSpot, leg.Strike, t, rRate)
+					curIV := quant.ImpliedVolatility(leg.IsCall, curPrice, curSpot, leg.Strike, t, quant.RiskFreeRate(p.Symbol))
 					if curIV > 0 {
 						dIV = (curIV - prevIV) * 100
 					}

@@ -400,7 +400,7 @@ func TestThetaAccrualRisesForShort(t *testing.T) {
 		{Side: "SELL", Kind: "OPTION", Strike: 86000, IsCall: true, Quantity: 1, Iv: 20},
 		{Side: "SELL", Kind: "OPTION", Strike: 86000, IsCall: false, Quantity: 1, Iv: 20},
 	}
-	xs, cumul := thetaAccrualCurve(legs, 86000, 30, 1, 14)
+	xs, cumul := thetaAccrualCurve("Si", legs, 86000, 30, 1, 14)
 	if len(xs) != 15 || len(cumul) != 15 {
 		t.Fatalf("want 15 points, got %d/%d", len(xs), len(cumul))
 	}
@@ -819,6 +819,13 @@ func TestStraddleRulesHandler(t *testing.T) {
 	if d := post(`{"id":"str-r1","rule":"nope"}`); d["success"] != false {
 		t.Fatalf("unknown rule accepted: %v", d)
 	}
+	if d := post(`{"id":"str-r1","rule":"delta_band","delta_band":2.5}`); d["success"] != true {
+		t.Fatalf("band override refused: %v", d)
+	}
+	s, _ = straddleByID("str-r1")
+	if s.Hedge.DeltaBand != 2.5 {
+		t.Fatalf("band = %v, want 2.5", s.Hedge.DeltaBand)
+	}
 	if d := post(`{"id":"str-zzz","rule":"time"}`); d["success"] != false {
 		t.Fatalf("missing record accepted: %v", d)
 	}
@@ -841,5 +848,22 @@ func TestSplitClosePnL(t *testing.T) {
 	}
 	if o, f := splitClosePnL(nil, 1); o != 0 || f != 0 {
 		t.Fatalf("nil = %v/%v, want 0/0", o, f)
+	}
+}
+
+// TestStraddleLiveMarks mirrors the Si 85000 Dec-26 short straddle (qty 8):
+// live mids must back out positive IVs on BOTH legs — a zero IV on a live
+// mark means the back-out silently fell back to proxy and skews hedge delta.
+func TestStraddleLiveMarks(t *testing.T) {
+	legs := []analyticsLeg{
+		{SecID: "Si85000BL6", Side: "SELL", Kind: "OPTION", Strike: 85000, IsCall: true, Quantity: 8, Entry: 2503.5, Current: 2503.5},
+		{SecID: "Si85000BX6", Side: "SELL", Kind: "OPTION", Strike: 85000, IsCall: false, Quantity: 8, Entry: 2422, Current: 2422},
+	}
+	a := buildSpreadAnalytics("Si", "2026-12-17", 85092, 77, 1, legs)
+	for i, l := range a.Legs {
+		if l.Iv <= 0 {
+			t.Fatalf("leg %d (%s): Iv = %v on a live mid, want > 0", i, l.SecID, l.Iv)
+		}
+		t.Logf("leg %d: iv=%.2f delta=%.4f", i, l.Iv, l.Delta)
 	}
 }

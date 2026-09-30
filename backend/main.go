@@ -1439,7 +1439,7 @@ func liveGreeksHandler(w http.ResponseWriter, r *http.Request) {
 	isCall := isCallStr != "false"
 
 	t := days / 365.0
-	rRate := 0.16 // MOEX Key rate / RUONIA
+	rRate := quant.RiskFreeRate(symbol) // futures-aware carry
 
 	greeks := quant.CalculateBlackScholes(isCall, spotPrice, strike, t, rRate, vol)
 
@@ -1488,8 +1488,8 @@ func arbitrageHandler(w http.ResponseWriter, r *http.Request) {
 	putPrice, _ := strconv.ParseFloat(putPriceStr, 64)
 
 	if callPrice == 0 && putPrice == 0 {
-		callGreeks := quant.CalculateBlackScholes(true, spotPrice, strike, days/365.0, 0.16, 0.32)
-		putGreeks := quant.CalculateBlackScholes(false, spotPrice, strike, days/365.0, 0.16, 0.32)
+		callGreeks := quant.CalculateBlackScholes(true, spotPrice, strike, days/365.0, quant.RiskFreeRate(symbol), 0.32)
+		putGreeks := quant.CalculateBlackScholes(false, spotPrice, strike, days/365.0, quant.RiskFreeRate(symbol), 0.32)
 
 		callPrice = callGreeks.Price + 25.0
 		putPrice = putGreeks.Price
@@ -1788,7 +1788,7 @@ func moexOrderHandler(w http.ResponseWriter, r *http.Request) {
 func repricePosition(p *quant.Position) {
 	spot, _ := getSpotPrice(p.Symbol)
 	mult := contractMultiplier(p.Symbol)
-	rRate := 0.16
+	rRate := quant.RiskFreeRate(p.Symbol)
 	days := dteInDays(p.Expiry, time.Now())
 	if days <= 0 {
 		days = 30
@@ -2023,7 +2023,7 @@ func riskHandler(w http.ResponseWriter, r *http.Request) {
 		p := &positions[i]
 		spot, _ := getSpotPrice(p.Symbol)
 		mult := contractMultiplier(p.Symbol)
-		rRate := 0.16
+		rRate := quant.RiskFreeRate(p.Symbol)
 		days := dteInDays(p.Expiry, time.Now())
 		if days <= 0 {
 			days = 30
@@ -2635,7 +2635,7 @@ func strategyParityHandler(w http.ResponseWriter, r *http.Request) {
 		days = 30
 	}
 	t := float64(days) / 365.0
-	rRate := 0.16 // MOEX Key rate / RUONIA approximation
+	rRate := quant.RiskFreeRate(symbol) // futures-aware carry
 
 	// Implied volatilities recovered from real market prices.
 	callIV := quant.ImpliedVolatility(true, callLast, spot, strike, t, rRate)
@@ -2879,7 +2879,7 @@ func strategyIronCondorHandler(w http.ResponseWriter, r *http.Request) {
 		days = 30
 	}
 	t := float64(days) / 365.0
-	rRate := 0.16
+	rRate := quant.RiskFreeRate(symbol)
 
 	legs := []struct {
 		opt    *optionContract
@@ -3066,7 +3066,7 @@ func buildStrategy(symbol, strategy string) map[string]interface{} {
 		days = 30
 	}
 	t := float64(days) / 365.0
-	rRate := 0.16
+	rRate := quant.RiskFreeRate(symbol)
 
 	type legOut struct {
 		SecID       string  `json:"secid"`

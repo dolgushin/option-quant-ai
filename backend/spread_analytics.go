@@ -136,7 +136,7 @@ func buildSpreadAnalytics(symbol, expiry string, spot float64, dte int, mult flo
 	if t1 <= 0 {
 		t1 = 1.0 / 3650.0
 	}
-	const r = 0.16
+	r := quant.RiskFreeRate(symbol)
 
 	// Per-leg IV: prefer the MOEX Options Calculator's own IV (authoritative
 	// skew); fall back to backing IV out of the current mark locally.

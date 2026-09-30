@@ -228,7 +228,7 @@ func minDTE(positions []positionExpiryRisk) int {
 // positionNetDelta returns the net delta (in contracts) of a position.
 func positionNetDelta(p *quant.Position) float64 {
 	spot, _ := getSpotPrice(p.Symbol)
-	rRate := 0.16
+	rRate := quant.RiskFreeRate(p.Symbol)
 	days := dteInDays(p.Expiry, time.Now())
 	if days <= 0 {
 		days = 30

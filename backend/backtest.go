@@ -144,11 +144,11 @@ type equityPoint struct {
 
 // estimateOptionPrice prices an option with Black-Scholes (per contract, no
 // multiplier) using the given spot, strike, time-to-expiry and IV.
-func estimateOptionPrice(isCall bool, spot, strike, t, iv float64) float64 {
+func estimateOptionPrice(symbol string, isCall bool, spot, strike, t, iv float64) float64 {
 	if t <= 0 {
 		return 0
 	}
-	g := quant.CalculateBlackScholes(isCall, spot, strike, t, 0.16, iv)
+	g := quant.CalculateBlackScholes(isCall, spot, strike, t, quant.RiskFreeRate(symbol), iv)
 	return g.Price
 }
 
@@ -184,7 +184,7 @@ func currentATMIVImpl(symbol string, clamp bool) float64 {
 		days = 30
 	}
 	t := float64(days) / 365.0
-	rRate := 0.16
+	rRate := quant.RiskFreeRate(symbol)
 
 	// Average IV of the ATM call and put at the strike nearest to spot. Same-strike
 // quotes keep put/call consistent (skew at different strikes would distort it).
@@ -600,7 +600,7 @@ func runStrategyBacktest(symbol, strategy string, days, holdDays int, iv float64
 				if strike <= 0 {
 					return 0, 0
 				}
-				p := estimateOptionPrice(sp.isCall, spot, strike, t, iv)
+				p := estimateOptionPrice(symbol, sp.isCall, spot, strike, t, iv)
 				if slippageBps > 0 {
 					if sp.isShort {
 						p *= (1 - slipSign*slippageBps/10000)

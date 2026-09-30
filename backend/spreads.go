@@ -115,6 +115,10 @@ type spreadPlan struct {
 	CentralStrike float64     `json:"central_strike"`
 	Multiplier    float64     `json:"multiplier"`
 	IsDebit       bool        `json:"is_debit"`
+	// Conflicts lists OPEN spreads on the exact same strike pair (filled by
+	// the plan handler so the UI warns before opening; the open endpoint
+	// refuses outright). Omitted when empty.
+	Conflicts []spreadRecord `json:"conflicts,omitempty"`
 }
 
 // spreadRecord is a persisted open vertical-spread position with its own id,
@@ -252,6 +256,22 @@ func openSpreads() []spreadRecord {
 	return out
 }
 
+// findDuplicateSpreads returns OPEN spreads occupying the exact same strike
+// pair (same symbol, expiry, short and long strikes). A second spread on
+// taken strikes doubles the exposure on one level instead of diversifying
+// it, so the open endpoint refuses it outright. Type and qty are ignored:
+// the same strikes are the same strikes. Closed/rolled records don't count.
+func findDuplicateSpreads(symbol, expiry string, shortStrike, longStrike float64) []spreadRecord {
+	out := []spreadRecord{}
+	for _, s := range openSpreads() {
+		if s.Symbol == symbol && s.Expiry == expiry &&
+			s.ShortStrike == shortStrike && s.LongStrike == longStrike {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // optionChainFor returns the sorted unique strikes of the live option chain
 // for symbol/expiry plus a strike/type lookup helper. Shared by the spread
 // builder and the state-machine reconstructions.
@@ -349,7 +369,7 @@ func buildVerticalSpread(symbol, spreadType, expiry string, qty int) (*spreadPla
 		days = 30
 	}
 	t := float64(days) / 365.0
-	rRate := 0.16
+	rRate := quant.RiskFreeRate(symbol)
 
 	plan := &spreadPlan{
 		Symbol:      symbol,
@@ -513,7 +533,7 @@ func buildSpreadFromLegs(symbol, expiry string, qty int, legs []rollLegSpec, isD
 		days = 30
 	}
 	t := float64(days) / 365.0
-	rRate := 0.16
+	rRate := quant.RiskFreeRate(symbol)
 
 	plan := &spreadPlan{
 		Symbol:      symbol,
@@ -682,6 +702,7 @@ func spreadPlanHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
 		return
 	}
+	plan.Conflicts = findDuplicateSpreads(plan.Symbol, plan.Expiry, plan.ShortStrike, plan.LongStrike)
 	json.NewEncoder(w).Encode(plan)
 }
 
@@ -712,6 +733,23 @@ func spreadOpenHandler(w http.ResponseWriter, r *http.Request) {
 	plan, err := buildVerticalSpread(req.Symbol, req.Type, req.Expiry, req.Qty)
 	if err != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+		return
+	}
+
+	// Refuse a second spread on already-taken strikes: same symbol, expiry
+	// and exact strike pair open means the level is occupied. Rolls are
+	// exempt by construction — they move to another series.
+	if dups := findDuplicateSpreads(plan.Symbol, plan.Expiry, plan.ShortStrike, plan.LongStrike); len(dups) > 0 {
+		ids := make([]string, 0, len(dups))
+		for _, d := range dups {
+			ids = append(ids, d.ID)
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error": fmt.Sprintf("Страйки %.0f/%.0f на %s %s уже заняты открытым спредом (%s) — закройте или ролльните его",
+				plan.ShortStrike, plan.LongStrike, plan.Symbol, plan.Expiry, strings.Join(ids, ", ")),
+			"conflicts": dups,
+		})
 		return
 	}
 
@@ -1038,6 +1076,9 @@ type theoSpread struct {
 // (units: rubles, sign × multiplier × quantity per leg — same as repricePosition).
 func spreadTheoLive(legs []quant.PositionLeg, spot float64, expiry string, mult float64) theoSpread {
 	rRate := 0.16
+	if len(legs) > 0 {
+		rRate = quant.RiskFreeRate(legs[0].Symbol)
+	}
 	tYears := float64(dteInDays(expiry, time.Now())) / 365.0
 	if tYears <= 0 {
 		tYears = 30.0 / 365.0

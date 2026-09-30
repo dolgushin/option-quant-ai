@@ -51,7 +51,6 @@ func stressTestHandler(w http.ResponseWriter, r *http.Request) {
 		quant.SavePosition(positions[i])
 	}
 
-	rRate := 0.16
 	now := time.Now()
 
 	// Baseline portfolio value at current marks (used for % reporting).
@@ -83,6 +82,7 @@ func stressTestHandler(w http.ResponseWriter, r *http.Request) {
 		spot  float64
 		iv    float64
 		t     float64
+		rRate float64
 	}
 
 	// Precompute per-leg models (spot, IV, time-to-expiry) once.
@@ -109,11 +109,12 @@ func stressTestHandler(w http.ResponseWriter, r *http.Request) {
 				isCall: leg.IsCall,
 				strike: leg.Strike,
 				price: leg.CurrentPrice,
-				spot:  spot,
-				t:     t,
-			}
-			if leg.Kind == "OPTION" {
-				iv := quant.ImpliedVolatility(leg.IsCall, leg.CurrentPrice, spot, leg.Strike, t, rRate)
+		spot:  spot,
+			t:     t,
+			rRate: quant.RiskFreeRate(p.Symbol),
+		}
+		if leg.Kind == "OPTION" {
+			iv := quant.ImpliedVolatility(leg.IsCall, leg.CurrentPrice, spot, leg.Strike, t, lm.rRate)
 				if iv <= 0 {
 					iv = 0.30
 				}
@@ -140,7 +141,7 @@ func stressTestHandler(w http.ResponseWriter, r *http.Request) {
 					if newIV <= 0 {
 						newIV = 0.0001
 					}
-					g := quant.CalculateBlackScholes(lm.isCall, newSpot, lm.strike, lm.t, rRate, newIV)
+					g := quant.CalculateBlackScholes(lm.isCall, newSpot, lm.strike, lm.t, lm.rRate, newIV)
 					newPrice = g.Price
 				}
 				shockPnL += lm.dir * (newPrice - lm.price) * lm.mult * lm.qty
@@ -175,22 +176,23 @@ func stressTestHandler(w http.ResponseWriter, r *http.Request) {
 			if days <= 0 {
 				days = 30
 			}
-			t := float64(days) / 365.0
-			posPnL := 0.0
-			for _, leg := range p.Legs {
-				dir := 1.0
-				if leg.Side == "SELL" {
-					dir = -1.0
+		t := float64(days) / 365.0
+		rr := quant.RiskFreeRate(p.Symbol)
+		posPnL := 0.0
+		for _, leg := range p.Legs {
+			dir := 1.0
+			if leg.Side == "SELL" {
+				dir = -1.0
+			}
+			var newPrice float64
+			if leg.Kind == "FUTURES" {
+				newPrice = leg.CurrentPrice * (1 + worst.SpotShock)
+			} else {
+				iv := quant.ImpliedVolatility(leg.IsCall, leg.CurrentPrice, spot, leg.Strike, t, rr)
+				if iv <= 0 {
+					iv = 0.30
 				}
-				var newPrice float64
-				if leg.Kind == "FUTURES" {
-					newPrice = leg.CurrentPrice * (1 + worst.SpotShock)
-				} else {
-					iv := quant.ImpliedVolatility(leg.IsCall, leg.CurrentPrice, spot, leg.Strike, t, rRate)
-					if iv <= 0 {
-						iv = 0.30
-					}
-					g := quant.CalculateBlackScholes(leg.IsCall, spot*(1+worst.SpotShock), leg.Strike, t, rRate, iv*(1+worst.IVShock))
+				g := quant.CalculateBlackScholes(leg.IsCall, spot*(1+worst.SpotShock), leg.Strike, t, rr, iv*(1+worst.IVShock))
 					newPrice = g.Price
 				}
 				posPnL += dir * (newPrice - leg.CurrentPrice) * mult * float64(leg.Quantity)
