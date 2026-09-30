@@ -312,6 +312,15 @@ type straddleRecord struct {
 	LastHedgeAt   string             `json:"last_hedge_at"`
 	LastHedgeSpot float64            `json:"last_hedge_spot"`
 	HedgeLog      []hedgeEntry       `json:"hedge_log,omitempty"`
+	// Close snapshot: extended close statistics, filled once by
+	// closeStraddlePosition. Old records closed before it read zeros.
+	ClosedAt      string  `json:"closed_at,omitempty"`
+	CloseReason   string  `json:"close_reason,omitempty"`
+	ClosePnL      float64 `json:"close_pnl,omitempty"`       // true total: live + settled
+	CloseLivePnL  float64 `json:"close_live_pnl,omitempty"`  // live legs only
+	CloseHedgePnL float64 `json:"close_hedge_pnl,omitempty"` // settled (netted) hedges
+	CloseOptPnL   float64 `json:"close_opt_pnl,omitempty"`   // live options at close
+	CloseFutPnL   float64 `json:"close_fut_pnl,omitempty"`   // live open futures at close
 }
 
 // straddleShouldStop reports whether the realized loss hit the 2× stop.
@@ -1766,6 +1775,25 @@ func runStraddleManagerPass() {
 	}
 }
 
+// splitClosePnL attributes a closing position's live P&L to options vs
+// futures legs: dir × (current − entry) × qty × mult. Settled (already
+// netted) hedge P&L lives in pos.RealizedPnL, not here. Pure — unit-tested.
+func splitClosePnL(legs []quant.PositionLeg, mult float64) (opt, fut float64) {
+	for _, l := range legs {
+		dir := 1.0
+		if l.Side == "SELL" {
+			dir = -1
+		}
+		v := dir * (l.CurrentPrice - l.EntryPrice) * mult * float64(l.Quantity)
+		if l.Kind == "FUTURES" {
+			fut += v
+		} else {
+			opt += v
+		}
+	}
+	return math.Round(opt*100) / 100, math.Round(fut*100) / 100
+}
+
 // closeStraddlePosition closes the position, journals the trade and notifies.
 // notify controls the Telegram message (auto closes always notify).
 func closeStraddlePosition(s *straddleRecord, pos *quant.Position, reason string, notify bool) {
@@ -1775,15 +1803,62 @@ func closeStraddlePosition(s *straddleRecord, pos *quant.Position, reason string
 		return
 	}
 	// SettleTrade folds netted-hedge realized P&L in exactly once.
-	quant.AddTrade(quant.SettleTrade(removed))
+	trade := quant.SettleTrade(removed)
+	quant.AddTrade(trade)
+	mult := contractMultiplier(removed.Symbol)
+	optPnL, futPnL := splitClosePnL(removed.Legs, mult)
+	hedgePnL := math.Round(removed.RealizedPnL*100) / 100
 	s.Status = "CLOSED"
+	s.ClosedAt = time.Now().Format(time.RFC3339)
+	s.CloseReason = reason
+	s.ClosePnL = math.Round(trade.RealizedPnL*100) / 100
+	s.CloseLivePnL = math.Round(removed.PnL*100) / 100
+	s.CloseHedgePnL = hedgePnL
+	s.CloseOptPnL, s.CloseFutPnL = optPnL, futPnL
 	saveStraddleRecord(*s)
 	if notify {
 		logTelegramErr("straddle-close", sendTelegramMessage(
-			fmt.Sprintf("📕 Стрэддл %s %s закрыт: %s\nP&L %s ₽",
+			fmt.Sprintf("📕 Стрэддл %s %s закрыт: %s\nP&L %s ₽ (в т.ч. хеджи %s ₽)",
 				telegramEscape(s.Symbol), telegramEscape(s.ID),
-				telegramEscape(reason), formatRub(removed.PnL, 0))))
+				telegramEscape(reason), formatRub(trade.RealizedPnL, 0), formatRub(hedgePnL+futPnL, 0))))
 	}
+}
+
+// GET /api/v1/straddles/history — closed straddles newest-first (cap 50)
+// with their close snapshots.
+func straddleHistoryHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	straddleMu.Lock()
+	recs := make([]straddleRecord, len(straddleStore))
+	copy(recs, straddleStore)
+	straddleMu.Unlock()
+	out := []map[string]interface{}{}
+	for i := len(recs) - 1; i >= 0 && len(out) < 50; i-- {
+		s := recs[i]
+		if s.Status != "CLOSED" {
+			continue
+		}
+		days := 0
+		if t0, err := time.Parse(time.RFC3339, s.OpenedAt); err == nil {
+			end := time.Now()
+			if t1, err := time.Parse(time.RFC3339, s.ClosedAt); err == nil {
+				end = t1
+			}
+			if d := end.Sub(t0).Hours() / 24; d >= 0 {
+				days = int(d)
+			}
+		}
+		out = append(out, map[string]interface{}{
+			"id": s.ID, "symbol": s.Symbol, "expiry": s.Expiry, "strike": s.Strike,
+			"qty": s.Qty, "construction": s.Construction, "opened_at": s.OpenedAt,
+			"closed_at": s.ClosedAt, "close_reason": s.CloseReason, "days": days,
+			"close_pnl": s.ClosePnL, "close_live_pnl": s.CloseLivePnL,
+			"close_hedge_pnl": s.CloseHedgePnL, "close_opt_pnl": s.CloseOptPnL,
+			"close_fut_pnl": s.CloseFutPnL, "net_credit": s.NetCredit,
+			"with_futures": s.WithFutures, "hedge_count": s.HedgeCount,
+		})
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"straddles": out})
 }
 
 // hedgeNotifyWanted decides whether a hedge deserves a Telegram message:

@@ -823,3 +823,23 @@ func TestStraddleRulesHandler(t *testing.T) {
 		t.Fatalf("missing record accepted: %v", d)
 	}
 }
+
+// TestSplitClosePnL pins close attribution: SELL options and BUY futures
+// split by kind with direction applied.
+func TestSplitClosePnL(t *testing.T) {
+	legs := []quant.PositionLeg{
+		{SecID: "Si86000BJ6", Side: "SELL", Kind: "OPTION", Quantity: 4, EntryPrice: 1417.5, CurrentPrice: 1111},
+		{SecID: "Si86000BV6", Side: "SELL", Kind: "OPTION", Quantity: 4, EntryPrice: 1192.5, CurrentPrice: 1164.5},
+		{SecID: "SiZ6", Side: "BUY", Kind: "FUTURES", Quantity: 1, EntryPrice: 85961, CurrentPrice: 85951.5},
+	}
+	opt, fut := splitClosePnL(legs, 1)
+	if math.Abs(opt-1338) > 0.01 {
+		t.Fatalf("opt = %v, want 1338", opt)
+	}
+	if math.Abs(fut+9.5) > 0.01 {
+		t.Fatalf("fut = %v, want -9.5", fut)
+	}
+	if o, f := splitClosePnL(nil, 1); o != 0 || f != 0 {
+		t.Fatalf("nil = %v/%v, want 0/0", o, f)
+	}
+}
