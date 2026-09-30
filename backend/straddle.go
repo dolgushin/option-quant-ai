@@ -359,9 +359,21 @@ func initStraddles(dataDir string) {
 	defer straddleMu.Unlock()
 	straddleFile = filepath.Join(dataDir, "straddles.json")
 	b, err := os.ReadFile(straddleFile)
-	if err == nil {
-		_ = json.Unmarshal(b, &straddleStore)
+	if err != nil {
+		log.Printf("straddles: no store at %s (%v), starting empty", straddleFile, err)
+		return
 	}
+	if err := json.Unmarshal(b, &straddleStore); err != nil {
+		log.Printf("straddles: CORRUPT store %s (%v) — records NOT loaded", straddleFile, err)
+		return
+	}
+	n := 0
+	for _, s := range straddleStore {
+		if s.Status == "OPEN" {
+			n++
+		}
+	}
+	log.Printf("straddles: loaded %d records (%d open) from %s", len(straddleStore), n, straddleFile)
 }
 
 func persistStraddles() {
@@ -369,7 +381,16 @@ func persistStraddles() {
 		return
 	}
 	b, _ := json.MarshalIndent(straddleStore, "", "  ")
-	_ = os.WriteFile(straddleFile, b, 0600)
+	// Atomic write: a crash mid-write must never leave a truncated store
+	// (which boots as "no open straddles").
+	tmp := straddleFile + ".tmp"
+	if err := os.WriteFile(tmp, b, 0600); err != nil {
+		log.Printf("straddles: write failed: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, straddleFile); err != nil {
+		log.Printf("straddles: rename failed: %v", err)
+	}
 }
 
 func saveStraddleRecord(rec straddleRecord) {
