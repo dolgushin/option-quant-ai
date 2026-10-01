@@ -1130,18 +1130,17 @@ func protectGridOpenHandler(w http.ResponseWriter, r *http.Request) {
 			"error": fmt.Sprintf("тейк %.0f не покрывает 2 комиссии (%.0f ₽): каждый круг в минус — поставь тейк ≥ %.0f", plan.TakeProfit, 2*req.FeePerFill, 2*req.FeePerFill/contractMultiplier(req.Symbol)+1)})
 		return
 	}
-	// Executable wing fill only: BUY at the ask touch.
-	wingFill, err := futuresFillPrice(plan.ProtectSecID, "BUY")
-	if err != nil {
-		// futuresFillPrice reads futures books; options need the ask side.
-		// Fall back to the hybrid mark only when it came from a live book.
-		if q, ok := cachedOptionQuoteEx(plan.ProtectSecID); ok && q.Offer > 0 && q.Bid > 0 && q.Offer >= q.Bid {
-			wingFill = q.Offer
-		} else {
-			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "нет живого аска защиты: " + err.Error()})
-			return
-		}
+	// Executable wing fill only: BUY at the ask touch of a LIVE option book.
+	// A stale or absurdly wide ask (7653 against a 1321 mark) opens the
+	// position instantly deep underwater — refuse instead of filling.
+	// futuresFillPrice reads futures books and is the wrong tool for an
+	// option secid, so the live-book gate below is the only path.
+	q, ok := cachedOptionQuoteEx(plan.ProtectSecID)
+	if !ok || !quoteIsLive(q) {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "нет живого аска защиты: стакан пуст, stale или спред шире 25% — повтори когда серия оживёт"})
+		return
 	}
+	wingFill := q.Offer
 	// Futures contract for the ladder: the nearest LIVE contract from the
 	// MOEX board (authoritative expiry dates — month-letter guessing keeps
 	// dead series like SiU6 "live" past expiry). Alor guess and the saved
