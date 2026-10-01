@@ -381,6 +381,28 @@ func RemoveTradesByStrategy(strategy string) int {
 	return n
 }
 
+// RemoveTradeByID deletes one closed trade by ID and persists. Returns true
+// when found. Used to void single bogus paper trades (bad-fill closes)
+// without wiping the whole journal.
+func RemoveTradeByID(id string) bool {
+	positionsMu.Lock()
+	kept := tradeHistory[:0]
+	found := false
+	for _, t := range tradeHistory {
+		if t.ID == id {
+			found = true
+			continue
+		}
+		kept = append(kept, t)
+	}
+	tradeHistory = kept
+	positionsMu.Unlock()
+	if found {
+		Persist()
+	}
+	return found
+}
+
 // ComputeStats aggregates statistics over all closed trades.
 func ComputeStats() Stats {
 	positionsMu.Lock()

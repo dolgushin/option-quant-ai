@@ -468,3 +468,36 @@ func TestEvaluateProtectGridStops(t *testing.T) {
 		t.Fatalf("want NONE, got %+v", ev)
 	}
 }
+
+// TestMatchCloseTrade pins single-delete linkage: exact stored ID wins,
+// else the single same-symbol grid trade within ±5 min; ambiguity or
+// absence yields "" (never guess).
+func TestMatchCloseTrade(t *testing.T) {
+	mk := func(id, strat, sym string, at time.Time) quant.Trade {
+		return quant.Trade{ID: id, Strategy: strat, Symbol: sym, ClosedAt: at}
+	}
+	end, _ := time.Parse(time.RFC3339, "2026-10-01T14:20:00Z")
+	g := protectGridRecord{ID: "pgrid-x", Symbol: "Si", ClosedAt: "2026-10-01T14:20:00Z", CloseTradeID: "trd-1"}
+	trades := []quant.Trade{
+		mk("trd-1", "Protective Grid", "Si", end.Add(-time.Minute)),
+		mk("trd-2", "Protective Grid", "Si", end),
+	}
+	if got := matchCloseTrade(g, trades); got != "trd-1" {
+		t.Fatalf("exact id = %q, want trd-1", got)
+	}
+	g.CloseTradeID = ""
+	if got := matchCloseTrade(g, trades[:1]); got != "trd-1" {
+		t.Fatalf("fuzzy single = %q, want trd-1", got)
+	}
+	if got := matchCloseTrade(g, trades); got != "" {
+		t.Fatalf("ambiguous = %q, want empty", got)
+	}
+	g.ClosedAt = ""
+	if got := matchCloseTrade(g, trades[:1]); got != "" {
+		t.Fatalf("no date = %q, want empty", got)
+	}
+	other := []quant.Trade{mk("trd-9", "Short Straddle", "Si", end)}
+	if got := matchCloseTrade(protectGridRecord{Symbol: "Si", ClosedAt: "2026-10-01T14:20:00Z"}, other); got != "" {
+		t.Fatalf("foreign strategy = %q, want empty", got)
+	}
+}

@@ -2574,6 +2574,19 @@
             } catch (e) { el.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${e.message}</div>`; }
         }
 
+        async function deletePgrid(id) {
+            if (!confirm('Удалить закрытую сетку и её трейд из статистики?')) return;
+            try {
+                const res = await fetch('/api/v1/protect-grid/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+                const d = await res.json();
+                if (!d.success) { alert('❌ ' + (d.error || 'не удалено')); return; }
+                alert(`✅ Удалено${d.trade_removed ? ' (трейд тоже убран из статистики)' : ' (трейд не найден — только запись)'}`);
+                const box = document.getElementById(`pgd-box-${id}`);
+                if (box) box.innerHTML = '<div class="text-slate-500 font-mono text-[11px]">Запись удалена.</div>';
+                loadPgrids();
+            } catch (e) { alert('❌ ' + e.message); }
+        }
+
         async function closePgrid(id) {
             if (!confirm('Закрыть защитную сетку ' + id + '?')) return;
             try {
@@ -2600,7 +2613,8 @@
                 if (d.error) { box.innerHTML = `<div class="text-rose-400 font-mono text-[11px]">❌ ${d.error}</div>`; return; }
                 if (d.closed) {
                     const g = d.grid || {};
-                    let html = `<div class="font-mono text-[11px] text-slate-200">Итог <b>${(d.final_pnl || 0).toLocaleString('ru-RU')} ₽</b> · Закрыта: ${d.close_reason || '—'}</div>`;
+                    let html = `<div class="font-mono text-[11px] text-slate-200">Итог <b>${(d.final_pnl || 0).toLocaleString('ru-RU')} ₽</b> · Закрыта: ${d.close_reason || '—'}
+                        <button onclick="deletePgrid('${id}')" class="ml-2 px-2 py-0.5 text-[10px] bg-slate-700 hover:bg-rose-700 text-white rounded transition" title="Убрать запись и её трейд из статистики">🗑 Удалить</button></div>`;
                     html += `<div class="text-[10px] text-slate-500 font-mono uppercase mt-2 mb-1">Ноги на выходе (вход → выход)</div>`
                         + `<table class="w-full text-left font-mono text-[11px] text-slate-300"><thead class="text-slate-500 border-b border-slate-700"><tr><th class="pr-2">Нога</th><th class="text-right">Кол-во</th><th class="text-right">Вход</th><th class="text-right">Выход</th></tr></thead><tbody>`
                         + ((d.exit_legs || []).map(l => `<tr class="border-b border-slate-800"><td class="pr-2">${l.side} ${l.kind === 'OPTION' ? (l.is_call ? 'CALL' : 'PUT') + ' ' + l.strike : 'FUT ' + l.secid}</td><td class="text-right">${l.qty}</td><td class="text-right">${l.entry}</td><td class="text-right">${l.exit}</td></tr>`).join('') || '<tr><td class="text-slate-500">нет данных (закрыта до учёта выходов)</td></tr>') + '</tbody></table>';

@@ -501,7 +501,8 @@ type protectGridRecord struct {
 	LastError     string        `json:"last_error,omitempty"`
 	ClosedAt      string        `json:"closed_at,omitempty"`
 	CloseReason   string        `json:"close_reason,omitempty"`
-	FinalPnl      float64       `json:"final_pnl,omitempty"` // closed-grid total (live P&L + netted realized), rubles
+	CloseTradeID  string        `json:"close_trade_id,omitempty"` // journal trade of this close (exact delete link)
+	FinalPnl      float64       `json:"final_pnl,omitempty"`      // closed-grid total (live P&L + netted realized), rubles
 	EntryValue    float64       `json:"entry_value,omitempty"`
 	ExitLegs      []gridExitLeg `json:"exit_legs,omitempty"` // per-leg entry→exit marks at close
 	Fills         int           `json:"fills"`
@@ -1566,6 +1567,7 @@ func closeProtectGrid(g *protectGridRecord, pos *quant.Position, reason string, 
 	tr := quant.SettleTrade(removed)
 	enrichTradeContext(&tr, g.Symbol, g.Expiry, g.EntrySpot)
 	quant.AddTrade(tr)
+	g.CloseTradeID = tr.ID
 	g.Status = "CLOSED"
 	g.ClosedAt = time.Now().Format(time.RFC3339)
 	g.CloseReason = reason
@@ -1826,6 +1828,82 @@ func protectGridClearHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true, "closed": closed, "orphaned": orphaned,
 		"records_removed": removed, "journal_removed": journal,
+	})
+}
+
+// matchCloseTrade finds the journal trade of a closed grid: the exact stored
+// ID first, else the single grid trade with the same symbol closed within
+// ±5 min. Returns "" when ambiguous or absent — never guess.
+func matchCloseTrade(g protectGridRecord, trades []quant.Trade) string {
+	for _, t := range trades {
+		if g.CloseTradeID != "" && t.ID == g.CloseTradeID {
+			return t.ID
+		}
+	}
+	if g.ClosedAt == "" {
+		return ""
+	}
+	end, err := time.Parse(time.RFC3339, g.ClosedAt)
+	if err != nil {
+		return ""
+	}
+	found := ""
+	for _, t := range trades {
+		if !isProtectGridTrade(t.Strategy) || t.Symbol != g.Symbol {
+			continue
+		}
+		d := t.ClosedAt.Sub(end)
+		if d < 0 {
+			d = -d
+		}
+		if d <= 5*time.Minute {
+			if found != "" {
+				return "" // ambiguous — human must pick
+			}
+			found = t.ID
+		}
+	}
+	return found
+}
+
+// POST /api/v1/protect-grid/delete {"id":"pgrid-..."} — remove one CLOSED
+// grid and its journal trade (statistics aggregate live, so they follow).
+// Open records are refused. Records without a matchable trade lose only
+// the record (reported).
+func protectGridDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	g, found := pgridByID(req.ID)
+	if !found || g.Status != "CLOSED" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "grid not found or not closed"})
+		return
+	}
+	tradeRemoved := false
+	if tradeID := matchCloseTrade(g, quant.GetTrades()); tradeID != "" {
+		tradeRemoved = quant.RemoveTradeByID(tradeID)
+	}
+	pgridMu.Lock()
+	kept := pgridStore[:0]
+	for _, rec := range pgridStore {
+		if rec.ID != g.ID {
+			kept = append(kept, rec)
+		}
+	}
+	pgridStore = kept
+	persistProtectGrids()
+	pgridMu.Unlock()
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true, "trade_removed": tradeRemoved,
 	})
 }
 

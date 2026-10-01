@@ -226,3 +226,20 @@ func TestGetPortfolio(t *testing.T) {
 		t.Fatalf("cash=%.0f, want %.0f", port.Cash, wantCash)
 	}
 }
+
+func TestRemoveTradeByID(t *testing.T) {
+	resetState()
+	AddTrade(Trade{ID: "a", Strategy: "Protective Grid", RealizedPnL: -63314})
+	AddTrade(Trade{ID: "b", Strategy: "Short Straddle", RealizedPnL: 50})
+	if !RemoveTradeByID("a") {
+		t.Fatal("want true for existing id")
+	}
+	left := GetTrades()
+	if len(left) != 1 || left[0].ID != "b" {
+		t.Fatalf("only other trades must survive: %+v", left)
+	}
+	if RemoveTradeByID("zzz") {
+		t.Fatal("want false for missing id")
+	}
+	resetState()
+}

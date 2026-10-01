@@ -3675,6 +3675,7 @@ func main() {
 	http.HandleFunc("/api/v1/protect-grid/manager", protectGridManagerHandler)
 	http.HandleFunc("/api/v1/protect-grid/stats", protectGridStatsHandler)
 	http.HandleFunc("/api/v1/protect-grid/clear", protectGridClearHandler)
+	http.HandleFunc("/api/v1/protect-grid/delete", protectGridDeleteHandler)
 	http.HandleFunc("/api/v1/protect-grid", protectGridListHandler)
 	http.HandleFunc("/api/v1/range/today", rangeTodayHandler)
 	http.HandleFunc("/api/v1/range/history", rangeHistoryHandler)
