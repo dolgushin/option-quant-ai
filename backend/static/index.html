@@ -3047,6 +3047,7 @@
                 const res = await fetch('/api/v1/straddles/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
                 const d = await res.json();
                 if (!d.success) { alert('❌ ' + (d.error || 'не закрыт')); return; }
+                if (d.note) alert('ℹ️ ' + d.note);
                 loadStraddles();
             } catch (e) { alert('❌ ' + e.message); }
         }

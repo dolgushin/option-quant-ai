@@ -1893,11 +1893,12 @@ func positionsHandler(w http.ResponseWriter, r *http.Request) {
 		quant.SavePosition(positions[i])
 	}
 
-	// Spread / protective-grid positions are managed on their own tabs —
-	// keep the central dashboard list clean.
+	// Spread / protective-grid / straddle positions are managed on their own
+	// tabs — keep the central dashboard list clean (closing them here
+	// orphans their records).
 	visible := make([]quant.Position, 0, len(positions))
 	for _, p := range positions {
-		if !isSpreadPositionID(p.ID) && !isProtectGridPositionID(p.ID) {
+		if !isSpreadPositionID(p.ID) && !isProtectGridPositionID(p.ID) && !isStraddlePositionID(p.ID) {
 			visible = append(visible, p)
 		}
 	}
@@ -2311,11 +2312,12 @@ func tradesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	allTrades := quant.GetTrades()
-	// Spread / protective-grid trades live in their tab journals — hide them
-	// from the central dashboard list (stats still count the whole account).
+	// Spread / protective-grid / straddle trades live in their tab journals —
+	// hide them from the central dashboard list (stats still count the whole
+	// account).
 	trades := make([]quant.Trade, 0, len(allTrades))
 	for _, t := range allTrades {
-		if !isSpreadTrade(t.Strategy) && !isProtectGridTrade(t.Strategy) {
+		if !isSpreadTrade(t.Strategy) && !isProtectGridTrade(t.Strategy) && !isStraddleTrade(t.Strategy) {
 			trades = append(trades, t)
 		}
 	}

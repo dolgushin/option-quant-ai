@@ -872,3 +872,62 @@ func TestStraddleLiveMarks(t *testing.T) {
 		t.Logf("leg %d: iv=%.2f delta=%.4f", i, l.Iv, l.Delta)
 	}
 }
+
+// TestIsStraddlePositionID pins dashboard hiding: a position owned by a
+// straddle record reads as straddle-owned, foreign IDs don't. Straddle
+// trades match by strategy name.
+func TestIsStraddlePositionID(t *testing.T) {
+	straddleMu.Lock()
+	old := straddleStore
+	straddleStore = []straddleRecord{
+		{ID: "str-x", PositionID: "pos-1", Status: "OPEN"},
+	}
+	straddleMu.Unlock()
+	defer func() {
+		straddleMu.Lock()
+		straddleStore = old
+		straddleMu.Unlock()
+	}()
+	if !isStraddlePositionID("pos-1") {
+		t.Fatal("owned position must read as straddle-owned")
+	}
+	if isStraddlePositionID("pos-zzz") {
+		t.Fatal("foreign id must not match")
+	}
+	if !isStraddleTrade("Short Straddle") {
+		t.Fatal("Short Straddle must read as straddle trade")
+	}
+	if isStraddleTrade("Protective Grid") {
+		t.Fatal("grid trade must not match")
+	}
+}
+
+// TestCloseOrphanStraddle pins the dead-end fix: closing a record whose
+// position is already gone drops the shell with success (its economics
+// live on in the journal trade) instead of "position not found".
+func TestCloseOrphanStraddle(t *testing.T) {
+	straddleMu.Lock()
+	old := straddleStore
+	straddleStore = []straddleRecord{
+		{ID: "str-orph", PositionID: "pos-gone", Status: "OPEN"},
+	}
+	straddleMu.Unlock()
+	defer func() {
+		straddleMu.Lock()
+		straddleStore = old
+		straddleMu.Unlock()
+	}()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/straddles/close", strings.NewReader(`{"id":"str-orph"}`))
+	rr := httptest.NewRecorder()
+	straddleCloseHandler(rr, req)
+	var out map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("bad json: %v", err)
+	}
+	if out["success"] != true {
+		t.Fatalf("orphan close refused: %v", out)
+	}
+	if _, found := straddleByID("str-orph"); found {
+		t.Fatal("orphan shell must be gone")
+	}
+}

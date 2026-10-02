@@ -1967,6 +1967,26 @@ func executeStraddleHedge(s *straddleRecord, pos *quant.Position, ev straddleEva
 	return nil
 }
 
+// isStraddlePositionID reports whether a position belongs to a straddle
+// (hidden from the central dashboard lists, lives on its own tab — closing
+// it from the dashboard orphans the record).
+func isStraddlePositionID(id string) bool {
+	straddleMu.Lock()
+	defer straddleMu.Unlock()
+	for _, s := range straddleStore {
+		if s.PositionID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// isStraddleTrade reports whether a closed trade originated from a straddle
+// (shown in the straddle history, not the dashboard list).
+func isStraddleTrade(strategy string) bool {
+	return strings.Contains(strategy, "Straddle")
+}
+
 // POST /api/v1/straddles/close {"id":"str-..."}
 func straddleCloseHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -1988,7 +2008,20 @@ func straddleCloseHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	pos, ok := quant.GetPositionByID(s.PositionID)
 	if !ok {
-		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "position not found"})
+		// Orphaned shell: the position was closed elsewhere (e.g. from the
+		// dashboard before straddle positions were hidden there). Its
+		// economics live on in the journal trade — drop the empty record.
+		straddleMu.Lock()
+		kept := straddleStore[:0]
+		for _, rec := range straddleStore {
+			if rec.ID != s.ID {
+				kept = append(kept, rec)
+			}
+		}
+		straddleStore = kept
+		persistStraddles()
+		straddleMu.Unlock()
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "note": "позиция уже была закрыта — запись-сирота удалена (трейд остался в журнале)"})
 		return
 	}
 	closeStraddlePosition(&s, pos, "закрыт вручную", true)
