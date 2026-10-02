@@ -387,6 +387,26 @@ func quantIV(symbol string, isCall bool, price, S, K, t float64) float64 {
 func quantGetActive() []quant.Position { return quant.GetActivePositions() }
 
 // collectCoreBrief gathers the full picture; cached for 5 minutes.
+// tradeUniverse returns the symbols background scans may poll: symbols
+// with open positions (any module), falling back to Si when flat. This
+// keeps Alor polling on traded instruments only (user requirement) instead
+// of the hardcoded Si+RI universe. Pure apart from the position store.
+func tradeUniverse() []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, p := range quantGetActive() {
+		if p.Symbol == "" || seen[p.Symbol] {
+			continue
+		}
+		seen[p.Symbol] = true
+		out = append(out, p.Symbol)
+	}
+	if len(out) == 0 {
+		return []string{"Si"}
+	}
+	return out
+}
+
 func collectCoreBrief(force bool) *coreBrief {
 	coreBriefMu.Lock()
 	if !force && coreBriefCache != nil && time.Since(coreBriefCacheAt) < 5*time.Minute {
@@ -396,7 +416,7 @@ func collectCoreBrief(force bool) *coreBrief {
 	}
 	coreBriefMu.Unlock()
 
-	symbols := []string{"Si", "RI"}
+	symbols := tradeUniverse()
 	var wg sync.WaitGroup
 	instruments := make([]coreInstrument, len(symbols))
 	for i, s := range symbols {

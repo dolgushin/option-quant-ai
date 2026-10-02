@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"option-quant-ai/quant"
 )
 
 func TestSpreadsAlreadyOpen(t *testing.T) {
@@ -349,5 +351,20 @@ func TestCandidatePopWeightMovesScore(t *testing.T) {
 	}
 	if !foundLo {
 		t.Fatalf("low-pop reasons missing PoP flag: %v", lo.Reasons)
+	}
+}
+
+// TestTradeUniverse pins the traded-only scan scope: open positions' symbols
+// (deduped, first-seen order), Si fallback when flat.
+func TestTradeUniverse(t *testing.T) {
+	prev := quantGetActive()
+	defer quant.SetPositions(prev)
+	quant.SetPositions(nil)
+	if got := tradeUniverse(); len(got) != 1 || got[0] != "Si" {
+		t.Fatalf("flat = %v, want [Si]", got)
+	}
+	quant.SetPositions([]quant.Position{{Symbol: "RI"}, {Symbol: "Si"}, {Symbol: "Si"}})
+	if got := tradeUniverse(); len(got) != 2 || got[0] != "RI" || got[1] != "Si" {
+		t.Fatalf("open = %v, want [RI Si]", got)
 	}
 }
