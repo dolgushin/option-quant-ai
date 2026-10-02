@@ -76,6 +76,7 @@ var (
 	selectedSeries = map[string]string{
 		"Si":    "SiU6",
 		"RI":    "RIU6",
+		"ED":    "EDZ6",
 		"CR":    "CRU6",
 		"SBER":  "SBRF-2026-09-16",
 		"SBERP": "SBPR-2026-09-16",

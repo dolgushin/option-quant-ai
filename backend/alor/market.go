@@ -59,7 +59,7 @@ var alorMonthNums = map[byte]int{
 // alorTradeRoots are underlyings whose month-code futures must be rewritten.
 // Alor 02.10.2026: SiZ6-style codes don't exist — every such request errors
 // (499) and counts toward the rate ban. Si-12.26 is the valid form.
-var alorTradeRoots = []string{"Si", "RI"}
+var alorTradeRoots = []string{"Si", "RI", "ED"}
 
 // normalizeAlorSecID rewrites MOEX month-code futures (SiZ6) to Alor
 // instrument format (Si-12.26) at the client boundary, so every caller is

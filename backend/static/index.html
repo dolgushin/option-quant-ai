@@ -759,6 +759,7 @@
                         <select id="spr-symbol" class="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-sm font-mono">
                             <option value="Si">Si (USD/RUB)</option>
                             <option value="RI">RI (RTS)</option>
+                            <option value="ED">ED (EUR/USD)</option>
                         </select>
                     </div>
                     <div class="col-span-2">
@@ -845,7 +846,7 @@
                 <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">Открыть стрэддл — цены подтянутся из стаканов Alor</div>
                 <div class="flex flex-wrap items-end gap-2 font-mono text-[11px]">
                     <label class="text-slate-400">Инстр.
-                        <select id="str-symbol" onchange="loadStraddleMeta()" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option>Si</option><option>RI</option></select></label>
+                        <select id="str-symbol" onchange="loadStraddleMeta()" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option>Si</option><option>RI</option><option>ED</option></select></label>
                     <span id="str-spot-hint" class="text-slate-500 self-center"></span>
                     <label class="text-slate-400">Экспирация
                         <select id="str-expiry" onchange="previewStraddleLegs()" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option value="">—</option></select></label>
@@ -907,7 +908,7 @@
                 <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">План и открытие — защита на шаг от спота + односторонняя сетка</div>
                 <div class="flex flex-wrap items-end gap-2 font-mono text-[11px]">
                     <label class="text-slate-400">Инстр.
-                        <select id="pg-symbol" onchange="loadPgridMeta()" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option>Si</option><option>RI</option></select></label>
+                        <select id="pg-symbol" onchange="loadPgridMeta()" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option>Si</option><option>RI</option><option>ED</option></select></label>
                     <span id="pg-spot-hint" class="text-slate-500 self-center"></span>
                     <label class="text-slate-400">Направление
                         <select id="pg-dir" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white">
@@ -1193,7 +1194,7 @@
                     <div class="text-[11px] text-slate-400 font-mono uppercase mb-2">Предсказание для кандидата</div>
                     <div class="flex flex-wrap items-end gap-2 font-mono text-[11px] mb-3">
                         <label class="text-slate-400">Инстр.
-                            <select id="ml-sym" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option>Si</option><option>RI</option></select></label>
+                            <select id="ml-sym" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white"><option>Si</option><option>RI</option><option>ED</option></select></label>
                         <label class="text-slate-400">Стратегия
                             <select id="ml-strat" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white">
                                 <option value="iron_condor">Iron Condor</option><option value="bull_put_spread">Bull Put</option><option value="bear_call_spread">Bear Call</option>
@@ -1268,7 +1269,7 @@
                     <div class="text-[11px] text-slate-400 font-mono uppercase">Поверхность волатильности (Skew / Term Structure)</div>
                     <div class="flex gap-2 items-center">
                         <select id="volsurf-symbol" class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white text-[11px]">
-                            <option value="Si">Si</option><option value="RI">RI</option>
+                            <option value="Si">Si</option><option value="RI">RI</option><option value="ED">ED</option>
                         </select>
                         <button onclick="loadVolSurface()" class="px-3 py-1 bg-violet-600 hover:bg-violet-500 text-white text-[11px] font-bold rounded transition">📈 Показать</button>
                     </div>

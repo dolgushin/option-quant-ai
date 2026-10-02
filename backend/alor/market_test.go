@@ -17,6 +17,8 @@ func TestNormalizeAlorSecID(t *testing.T) {
 		{"SiH7", "Si-03.27"},
 		{"RIZ6", "RI-12.26"},
 		{"RIU6", "RI-09.26"},
+		{"EDZ6", "ED-12.26"},
+		{"EDU6", "ED-09.26"},
 		{"Si86000BJ6", "Si86000BJ6"},
 		{"SBER", "SBER"},
 		{"Si-12.26", "Si-12.26"},

@@ -341,6 +341,9 @@ func TestParseFuturesCode(t *testing.T) {
 	if !ok || root != "Si" || m != time.September {
 		t.Fatalf("SiU6 = %q %d %v %v", root, y, m, ok)
 	}
+	if root, _, m, ok := parseFuturesCode("EDU6"); !ok || root != "ED" || m != time.September {
+		t.Fatalf("EDU6 = %q %v %v", root, m, ok)
+	}
 	if _, _, _, ok := parseFuturesCode("Si86000BU6"); ok {
 		t.Fatal("option secid must not parse as futures")
 	}
@@ -707,6 +710,8 @@ func TestFrontFuturesSecID(t *testing.T) {
 		{time.Date(2027, 1, 10, 12, 0, 0, 0, time.UTC), "SiH7"},
 		{time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC), "RIU6"},
 		{time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC), "RIZ6"},
+		{time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC), "EDU6"},
+		{time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC), "EDZ6"},
 	}
 	for _, c := range cases {
 		root := c.want[:2]

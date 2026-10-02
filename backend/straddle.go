@@ -691,7 +691,7 @@ var futuresMonthCodes = map[byte]time.Month{
 
 // parseFuturesCode splits "SiU6" into root + expiry month/year. Pure.
 func parseFuturesCode(secid string) (root string, year int, month time.Month, ok bool) {
-	for _, r := range []string{"Si", "RI"} {
+	for _, r := range []string{"Si", "RI", "ED"} {
 		rest, found := strings.CutPrefix(secid, r)
 		if !found || len(rest) != 2 {
 			continue

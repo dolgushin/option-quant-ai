@@ -25,13 +25,13 @@ func NPrime(x float64) float64 {
 }
 
 // RiskFreeRate returns the pricing rate for an underlying: futures-style
-// margined options (Si, RI — daily variation margin, no funding) price at
+// margined options (Si, RI, ED — daily variation margin, no funding) price at
 // ~zero carry, while stock premium options (SBERP) use the key rate.
 // Pricing Si/RI with 16% breaks deep-DTE inversion (discounted intrinsic
 // above the market price) and skews deltas — see TestStraddleLiveMarks.
 func RiskFreeRate(symbol string) float64 {
 	switch symbol {
-	case "Si", "RI":
+	case "Si", "RI", "ED":
 		return 0.0
 	default:
 		return 0.16
