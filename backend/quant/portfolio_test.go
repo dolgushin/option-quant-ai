@@ -2,6 +2,8 @@ package quant
 
 import (
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -242,4 +244,57 @@ func TestRemoveTradeByID(t *testing.T) {
 		t.Fatal("want false for missing id")
 	}
 	resetState()
+}
+
+// TestStoreBackupFallback pins the 02.10.2026 lesson: every Persist rotates
+// the previous good copy to .bak, Load restores it (loudly) when the main
+// store is missing or corrupt — but a valid empty main is respected and
+// never overridden by a stale backup.
+func TestStoreBackupFallback(t *testing.T) {
+	oldFile := dataFile
+	dir := t.TempDir()
+	resetState()
+	SetDataFile(filepath.Join(dir, "portfolio.json"))
+	defer func() {
+		SetDataFile(oldFile)
+		resetState()
+	}()
+	SetPositions([]Position{{ID: "p1"}})
+	SetPositions([]Position{{ID: "p1"}, {ID: "p2"}})
+	SetPositions([]Position{{ID: "p1"}, {ID: "p2"}, {ID: "p3"}})
+	if _, err := os.Stat(dataFile + ".bak"); err != nil {
+		t.Fatalf("bak missing after persists: %v", err)
+	}
+	// Simulate external loss of the main file: .bak holds the previous
+	// good state (rotation lags one persist by design).
+	if err := os.Remove(dataFile); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	positionsMu.Lock()
+	activePositions = nil
+	tradeHistory = nil
+	positionsMu.Unlock()
+	LastStoreError = ""
+	Load()
+	if got := GetActivePositions(); len(got) != 2 {
+		t.Fatalf("restored positions = %d, want 2 (previous good)", len(got))
+	}
+	if LastStoreError == "" {
+		t.Fatal("restore must be reported")
+	}
+	// A valid empty main wins over a stale backup (intentional flat).
+	if err := os.WriteFile(dataFile, []byte(`{"positions":[],"trades":[]}`), 0600); err != nil {
+		t.Fatalf("write empty: %v", err)
+	}
+	positionsMu.Lock()
+	activePositions = []Position{{ID: "x"}}
+	positionsMu.Unlock()
+	LastStoreError = ""
+	Load()
+	if got := GetActivePositions(); len(got) != 0 {
+		t.Fatalf("valid empty must hold, got %d positions", len(got))
+	}
+	if LastStoreError != "" {
+		t.Fatalf("valid empty must not alarm: %q", LastStoreError)
+	}
 }

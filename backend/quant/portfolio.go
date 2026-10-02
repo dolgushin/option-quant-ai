@@ -180,10 +180,28 @@ func Load() {
 	if dataFile == "" {
 		return
 	}
-	b, err := os.ReadFile(dataFile)
-	if err != nil {
+	if b, err := os.ReadFile(dataFile); err == nil {
+		if loadState(b) {
+			return
+		}
+	} else if !os.IsNotExist(err) {
+		LastStoreError = fmt.Sprintf("хранилище не читается (%v)", err)
 		return
 	}
+	// Main store missing or corrupt: fall back to the previous good copy.
+	// A valid-but-empty main is respected (intentional flat) and never
+	// overridden by a stale backup.
+	if b, err := os.ReadFile(dataFile + ".bak"); err == nil {
+		if loadState(b) {
+			LastStoreError = fmt.Sprintf("основной стор недоступен, восстановлено из .bak")
+			return
+		}
+	}
+}
+
+// loadState unmarshals one store blob; corrupt blobs are renamed aside for
+// forensics. Returns true on success. Callers must hold positionsMu.
+func loadState(b []byte) bool {
 	var state struct {
 		InitialCapital float64    `json:"initial_capital"`
 		Positions      []Position `json:"positions"`
@@ -194,7 +212,7 @@ func Load() {
 		// keep a copy for manual recovery.
 		LastStoreError = fmt.Sprintf("хранилище повреждено (%v), файл сохранён как .broken", err)
 		_ = os.Rename(dataFile, fmt.Sprintf("%s.broken-%d", dataFile, time.Now().Unix()))
-		return
+		return false
 	}
 	if state.InitialCapital > 0 {
 		initialCapital = state.InitialCapital
@@ -205,6 +223,7 @@ func Load() {
 	if state.Trades != nil {
 		tradeHistory = state.Trades
 	}
+	return true
 }
 
 // Persist writes the current state to disk atomically (tmp file + rename).
@@ -231,6 +250,11 @@ func Persist() {
 	b, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return
+	}
+	// Keep the previous good copy: if the main store ever goes missing or
+	// corrupt outside the app (02.10.2026 incident), Load falls back to it.
+	if st, err := os.Stat(dataFile); err == nil && st.Size() > 0 {
+		_ = os.Rename(dataFile, dataFile+".bak")
 	}
 	tmp := dataFile + ".tmp"
 	if err := os.WriteFile(tmp, b, 0644); err != nil {
