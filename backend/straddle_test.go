@@ -931,3 +931,28 @@ func TestCloseOrphanStraddle(t *testing.T) {
 		t.Fatal("orphan shell must be gone")
 	}
 }
+
+// TestBookTooWide pins the open-time circuit breaker: wide two-sided books
+// refuse (phantom fills like bid 1000 / ask 7653), tight and one-sided
+// evening books pass.
+func TestBookTooWide(t *testing.T) {
+	mk := func(bids, asks [][2]float64) alor.AlorOrderbookResponse {
+		ob := alor.AlorOrderbookResponse{}
+		for _, b := range bids {
+			ob.Bids = append(ob.Bids, alor.OrderbookEntry{Price: b[0], Volume: int(b[1])})
+		}
+		for _, a := range asks {
+			ob.Asks = append(ob.Asks, alor.OrderbookEntry{Price: a[0], Volume: int(a[1])})
+		}
+		return ob
+	}
+	if bookTooWide(mk([][2]float64{{1400, 1}}, [][2]float64{{1450, 1}}), markLiveSpreadPct) {
+		t.Fatal("tight book must pass")
+	}
+	if !bookTooWide(mk([][2]float64{{1000, 1}}, [][2]float64{{7653, 1}}), markLiveSpreadPct) {
+		t.Fatal("6.6x wide book must refuse")
+	}
+	if bookTooWide(mk([][2]float64{{725, 6}}, nil), markLiveSpreadPct) {
+		t.Fatal("one-sided evening book must pass")
+	}
+}

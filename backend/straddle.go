@@ -456,6 +456,26 @@ func sellPriceFromBook(ob alor.AlorOrderbookResponse) (float64, bool) {
 	return bid, true
 }
 
+// bookTooWide reports a two-sided book whose spread exceeds a share of mid.
+// Filling straddle SELL legs out of such books (stale/crossed remnants like
+// bid 1000 / ask 7653) books phantom edge that the mark immediately takes
+// back. One-sided evening books pass (width unknowable — the existing
+// bid-only behavior stays). Pure — unit-tested.
+func bookTooWide(ob alor.AlorOrderbookResponse, maxSpreadPct float64) bool {
+	if len(ob.Bids) == 0 || len(ob.Asks) == 0 {
+		return false
+	}
+	bid, ask := ob.Bids[0].Price, ob.Asks[0].Price
+	if bid <= 0 || ask < bid {
+		return false
+	}
+	mid := (bid + ask) / 2
+	if mid <= 0 {
+		return false
+	}
+	return (ask-bid)/mid > maxSpreadPct
+}
+
 // alorStraddlePricer prices straddle legs from live Alor books.
 func alorStraddlePricer(callSecID, putSecID, futuresSecID string) (float64, float64, float64, error) {
 	if alorMarket == nil {
@@ -468,6 +488,9 @@ func alorStraddlePricer(callSecID, putSecID, futuresSecID string) (float64, floa
 		ob, err := alorMarket.FetchOrderbook("MOEX", secid)
 		if err != nil {
 			return 0, fmt.Errorf("стакан %s (%s): %v", name, secid, err)
+		}
+		if bookTooWide(ob, markLiveSpreadPct) {
+			return 0, fmt.Errorf("стакан %s (%s) слишком широкий (bid %.0f/ask %.0f) — дождись живого рынка", name, secid, ob.Bids[0].Price, ob.Asks[0].Price)
 		}
 		px, ok := sellPriceFromBook(ob)
 		if !ok {
