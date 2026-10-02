@@ -13,12 +13,12 @@ func TestNormalizeAlorSecID(t *testing.T) {
 	now := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
 	for _, tc := range [][2]string{
 		{"SiZ6", "Si-12.26"},
-		{"SiU6", "Si-09.26"},
-		{"SiH7", "Si-03.27"},
+		{"SiU6", "Si-9.26"},
+		{"SiH7", "Si-3.27"},
 		{"RIZ6", "RI-12.26"},
-		{"RIU6", "RI-09.26"},
+		{"RIU6", "RI-9.26"},
 		{"EDZ6", "ED-12.26"},
-		{"EDU6", "ED-09.26"},
+		{"EDU6", "ED-9.26"},
 		{"Si86000BJ6", "Si86000BJ6"},
 		{"SBER", "SBER"},
 		{"Si-12.26", "Si-12.26"},

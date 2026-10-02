@@ -79,7 +79,8 @@ func normalizeAlorSecID(secid string, now time.Time) string {
 		// No decade roll: listed futures live ≤ 1.5y, the digit maps into
 		// the current decade (a past contract stays past — correctly dead).
 		y := now.Year() - now.Year()%10 + int(rest[1]-'0')
-		return fmt.Sprintf("%s-%02d.%02d", root, mo, y%100)
+		// Alor wants the month WITHOUT a leading zero (Si-9.26, Si-12.26).
+		return fmt.Sprintf("%s-%d.%02d", root, mo, y%100)
 	}
 	return secid
 }

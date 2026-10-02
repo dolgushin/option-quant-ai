@@ -74,10 +74,10 @@ var (
 	// The user can switch between quarterly/monthly series via POST /api/v1/series.
 	// For SBER/SBERP the series is a premium equity option expiry (e.g. SBRF-2026-09-16).
 	selectedSeries = map[string]string{
-		"Si":    "SiU6",
-		"RI":    "RIU6",
+		"Si":    "SiZ6",
+		"RI":    "RIZ6",
 		"ED":    "EDZ6",
-		"CR":    "CRU6",
+		"CR":    "CRZ6",
 		"SBER":  "SBRF-2026-09-16",
 		"SBERP": "SBPR-2026-09-16",
 	}
