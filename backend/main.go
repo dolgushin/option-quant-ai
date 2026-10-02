@@ -3575,6 +3575,20 @@ func main() {
 	// Load persisted portfolio (positions, trades, capital) from disk.
 	quant.SetDataFile(filepath.Join(dataDir, "portfolio.json"))
 	quant.Load()
+	{
+		nPos, nTrd := len(quant.GetActivePositions()), len(quant.GetTrades())
+		log.Printf("portfolio: loaded %d positions, %d trades from %s", nPos, nTrd, filepath.Join(dataDir, "portfolio.json"))
+		if errStr := quant.LastStoreError; errStr != "" {
+			log.Printf("portfolio STORE PROBLEM: %s", errStr)
+		}
+		// Records without positions render as zero-rows everywhere. Shout
+		// instead of staying silent: an empty portfolio next to live module
+		// records means store loss (deletion, shared volume, disk).
+		need := len(openSpreads()) + len(openStraddles()) + len(openProtectGrids())
+		if nPos == 0 && need > 0 {
+			log.Printf("PORTFOLIO EMPTY but %d module records reference positions — possible store loss, check /app/data/portfolio.json", need)
+		}
+	}
 
 	subFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
