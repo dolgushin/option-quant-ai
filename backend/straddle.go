@@ -316,6 +316,7 @@ type straddleRecord struct {
 	// closeStraddlePosition. Old records closed before it read zeros.
 	ClosedAt      string  `json:"closed_at,omitempty"`
 	CloseReason   string  `json:"close_reason,omitempty"`
+	CloseTradeID  string  `json:"close_trade_id,omitempty"`  // journal trade of this close (exact delete link)
 	ClosePnL      float64 `json:"close_pnl,omitempty"`       // true total: live + settled
 	CloseLivePnL  float64 `json:"close_live_pnl,omitempty"`  // live legs only
 	CloseHedgePnL float64 `json:"close_hedge_pnl,omitempty"` // settled (netted) hedges
@@ -1834,6 +1835,7 @@ func closeStraddlePosition(s *straddleRecord, pos *quant.Position, reason string
 	s.Status = "CLOSED"
 	s.ClosedAt = time.Now().Format(time.RFC3339)
 	s.CloseReason = reason
+	s.CloseTradeID = trade.ID
 	s.ClosePnL = math.Round(trade.RealizedPnL*100) / 100
 	s.CloseLivePnL = math.Round(removed.PnL*100) / 100
 	s.CloseHedgePnL = hedgePnL
@@ -2049,6 +2051,88 @@ func straddleCloseHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	closeStraddlePosition(&s, pos, "закрыт вручную", true)
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+// matchStraddleCloseTrade finds the journal trade of a closed straddle: the
+// exact stored ID first, else the single trade with the same strategy+symbol
+// closed within ±5 min, opened within ±2 min and P&L within 1 ₽ (separate
+// manual closes of identical structures still tell apart). Returns "" when
+// ambiguous or absent — never guess.
+func matchStraddleCloseTrade(s straddleRecord, trades []quant.Trade) string {
+	for _, t := range trades {
+		if s.CloseTradeID != "" && t.ID == s.CloseTradeID {
+			return t.ID
+		}
+	}
+	end, err := time.Parse(time.RFC3339, s.ClosedAt)
+	if err != nil {
+		return ""
+	}
+	start, err := time.Parse(time.RFC3339, s.OpenedAt)
+	if err != nil {
+		return ""
+	}
+	found := ""
+	for _, t := range trades {
+		if !isStraddleTrade(t.Strategy) || t.Symbol != s.Symbol {
+			continue
+		}
+		dc := t.ClosedAt.Sub(end)
+		if dc < 0 {
+			dc = -dc
+		}
+		do := t.OpenedAt.Sub(start)
+		if do < 0 {
+			do = -do
+		}
+		if dc <= 5*time.Minute && do <= 2*time.Minute && math.Abs(t.RealizedPnL-s.ClosePnL) <= 1 {
+			if found != "" {
+				return "" // ambiguous — human must pick
+			}
+			found = t.ID
+		}
+	}
+	return found
+}
+
+// POST /api/v1/straddles/delete {"id":"str-..."} — remove one CLOSED
+// straddle and its journal trade (statistics aggregate live, so they
+// follow). Open records are refused (close them first).
+func straddleDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	s, found := straddleByID(req.ID)
+	if !found || s.Status != "CLOSED" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "straddle not found or not closed"})
+		return
+	}
+	tradeRemoved := false
+	if tradeID := matchStraddleCloseTrade(s, quant.GetTrades()); tradeID != "" {
+		tradeRemoved = quant.RemoveTradeByID(tradeID)
+	}
+	straddleMu.Lock()
+	kept := straddleStore[:0]
+	for _, rec := range straddleStore {
+		if rec.ID != s.ID {
+			kept = append(kept, rec)
+		}
+	}
+	straddleStore = kept
+	persistStraddles()
+	straddleMu.Unlock()
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true, "trade_removed": tradeRemoved,
+	})
 }
 
 // POST /api/v1/straddles/rules {"id":"str-...","rule":"delta_band"} —

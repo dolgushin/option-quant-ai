@@ -956,3 +956,87 @@ func TestBookTooWide(t *testing.T) {
 		t.Fatal("one-sided evening book must pass")
 	}
 }
+
+// TestMatchStraddleCloseTrade pins single-delete linkage: exact stored ID
+// wins, else the single trade matching strategy+symbol+close/open time+P&L;
+// twins and absence yield "" (never guess).
+func TestMatchStraddleCloseTrade(t *testing.T) {
+	mkTrade := func(id string, closed, opened time.Time, pnl float64) quant.Trade {
+		return quant.Trade{ID: id, Strategy: "Short Straddle", Symbol: "Si", ClosedAt: closed, OpenedAt: opened, RealizedPnL: pnl}
+	}
+	end, _ := time.Parse(time.RFC3339, "2026-10-02T14:20:00Z")
+	start, _ := time.Parse(time.RFC3339, "2026-10-02T10:00:00Z")
+	mkRec := func(id, tradeID string) straddleRecord {
+		return straddleRecord{ID: id, Symbol: "Si", OpenedAt: "2026-10-02T10:00:00Z", ClosedAt: "2026-10-02T14:20:00Z", ClosePnL: 19117, CloseTradeID: tradeID}
+	}
+	trades := []quant.Trade{
+		mkTrade("trd-1", end.Add(-time.Minute), start, 19117),
+		mkTrade("trd-2", end, start.Add(time.Hour), 19085),
+	}
+	if got := matchStraddleCloseTrade(mkRec("s", "trd-1"), trades); got != "trd-1" {
+		t.Fatalf("exact id = %q, want trd-1", got)
+	}
+	if got := matchStraddleCloseTrade(mkRec("s", ""), trades[:1]); got != "trd-1" {
+		t.Fatalf("fuzzy single = %q, want trd-1", got)
+	}
+	twins := []quant.Trade{
+		mkTrade("trd-a", end, start, 19117),
+		mkTrade("trd-b", end.Add(2*time.Minute), start.Add(time.Minute), 19117),
+	}
+	if got := matchStraddleCloseTrade(mkRec("s", ""), twins); got != "" {
+		t.Fatalf("twins = %q, want empty", got)
+	}
+	other := []quant.Trade{mkTrade("trd-9", end, start, 19117)}
+	other[0].Strategy = "Protective Grid"
+	if got := matchStraddleCloseTrade(mkRec("s", ""), other); got != "" {
+		t.Fatalf("foreign strategy = %q, want empty", got)
+	}
+}
+
+// TestStraddleDeleteHandler pins single delete: a closed record and its
+// linked trade go away together; open and missing records are refused.
+func TestStraddleDeleteHandler(t *testing.T) {
+	straddleMu.Lock()
+	old := straddleStore
+	straddleStore = []straddleRecord{
+		{ID: "str-del", Symbol: "Si", Status: "CLOSED", OpenedAt: "2026-10-02T10:00:00Z", ClosedAt: "2026-10-02T14:20:00Z", ClosePnL: 100, CloseTradeID: "trd-del"},
+		{ID: "str-open", Symbol: "Si", Status: "OPEN"},
+	}
+	straddleMu.Unlock()
+	defer func() {
+		straddleMu.Lock()
+		straddleStore = old
+		straddleMu.Unlock()
+	}()
+	end, _ := time.Parse(time.RFC3339, "2026-10-02T14:20:00Z")
+	quant.AddTrade(quant.Trade{ID: "trd-del", Strategy: "Short Straddle", Symbol: "Si", ClosedAt: end, RealizedPnL: 100})
+	defer quant.RemoveTradeByID("trd-del")
+	post := func(body string) map[string]interface{} {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/straddles/delete", strings.NewReader(body))
+		rr := httptest.NewRecorder()
+		straddleDeleteHandler(rr, req)
+		var out map[string]interface{}
+		if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+			t.Fatalf("bad json: %v", err)
+		}
+		return out
+	}
+	if d := post(`{"id":"str-open"}`); d["success"] != false {
+		t.Fatalf("open delete accepted: %v", d)
+	}
+	if d := post(`{"id":"str-zzz"}`); d["success"] != false {
+		t.Fatalf("missing delete accepted: %v", d)
+	}
+	if d := post(`{"id":"str-del"}`); d["success"] != true || d["trade_removed"] != true {
+		t.Fatalf("closed delete failed: %v", d)
+	}
+	if _, found := straddleByID("str-del"); found {
+		t.Fatal("deleted record still present")
+	}
+	for _, tr := range quant.GetTrades() {
+		if tr.ID == "trd-del" {
+			t.Fatal("deleted trade still present")
+		}
+	}
+}

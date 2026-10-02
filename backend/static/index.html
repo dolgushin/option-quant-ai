@@ -2379,7 +2379,8 @@
                         <td class="py-1 pr-2 text-right">${s.days || 0}</td>
                         <td class="py-1 pr-2 text-right font-bold ${cls}">${sgn(s.close_pnl)}</td>
                         <td class="py-1 pr-2 text-right">${sgn(s.close_opt_pnl)}</td>
-                        <td class="py-1 pr-2 text-right" title="закрытые ${(s.close_hedge_pnl || 0).toLocaleString('ru-RU')} + открытые на момент закрытия ${(s.close_fut_pnl || 0).toLocaleString('ru-RU')}">${sgn(hedgeSum)}</td></tr>`;
+                        <td class="py-1 pr-2 text-right" title="закрытые ${(s.close_hedge_pnl || 0).toLocaleString('ru-RU')} + открытые на момент закрытия ${(s.close_fut_pnl || 0).toLocaleString('ru-RU')}">${sgn(hedgeSum)}</td>
+                        <td class="py-1 text-right"><button onclick="deleteStraddle('${s.id}')" class="px-2 py-0.5 text-[10px] bg-slate-700 hover:bg-rose-700 text-white rounded transition" title="Убрать запись и её трейд из статистики">🗑</button></td></tr>`;
                 });
                 box.innerHTML = html + '</tbody></table>';
             } catch (e) { box.innerHTML = ''; }
@@ -3028,6 +3029,17 @@
                 const d = await res.json();
                 if (!d.success) { alert('❌ ' + (d.error || 'не применено')); return; }
                 renderStraddleProfile(id);
+            } catch (e) { alert('❌ ' + e.message); }
+        }
+
+        async function deleteStraddle(id) {
+            if (!confirm('Удалить закрытый стрэддл и его трейд из статистики?')) return;
+            try {
+                const res = await fetch('/api/v1/straddles/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+                const d = await res.json();
+                if (!d.success) { alert('❌ ' + (d.error || 'не удалено')); return; }
+                alert(`✅ Удалено${d.trade_removed ? ' (трейд тоже убран из статистики)' : ' (трейд не найден — только запись)'}`);
+                loadStraddleHistory();
             } catch (e) { alert('❌ ' + e.message); }
         }
 
