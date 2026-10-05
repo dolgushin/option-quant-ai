@@ -3399,8 +3399,10 @@
             const box = document.getElementById('spr-plan-box');
             box.classList.remove('hidden');
             document.getElementById('spr-plan-title').innerText = '⏳ Построение...';
+            const ctl = new AbortController();
+            const timer = setTimeout(() => ctl.abort(), 60000);
             try {
-                const res = await fetch(`/api/v1/spreads/plan?symbol=${symbol}&type=${currentSpreadType}&qty=${qty}&expiry=${expiry}`);
+                const res = await fetch(`/api/v1/spreads/plan?symbol=${symbol}&type=${currentSpreadType}&qty=${qty}&expiry=${expiry}`, { signal: ctl.signal });
                 const p = await res.json();
                 if (p.error) {
                     document.getElementById('spr-plan-title').innerText = '⚠ Ошибка';
@@ -3439,7 +3441,9 @@
                 loadSpreadAdvice(symbol, currentSpreadType, expiry, qty);
             } catch (e) {
                 document.getElementById('spr-plan-title').innerText = '⚠ Ошибка сети';
-                document.getElementById('spr-plan-err').innerText = e.message;
+                document.getElementById('spr-plan-err').innerText = e.name === 'AbortError' ? 'превышено время ожидания (60 с) — бэкенд не ответил' : e.message;
+            } finally {
+                clearTimeout(timer);
             }
         }
 
