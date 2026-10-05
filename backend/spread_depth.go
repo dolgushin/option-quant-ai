@@ -57,8 +57,10 @@ func spreadDepthHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Locate the linked position and collect its option legs.
 	var optLegs []struct {
-		SecID string
-		Side  string
+		SecID  string
+		Side   string
+		Strike float64
+		IsCall bool
 	}
 	posFound := false
 	for _, p := range quant.GetActivePositions() {
@@ -69,9 +71,11 @@ func spreadDepthHandler(w http.ResponseWriter, r *http.Request) {
 		for _, l := range p.Legs {
 			if l.Kind == "OPTION" && l.SecID != "" {
 				optLegs = append(optLegs, struct {
-					SecID string
-					Side  string
-				}{l.SecID, l.Side})
+					SecID  string
+					Side   string
+					Strike float64
+					IsCall bool
+				}{l.SecID, l.Side, l.Strike, l.IsCall})
 			}
 		}
 		break
@@ -92,7 +96,7 @@ func spreadDepthHandler(w http.ResponseWriter, r *http.Request) {
 	var errs []string
 	for _, ol := range optLegs {
 		leg := spreadLegDepth{SecID: ol.SecID, Side: ol.Side, Src: "alor"}
-		ob, err := alorMarket.FetchOrderbook("MOEX", ol.SecID)
+		ob, err := alorBookForLeg(rec.Symbol, ol.Strike, ol.IsCall, rec.Expiry, ol.SecID)
 		if err != nil {
 			errs = append(errs, ol.SecID+": "+err.Error())
 			continue

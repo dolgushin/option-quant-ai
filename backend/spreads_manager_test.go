@@ -343,7 +343,7 @@ func TestBookCloseValueNilMarket(t *testing.T) {
 		{SecID: "Si86000BU6", Side: "SELL", Kind: "OPTION", Quantity: 4},
 		{SecID: "Si85500BU6", Side: "BUY", Kind: "OPTION", Quantity: 4},
 	}
-	total, perLeg, ok := bookCloseValue(legs, 1)
+	total, perLeg, ok := bookCloseValue("Si", "2026-12-17", legs, 1)
 	if ok {
 		t.Fatalf("nil market must not be ok (total %v, legs %v)", total, perLeg)
 	}

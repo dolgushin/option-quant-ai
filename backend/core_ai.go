@@ -345,7 +345,7 @@ func priceEntryAtExecutable(plan *spreadPlan) {
 	changed := false
 	for i := range plan.Legs {
 		l := &plan.Legs[i]
-		ob, err := alorMarket.FetchOrderbook("MOEX", l.SecID)
+		ob, err := alorBookForLeg(plan.Symbol, l.Strike, l.IsCall, plan.Expiry, l.SecID)
 		if err != nil {
 			continue
 		}

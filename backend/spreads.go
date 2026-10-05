@@ -66,21 +66,6 @@ func shortLegIsCall(spreadType string) (isCall, ok bool) {
 
 // alorLegMid returns the live Alor book mid for an option, or 0 when the
 // book is not two-sided. Plan entries prefer live market over MOEX/stale.
-func alorLegMid(secid string) float64 {
-	if alorMarket == nil || secid == "" {
-		return 0
-	}
-	ob, err := alorMarket.FetchOrderbook("MOEX", secid)
-	if err != nil || len(ob.Bids) == 0 || len(ob.Asks) == 0 {
-		return 0
-	}
-	bid, ask := ob.Bids[0].Price, ob.Asks[0].Price
-	if bid <= 0 || ask < bid {
-		return 0
-	}
-	return (bid + ask) / 2
-}
-
 // spreadLeg is a planned/executed leg of a vertical spread.
 type spreadLeg struct {
 	SecID       string  `json:"secid"`
@@ -396,14 +381,10 @@ func buildVerticalSpread(symbol, spreadType, expiry string, qty int) (*spreadPla
 		if opt == nil {
 			return nil, fmt.Errorf("%s: option not found at %v", meta.Display, strike)
 		}
-		// Live market first: Alor book mid, then MOEX. A stale PrevPrice
-		// is not a market price — refuse rather than corrupt the P&L.
-		last := alorLegMid(opt.SecID)
-		if last <= 0 {
-			if m, _, _, _ := moexOptionQuote(opt.SecID); m > 0 {
-				last = m
-			}
-		}
+		// Live market first: Alor book mid (with directory remap), no MOEX.
+		// A stale PrevPrice is not a market price — refuse rather than
+		// corrupt the P&L.
+		last := alorLegMidEx(symbol, strike, sp.isCall, expiry, opt.SecID)
 		if last <= 0 {
 			// Opening or rolling into a leg with no market price would record
 			// entry=0 and corrupt the P&L — refuse instead.
@@ -563,12 +544,7 @@ func buildSpreadFromLegs(symbol, expiry string, qty int, legs []rollLegSpec, isD
 		if opt == nil {
 			return nil, fmt.Errorf("option not found at %v", sp.TargetStrike)
 		}
-		last := alorLegMid(opt.SecID)
-		if last <= 0 {
-			if m, _, _, _ := moexOptionQuote(opt.SecID); m > 0 {
-				last = m
-			}
-		}
+		last := alorLegMidEx(symbol, sp.TargetStrike, sp.IsCall, expiry, opt.SecID)
 		if last <= 0 {
 			return nil, fmt.Errorf("нет живой цены для %s — операция отменена", opt.SecID)
 		}
@@ -988,7 +964,7 @@ func spreadListHandler(w http.ResponseWriter, r *http.Request) {
 				// Book-close: what closing the spread would actually cost
 				// using the Alor order book (shorts bought back at ask, longs
 				// sold at bid). Only meaningful when Alor is configured.
-				if bookVal, bookLegs, bookOK := bookCloseValue(p.Legs, mult); bookOK {
+				if bookVal, bookLegs, bookOK := bookCloseValue(s.Symbol, s.Expiry, p.Legs, mult); bookOK {
 					item["book_close_value"] = math.Round(bookVal*100) / 100
 					bookPnl := bookVal - p.EntryValue
 					item["book_close_pnl"] = math.Round(bookPnl*100) / 100
@@ -1126,12 +1102,13 @@ func quoteIsStale(updated, src string) bool {
 // bookClosePrice returns the executable close price and depth for a single
 // option leg. To CLOSE a position you reverse the opening trade: a short
 // (SELL) leg is bought back at the best ask; a long (BUY) leg is sold at the
-// best bid. Returns 0 if Alor is unavailable or the relevant side is empty.
-func bookClosePrice(leg quant.PositionLeg) (price float64, depth int) {
+// best bid. Books resolve through the Alor directory (no MOEX). Returns 0 if
+// Alor is unavailable or the relevant side is empty.
+func bookClosePrice(symbol, expiry string, leg quant.PositionLeg) (price float64, depth int) {
 	if alorMarket == nil || leg.Kind != "OPTION" || leg.SecID == "" {
 		return 0, 0
 	}
-	ob, err := alorMarket.FetchOrderbook("MOEX", leg.SecID)
+	ob, err := alorBookForLeg(symbol, leg.Strike, leg.IsCall, expiry, leg.SecID)
 	if err != nil {
 		return 0, 0
 	}
@@ -1159,7 +1136,7 @@ func bookClosePrice(leg quant.PositionLeg) (price float64, depth int) {
 // stack up past the UI timeout on multi-leg spreads. Each goroutine writes
 // only its own result slot (and the Alor client is mutex-guarded), so this
 // is race-safe by construction; accumulation stays ordered.
-func bookCloseValue(legs []quant.PositionLeg, mult float64) (total float64, perLeg []bookCloseLeg, ok bool) {
+func bookCloseValue(symbol, expiry string, legs []quant.PositionLeg, mult float64) (total float64, perLeg []bookCloseLeg, ok bool) {
 	type res struct {
 		price float64
 		depth int
@@ -1170,7 +1147,7 @@ func bookCloseValue(legs []quant.PositionLeg, mult float64) (total float64, perL
 		wg.Add(1)
 		go func(idx int, leg quant.PositionLeg) {
 			defer wg.Done()
-			p, d := bookClosePrice(leg)
+			p, d := bookClosePrice(symbol, expiry, leg)
 			out[idx] = res{p, d}
 		}(i, l)
 	}
@@ -1534,7 +1511,7 @@ func spreadRollPreviewHandler(w http.ResponseWriter, r *http.Request) {
 		repricePosition(pos)
 		quant.SavePosition(*pos)
 		for _, l := range pos.Legs {
-			q := optionQuoteForDepth(l.SecID)
+			q, _ := cachedAlorQuote(s.Symbol, l.Strike, l.IsCall, s.Expiry, l.SecID)
 			ml := map[string]interface{}{
 				"secid": l.SecID, "side": l.Side, "kind": l.Kind,
 				"strike": l.Strike, "is_call": l.IsCall,
@@ -1664,14 +1641,6 @@ func posPnL(p *quant.Position) float64 {
 
 // optionQuoteForDepth returns the cached quote (mark/bid/ask) for an option,
 // preferring a fresh live row.
-func optionQuoteForDepth(secid string) optionQuoteEx {
-	q, ok := cachedOptionQuoteEx(secid)
-	if !ok {
-		return optionQuoteEx{}
-	}
-	return q
-}
-
 // optionChainMenu lists the tradeable strikes of a leg (side/call) in a series
 // with full top-of-book liquidity for each strike and a best-effort Alor depth.
 func optionChainMenu(symbol, expiry, side string, isCall bool, anchorStrike float64) []map[string]interface{} {
@@ -1715,7 +1684,7 @@ func optionChainMenu(symbol, expiry, side string, isCall bool, anchorStrike floa
 		if opt == nil {
 			continue
 		}
-		q := optionQuoteForDepth(opt.SecID)
+		q, _ := cachedAlorQuote(symbol, st, isCall, expiry, opt.SecID)
 		spreadPct := 0.0
 		if q.Bid > 0 && q.Offer >= q.Bid {
 			mid := (q.Bid + q.Offer) / 2
@@ -1731,9 +1700,9 @@ func optionChainMenu(symbol, expiry, side string, isCall bool, anchorStrike floa
 			"spread_pct": spreadPct,
 			"depth":      []orderBookLevel{}, "depth_src": "iss",
 		}
-		// Best-effort Alor depth for this option via its ISS secid as symbol.
+		// Best-effort Alor depth for this option (directory remap inside).
 		if alorMarket != nil {
-			if ob, err := alorMarket.FetchOrderbook("MOEX", opt.SecID); err == nil {
+			if ob, err := alorBookForLeg(symbol, st, isCall, expiry, opt.SecID); err == nil {
 				levels := []orderBookLevel{}
 				for _, b := range ob.Bids {
 					levels = append(levels, orderBookLevel{Price: b.Price, Volume: b.Volume, Side: "bid"})

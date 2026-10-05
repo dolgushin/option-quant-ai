@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"option-quant-ai/alor"
 )
@@ -109,5 +110,36 @@ func TestResolveOptionEntry(t *testing.T) {
 		stubDetail(map[string][3]string{}),
 	); err == nil {
 		t.Fatal("non-options must refuse")
+	}
+}
+
+// TestAlorCachedResolve pins the remap cache: seeded hits serve without
+// network, misses without a client refuse.
+func TestAlorCachedResolve(t *testing.T) {
+	if alorMarket != nil {
+		t.Skip("requires no Alor client configured")
+	}
+	alorSecidMu.Lock()
+	old := alorSecidCache
+	alorSecidCache = map[string]alorSecidEntry{
+		"Si|86000|true|2026-12-17": {At: time.Now(), SecID: "ALOR-CALL-1"},
+	}
+	alorSecidMu.Unlock()
+	defer func() {
+		alorSecidMu.Lock()
+		alorSecidCache = old
+		alorSecidMu.Unlock()
+	}()
+	if got, err := alorCachedResolve("Si", 86000, true, "2026-12-17"); err != nil || got != "ALOR-CALL-1" {
+		t.Fatalf("seeded hit = %q, %v; want ALOR-CALL-1, nil", got, err)
+	}
+	if _, err := alorCachedResolve("Si", 85000, true, "2026-12-17"); err == nil {
+		t.Fatal("miss without client must refuse")
+	}
+	if _, err := alorBookForLeg("Si", 86000, true, "2026-12-17", "Si86000BJ6"); err == nil {
+		t.Fatal("book without client must refuse")
+	}
+	if alorLegMidEx("Si", 86000, true, "2026-12-17", "Si86000BJ6") != 0 {
+		t.Fatal("mid without client must be 0")
 	}
 }

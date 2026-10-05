@@ -632,6 +632,23 @@ func straddleOpenHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	spot, _ := getSpotPrice(req.Symbol)
+	// Alor-only: store Alor-native leg secids (books/quotes resolve without
+	// MOEX). Best effort — failures keep the original (runtime quote/book
+	// remap still applies to old-format legs).
+	if req.CallSecID != "" && req.Strike > 0 && req.Expiry != "" {
+		if code, err := alorCachedResolve(req.Symbol, req.Strike, true, req.Expiry); err == nil {
+			req.CallSecID = code
+		} else {
+			log.Printf("straddle open: call remap failed (%v), keeping %s", err, req.CallSecID)
+		}
+	}
+	if req.PutSecID != "" && construction != straddleSynthetic && req.Strike > 0 && req.Expiry != "" {
+		if code, err := alorCachedResolve(req.Symbol, req.Strike, false, req.Expiry); err == nil {
+			req.PutSecID = code
+		} else {
+			log.Printf("straddle open: put remap failed (%v), keeping %s", err, req.PutSecID)
+		}
+	}
 	withFutures := construction == straddleCovered
 	var plan *straddlePlan
 	var err error
@@ -1040,18 +1057,27 @@ func discoverStraddleLegs(symbol string, strike float64, expiry string) (calls, 
 		}
 	}
 
-	// MOEX exact path.
+	// MOEX exact path (secids remapped to Alor-native best-effort; books
+	// resolve at runtime for the rest).
 	if strike > 0 {
 		if chain := moexOptionsForAsset(symbol, expiry); len(chain) > 0 {
 			if strikes, findOpt, err := optionChainFor(symbol, expiry); err == nil && len(strikes) > 0 {
 				_ = strikes
 				if c := findOpt(strike, true); c != nil {
-					leg := discoverWithBook(c.SecID)
+					secid := c.SecID
+					if code, rerr := alorCachedResolve(symbol, strike, true, expiry); rerr == nil {
+						secid = code
+					}
+					leg := discoverWithBook(secid)
 					leg.Kind = "call"
 					calls = append(calls, leg)
 				}
 				if p := findOpt(strike, false); p != nil {
-					leg := discoverWithBook(p.SecID)
+					secid := p.SecID
+					if code, rerr := alorCachedResolve(symbol, strike, false, expiry); rerr == nil {
+						secid = code
+					}
+					leg := discoverWithBook(secid)
 					leg.Kind = "put"
 					puts = append(puts, leg)
 				}

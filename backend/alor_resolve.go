@@ -26,6 +26,73 @@ var (
 	alorDirCache = map[string]alorDirEntry{}
 )
 
+// alorSecidCache maps (symbol|strike|call|expiry) → Alor-native secid (1h
+// TTL — series don't roll intraday). Spares repeat detail lookups on every
+// book pull.
+var (
+	alorSecidMu    sync.Mutex
+	alorSecidCache = map[string]alorSecidEntry{}
+)
+
+type alorSecidEntry struct {
+	At    time.Time
+	SecID string
+}
+
+func alorCachedResolve(symbol string, strike float64, isCall bool, expiry string) (string, error) {
+	key := fmt.Sprintf("%s|%g|%v|%s", symbol, strike, isCall, expiry)
+	alorSecidMu.Lock()
+	e, ok := alorSecidCache[key]
+	alorSecidMu.Unlock()
+	if ok && time.Since(e.At) < time.Hour {
+		return e.SecID, nil
+	}
+	code, err := alorResolveOptionSecID(symbol, strike, isCall, expiry)
+	if err != nil {
+		return "", err
+	}
+	alorSecidMu.Lock()
+	alorSecidCache[key] = alorSecidEntry{At: time.Now(), SecID: code}
+	alorSecidMu.Unlock()
+	return code, nil
+}
+
+// alorBookForLeg fetches the order book of an option leg: the stored secid
+// first (zero extra traffic when Alor accepts it), directory-remapped Alor
+// secid second, loud refusal last. Never MOEX.
+func alorBookForLeg(symbol string, strike float64, isCall bool, expiry, secid string) (alor.AlorOrderbookResponse, error) {
+	var empty alor.AlorOrderbookResponse
+	if alorMarket == nil {
+		return empty, fmt.Errorf("alor не настроен")
+	}
+	if ob, err := alorMarket.FetchOrderbook("MOEX", secid); err == nil {
+		return ob, nil
+	}
+	code, err := alorCachedResolve(symbol, strike, isCall, expiry)
+	if err != nil {
+		return empty, err
+	}
+	if ob, err := alorMarket.FetchOrderbook("MOEX", code); err == nil {
+		log.Printf("alor book remap %s → %s", secid, code)
+		return ob, nil
+	} else {
+		return empty, err
+	}
+}
+
+// alorLegMidEx is alorLegMid via the remapping book path (mid or 0).
+func alorLegMidEx(symbol string, strike float64, isCall bool, expiry, secid string) float64 {
+	ob, err := alorBookForLeg(symbol, strike, isCall, expiry, secid)
+	if err != nil || len(ob.Bids) == 0 || len(ob.Asks) == 0 {
+		return 0
+	}
+	bid, ask := ob.Bids[0].Price, ob.Asks[0].Price
+	if bid <= 0 || ask < bid {
+		return 0
+	}
+	return (bid + ask) / 2
+}
+
 // alorDirEntry is one cached securities directory (per root, 15 min TTL —
 // series don't roll intraday).
 type alorDirEntry struct {
