@@ -263,8 +263,9 @@ func (m *MarketClient) RawGet(path, rawQuery string) (int, []byte, error) {
 	return resp.StatusCode, body, nil
 }
 
-// FetchOptionChain fetches option symbols or derivatives for underlying root (Si or RI)
-func (m *MarketClient) FetchOptionChain(rootSymbol string) ([]string, error) {
+// FetchSecurities returns full directory entries for the search root.
+// FetchOptionChain is the same endpoint reduced to symbols.
+func (m *MarketClient) FetchSecurities(rootSymbol string) ([]AlorSecurityResponse, error) {
 	m.throttle()
 	token, err := m.authClient.GetAccessToken()
 	if err != nil {
@@ -293,6 +294,15 @@ func (m *MarketClient) FetchOptionChain(rootSymbol string) ([]string, error) {
 
 	var securities []AlorSecurityResponse
 	if err := json.NewDecoder(resp.Body).Decode(&securities); err != nil {
+		return nil, fmt.Errorf("failed to decode securities: %w", err)
+	}
+	return securities, nil
+}
+
+// FetchOptionChain fetches option symbols or derivatives for underlying root (Si or RI)
+func (m *MarketClient) FetchOptionChain(rootSymbol string) ([]string, error) {
+	securities, err := m.FetchSecurities(rootSymbol)
+	if err != nil {
 		// might be single object or array
 		return []string{rootSymbol + "C50000"}, nil
 	}

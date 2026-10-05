@@ -75,32 +75,47 @@ func seriesIVForExpiry(symbol, expiry string) float64 {
 	}
 	t := float64(dte) / 365.0
 
-	chain := moexOptionsForAsset(symbol, expiry)
+	chain, err := alorOptionDirectory(symbol)
+	if err != nil || len(chain) == 0 {
+		return 0.30
+	}
 	samples := make(chan float64, len(chain))
 	sem := make(chan struct{}, 8)
 	var wg sync.WaitGroup
-	for _, o := range chain {
-		if o.Strike <= 0 {
+	n := 0
+	for _, e := range chain {
+		// Near-the-money only: keep only fresh, tight books so the
+		// derived vol is not poisoned by stale quotes. Expiry is not
+		// scoped here — the median over near-ATM tenors is a vol level,
+		// and theo marks fall back to realized/0.30 below.
+		strike := alorEntryStrike(e)
+		if strike <= 0 {
 			continue
 		}
-		// Near-the-money only: keep only fresh, tight books so the
-		// derived vol is not poisoned by stale quotes.
-		mn := o.Strike / spot
+		mn := strike / spot
 		if mn < 0.95 || mn > 1.05 {
 			continue
 		}
-		o := o
+		kind := alorEntryKind(e)
+		if kind != "call" && kind != "put" {
+			continue
+		}
+		if n >= 24 {
+			break
+		}
+		n++
+		e := e
 		sem <- struct{}{}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			q, ok := cachedOptionQuoteEx(o.SecID)
-			if !ok || !quoteIsLive(q) {
+			q, err := alorOptionQuoteEx(e.Symbol)
+			if err != nil || q.Price <= 0 || !quoteIsLive(q) {
 				return // dead / stale book — skip
 			}
 			mid := (q.Bid + q.Offer) / 2
-			iv := quant.ImpliedVolatility(o.IsCall, mid, spot, o.Strike, t, quant.RiskFreeRate(symbol))
+			iv := quant.ImpliedVolatility(kind == "call", mid, spot, strike, t, quant.RiskFreeRate(symbol))
 			if iv > 0.02 && iv <= 3 {
 				samples <- iv
 			}
@@ -141,8 +156,10 @@ func optionMark(secid string, isCall bool, strike, spot float64, tYears float64,
 // optionMarkWithSrc is optionMark plus the provenance of the mark:
 // "mid" — live two-sided book, "last" — clean single-sided trade, "theo" —
 // Black-Scholes fair value at the series IV, "none" — nothing usable.
+// Alor-only: MOEX fallback deleted; unresolvable legs refuse (explicit
+// "none", never a guessed price).
 func optionMarkWithSrc(secid string, isCall bool, strike, spot float64, tYears float64, symbol, expiry string) (float64, string) {
-	if q, ok := cachedOptionQuoteEx(secid); ok {
+	if q, ok := cachedAlorQuote(symbol, strike, isCall, expiry, secid); ok {
 		if quoteIsLive(q) {
 			return q.Price, "mid"
 		}
