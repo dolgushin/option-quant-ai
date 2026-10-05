@@ -1882,7 +1882,14 @@
             }
             const z = d.z || 0;
             const zCls = Math.abs(z) >= 2 ? 'text-rose-400' : Math.abs(z) >= 1 ? 'text-amber-300' : 'text-emerald-400';
-            if (box) box.innerHTML = `Пара <span class="text-slate-100 font-bold">${d.a}/${d.b}</span> · видно ${times.length} из ${total} · расхождение сейчас: <span class="text-slate-100 font-bold">${d.spread_last} п.п.</span> · среднее: ${d.spread_mean} · σ: ${d.spread_std} · z: <span class="${zCls} font-bold">${z > 0 ? '+' : ''}${d.z}</span>`;
+            const hl = d.half_life || 0;
+            const hlTxt = hl > 0 ? `~${Math.round(hl)} баров` : '<span class="text-rose-400">тренд — z не торгуем</span>';
+            let sig = '<span class="text-slate-500">вне рынка</span>';
+            if (d.signal && d.signal !== 'none') {
+                const hot = d.signal === 'short_spread' ? 'bg-rose-500/20 text-rose-300 border-rose-500/40' : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40';
+                sig = `<span class="px-2 py-0.5 rounded border font-bold ${hot}">⚡ ${d.signal_text}</span>`;
+            }
+            if (box) box.innerHTML = `Пара <span class="text-slate-100 font-bold">${d.a}/${d.b}</span> · видно ${times.length} из ${total} · расхождение сейчас: <span class="text-slate-100 font-bold">${d.spread_last} п.п.</span> · среднее: ${d.spread_mean} · σ: ${d.spread_std} · z: <span class="${zCls} font-bold">${z > 0 ? '+' : ''}${d.z}</span> · β: ${d.beta === undefined ? '—' : d.beta} · возврат: ${hlTxt} · ${sig}`;
             if (canvas && typeof Chart !== 'undefined' && times.length) {
                 if (rgArbChart) rgArbChart.destroy();
                 rgArbChart = new Chart(canvas.getContext('2d'), {

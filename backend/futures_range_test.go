@@ -245,3 +245,51 @@ func TestArbStats(t *testing.T) {
 		t.Fatalf("empty stats must be zero")
 	}
 }
+
+func TestArbBeta(t *testing.T) {
+	// Exact ×1.5/×2 steps in A, ×2/×3 in B → rb is exactly 2×ra → beta 2.
+	a := []float64{100, 150, 300, 450, 900, 1350}
+	b := []float64{100, 200, 600, 1200, 3600, 7200}
+	if beta := arbBeta(a, b); math.Abs(beta-2) > 1e-9 {
+		t.Fatalf("beta = %v, want 2", beta)
+	}
+	if arbBeta(a, a) != 1 {
+		t.Fatalf("self beta must be 1")
+	}
+	if arbBeta([]float64{1, 2}, []float64{1, 2}) != 0 {
+		t.Fatalf("short series must give 0")
+	}
+	if arbBeta([]float64{100, 100, 100, 100, 100}, []float64{1, 2, 3, 4, 5}) != 0 {
+		t.Fatalf("flat leg must give 0")
+	}
+}
+
+func TestArbHalfLife(t *testing.T) {
+	// Exact AR(1) with b=-0.5: hl = ln2/0.5 ≈ 1.386.
+	s := []float64{8}
+	for len(s) < 30 {
+		s = append(s, s[len(s)-1]*0.5)
+	}
+	if hl := arbHalfLife(s); math.Abs(hl-1.386294) > 0.01 {
+		t.Fatalf("hl = %v, want ~1.386", hl)
+	}
+	// Random walk-ish drift must not claim reversion.
+	if hl := arbHalfLife([]float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}); hl != 0 {
+		t.Fatalf("trending spread hl = %v, want 0", hl)
+	}
+	if arbHalfLife([]float64{1, 2, 3}) != 0 {
+		t.Fatalf("short series must give 0")
+	}
+}
+
+func TestRangeNotional(t *testing.T) {
+	if n := rangeNotional("Si", 86000, 86); n != 86000 {
+		t.Fatalf("Si notional = %v", n)
+	}
+	if n := rangeNotional("ED", 1.15, 86); math.Abs(n-98900) > 1 {
+		t.Fatalf("ED notional = %v", n)
+	}
+	if rangeNotional("RI", 100, 86) != 0 || rangeNotional("ED", 1.15, 0) != 0 {
+		t.Fatalf("unknown must give 0")
+	}
+}

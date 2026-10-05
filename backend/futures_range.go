@@ -949,21 +949,17 @@ func rangeIntradayPayload(symbol, secid string, tf int, bars []rangeBar) map[str
 
 // ---- pair arbitrage: two legs rebased to 100 on one chart ----
 
-// arbAlign joins two legs' closes on common timestamps (inner join, oldest
-// first) and rebases each leg to 100 at the window start, so instruments of
-// wildly different magnitude (Si ~85000, ED ~1.15) share one scale without
-// any manual ×10/×100 hacks. The gap between the lines is the divergence in
-// percentage points. Pure — covered by unit tests.
-func arbAlign(a, b []rangeOHLC) (times []string, aIdx, bIdx, spread []float64) {
-	ma := map[string]float64{}
+// arbJoin inner-joins two legs' closes on common timestamps (oldest first).
+// Shared by the rebased chart builder and the beta estimator.
+func arbJoin(a, b []rangeOHLC) (keys []string, ma, mb map[string]float64) {
+	ma = map[string]float64{}
 	for _, c := range a {
 		ma[c.Date.Format("2006-01-02 15:04")] = c.Close
 	}
-	mb := map[string]float64{}
+	mb = map[string]float64{}
 	for _, c := range b {
 		mb[c.Date.Format("2006-01-02 15:04")] = c.Close
 	}
-	keys := []string{}
 	for k := range ma {
 		if _, ok := mb[k]; ok {
 			keys = append(keys, k)
@@ -976,6 +972,16 @@ func arbAlign(a, b []rangeOHLC) (times []string, aIdx, bIdx, spread []float64) {
 			}
 		}
 	}
+	return keys, ma, mb
+}
+
+// arbAlign joins two legs' closes on common timestamps (inner join, oldest
+// first) and rebases each leg to 100 at the window start, so instruments of
+// wildly different magnitude (Si ~85000, ED ~1.15) share one scale without
+// any manual ×10/×100 hacks. The gap between the lines is the divergence in
+// percentage points. Pure — covered by unit tests.
+func arbAlign(a, b []rangeOHLC) (times []string, aIdx, bIdx, spread []float64) {
+	keys, ma, mb := arbJoin(a, b)
 	if len(keys) == 0 {
 		return nil, nil, nil, nil
 	}
@@ -1015,6 +1021,87 @@ func arbStats(spread []float64) (last, mean, std, z float64) {
 		z = (last - mean) / std
 	}
 	return last, mean, std, z
+}
+
+// arbBeta estimates how many percent leg B moves per 1% of leg A
+// (OLS beta of bar-to-bar simple returns). Pure — covered by unit tests.
+func arbBeta(ca, cb []float64) float64 {
+	if len(ca) != len(cb) || len(ca) < 5 {
+		return 0
+	}
+	ra := make([]float64, 0, len(ca)-1)
+	rb := make([]float64, 0, len(cb)-1)
+	for i := 1; i < len(ca); i++ {
+		if ca[i-1] <= 0 || cb[i-1] <= 0 {
+			continue
+		}
+		ra = append(ra, (ca[i]-ca[i-1])/ca[i-1])
+		rb = append(rb, (cb[i]-cb[i-1])/cb[i-1])
+	}
+	if len(ra) < 5 {
+		return 0
+	}
+	ma, mb := 0.0, 0.0
+	for i := range ra {
+		ma += ra[i]
+		mb += rb[i]
+	}
+	ma /= float64(len(ra))
+	mb /= float64(len(rb))
+	var cov, va float64
+	for i := range ra {
+		cov += (rb[i] - mb) * (ra[i] - ma)
+		va += (ra[i] - ma) * (ra[i] - ma)
+	}
+	if va <= 0 {
+		return 0
+	}
+	return cov / va
+}
+
+// arbHalfLife estimates the spread mean-reversion half-life in bars via the
+// classic Δs = a + b·s(−1) regression: hl = −ln2/b. Returns 0 when the
+// spread does not revert (b ≥ 0) — trading z on it would be trend-chasing.
+// Pure — covered by unit tests.
+func arbHalfLife(spread []float64) float64 {
+	if len(spread) < 10 {
+		return 0
+	}
+	var sx, sy, sxx, sxy float64
+	n := 0
+	for i := 1; i < len(spread); i++ {
+		x, y := spread[i-1], spread[i]-spread[i-1]
+		sx += x
+		sy += y
+		sxx += x * x
+		sxy += x * y
+		n++
+	}
+	den := float64(n)*sxx - sx*sx
+	if den == 0 {
+		return 0
+	}
+	b := (float64(n)*sxy - sx*sy) / den
+	if b >= 0 {
+		return 0
+	}
+	return -math.Ln2 / b
+}
+
+// rangeNotional estimates one contract's notional in rubles from live prices:
+// Si is quoted in ₽ per contract (1pt = 1₽); ED in USD per EUR, converted at
+// the Si-implied USDRUB. Anything else returns 0 (lots stay hidden rather
+// than wrong).
+func rangeNotional(symbol string, lastPrice, usdrub float64) float64 {
+	switch symbol {
+	case "Si":
+		return lastPrice
+	case "ED":
+		if usdrub > 0 {
+			return lastPrice * 1000 * usdrub
+		}
+	}
+	return 0
 }
 
 type rangeArbEntry struct {
@@ -1084,14 +1171,66 @@ func rangeArbHandler(w http.ResponseWriter, r *http.Request) {
 	if times == nil {
 		times = []string{}
 	}
+	// Beta-neutral sizing from raw closes on the same joined window.
+	_, ma, mb := arbJoin(ca, cb)
+	rawA := make([]float64, 0, len(times))
+	rawB := make([]float64, 0, len(times))
+	for _, k := range times {
+		rawA = append(rawA, ma[k])
+		rawB = append(rawB, mb[k])
+	}
+	beta := arbBeta(rawA, rawB)
+	halfLife := arbHalfLife(spread)
+	// Notionals in ₽ for the hedge lots (Si-implied USDRUB for ED).
+	usdrub := 0.0
+	if symA == "Si" && len(rawA) > 0 {
+		usdrub = rawA[len(rawA)-1] / 1000
+	} else if symB == "Si" && len(rawB) > 0 {
+		usdrub = rawB[len(rawB)-1] / 1000
+	}
+	notA, notB := 0.0, 0.0
+	if len(rawA) > 0 {
+		notA = rangeNotional(symA, rawA[len(rawA)-1], usdrub)
+	}
+	if len(rawB) > 0 {
+		notB = rangeNotional(symB, rawB[len(rawB)-1], usdrub)
+	}
+	lotsB := 0.0
+	if notA > 0 && notB > 0 {
+		lotsB = math.Round(beta*notA/notB*100) / 100
+	}
+	// Signal on |z| ≥ 2 with a reverting spread only (halfLife > 0).
+	signal, signalText := "none", "вне рынка"
+	zr := math.Round(z*100) / 100
+	if halfLife > 0 {
+		switch {
+		case z >= 2:
+			signal = "short_spread"
+			signalText = fmt.Sprintf("продать %s / купить %s", symA, symB)
+		case z <= -2:
+			signal = "long_spread"
+			signalText = fmt.Sprintf("купить %s / продать %s", symA, symB)
+		}
+		if signal != "none" {
+			if lotsB > 0 {
+				signalText += fmt.Sprintf(" × %.2f", lotsB)
+			}
+			signalText += fmt.Sprintf(" (z=%+.2f)", zr)
+		}
+	}
 	payload := map[string]interface{}{
 		"a": symA, "b": symB, "seca": secA, "secb": secB, "tf": tf,
 		"times": times, "a_data": aIdx, "b_data": bIdx, "spread": spread,
-		"spread_last": math.Round(last*1000) / 1000,
-		"spread_mean": math.Round(mean*1000) / 1000,
-		"spread_std":  math.Round(std*1000) / 1000,
-		"z":           math.Round(z*100) / 100,
-		"count":       len(times),
+		"spread_last":  math.Round(last*1000) / 1000,
+		"spread_mean":  math.Round(mean*1000) / 1000,
+		"spread_std":   math.Round(std*1000) / 1000,
+		"z":            zr,
+		"beta":         math.Round(beta*1000) / 1000,
+		"half_life":    math.Round(halfLife*10) / 10,
+		"lots_b_per_a": lotsB,
+		"signal":       signal,
+		"signal_text":  signalText,
+		"count":        len(times),
 	}
 	rangeArbMu.Lock()
 	rangeArbCache[key] = rangeArbEntry{at: time.Now(), data: payload}
