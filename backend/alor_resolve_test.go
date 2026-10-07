@@ -143,3 +143,32 @@ func TestAlorCachedResolve(t *testing.T) {
 		t.Fatal("mid without client must be 0")
 	}
 }
+
+// TestAlorDetailCache pins the anti-spam layer: seeded details serve
+// without network, misses without a client fail closed.
+func TestAlorDetailCache(t *testing.T) {
+	if alorMarket != nil {
+		t.Skip("requires no Alor client configured")
+	}
+	alorDetailMu.Lock()
+	old := alorDetailCache
+	alorDetailCache = map[string]alorDetailEntry{
+		"A1":  {At: time.Now(), Strike: 86000, Expiry: "2026-12-17", Kind: "call"},
+		"OLD": {At: time.Now().Add(-25 * time.Hour), Strike: 1, Expiry: "x", Kind: "y"},
+	}
+	alorDetailMu.Unlock()
+	defer func() {
+		alorDetailMu.Lock()
+		alorDetailCache = old
+		alorDetailMu.Unlock()
+	}()
+	if s, ex, k := alorInstrumentDetail("A1"); s != 86000 || ex != "2026-12-17" || k != "call" {
+		t.Fatalf("seeded hit = %v/%q/%q, want 86000/2026-12-17/call", s, ex, k)
+	}
+	if s, ex, k := alorInstrumentDetail("NOPE"); s != 0 || ex != "" || k != "" {
+		t.Fatalf("miss without client = %v/%q/%q, want zeros", s, ex, k)
+	}
+	if s, _, _ := alorInstrumentDetail("OLD"); s != 0 {
+		t.Fatalf("stale entry must miss, got %v", s)
+	}
+}

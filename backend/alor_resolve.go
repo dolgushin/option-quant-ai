@@ -26,6 +26,21 @@ var (
 	alorDirCache = map[string]alorDirEntry{}
 )
 
+// alorDetailCache maps secid → parsed instrument detail (strike, expiry,
+// kind). Static data — 24h TTL. Without it every quote-cache miss (30s)
+// refetches details per candidate and hammers Securities:* into the ban.
+var (
+	alorDetailMu    sync.Mutex
+	alorDetailCache = map[string]alorDetailEntry{}
+)
+
+type alorDetailEntry struct {
+	At     time.Time
+	Strike float64
+	Expiry string
+	Kind   string
+}
+
 // alorSecidCache maps (symbol|strike|call|expiry) → Alor-native secid (1h
 // TTL — series don't roll intraday). Spares repeat detail lookups on every
 // book pull.
@@ -221,8 +236,14 @@ func resolveOptionEntry(entries []alor.AlorSecurityResponse, strike float64, isC
 }
 
 // alorInstrumentDetail fetches authoritative (strike, expiry, kind) for one
-// Alor secid via the instrument details endpoint.
+// Alor secid via the instrument details endpoint (cached 24h — static data).
 func alorInstrumentDetail(secid string) (float64, string, string) {
+	alorDetailMu.Lock()
+	if e, ok := alorDetailCache[secid]; ok && time.Since(e.At) < 24*time.Hour {
+		alorDetailMu.Unlock()
+		return e.Strike, e.Expiry, e.Kind
+	}
+	alorDetailMu.Unlock()
 	if alorMarket == nil {
 		return 0, "", ""
 	}
@@ -234,7 +255,11 @@ func alorInstrumentDetail(secid string) (float64, string, string) {
 	if jerr := json.Unmarshal(body, &raw); jerr != nil {
 		return 0, "", ""
 	}
-	return parseAlorOptionInfo(raw)
+	s, ex, k := parseAlorOptionInfo(raw)
+	alorDetailMu.Lock()
+	alorDetailCache[secid] = alorDetailEntry{At: time.Now(), Strike: s, Expiry: ex, Kind: k}
+	alorDetailMu.Unlock()
+	return s, ex, k
 }
 
 // alorResolveOptionSecID resolves the Alor-native secid for
